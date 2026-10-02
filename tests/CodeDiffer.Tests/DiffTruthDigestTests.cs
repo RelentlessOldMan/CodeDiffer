@@ -63,7 +63,7 @@ public class DiffTruthDigestTests
     {
         // All four sections empty => the digest input is just the three GS boundaries between them.
         var expected = Convert.ToHexString(
-            SHA256.HashData([DiffTruthDigest.GS, DiffTruthDigest.GS, DiffTruthDigest.GS])).ToLowerInvariant();
+            SHA256.HashData([CanonicalDigest.GS, CanonicalDigest.GS, CanonicalDigest.GS])).ToLowerInvariant();
         var actual = DiffTruthDigest.Compute(Manifest([], []));
         Assert.Equal(expected, actual);
     }
