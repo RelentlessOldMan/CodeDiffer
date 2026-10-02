@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net8.0 is the fleet floor (CodeCompass.Core, CodeCarver, CodeSpawner build from source on the
+         work box's SDK). The CLI/MCP retarget to net10 on top of this. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>CodeDiffer.Core</RootNamespace>
+  </PropertyGroup>
+
+  <!-- The test assembly reads internal canonicalization constants so a format tweak is tied to a test. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeDiffer.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CodeDiffer.Cli/CodeDiffer.Cli.csproj" />
+    <Project Path="src/CodeDiffer.Core/CodeDiffer.Core.csproj" />
+    <Project Path="src/CodeDiffer.Mcp/CodeDiffer.Mcp.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CodeDiffer.Tests/CodeDiffer.Tests.csproj" />
+  </Folder>
+</Solution>

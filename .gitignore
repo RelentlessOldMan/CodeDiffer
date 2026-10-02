@@ -1,0 +1,40 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+
+# .NET / VS user files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.vs/
+
+# Published output
+dist/
+publish/
+*.nupkg
+
+# Test / coverage output
+coverage/
+[Tt]est[Rr]esults/
+
+# Big corpora are never committed — generated on demand by CodeSpawner (see docs/TESTING.md)
+.corpus/
+
+# CodeDiffer compare result stores (written outside compared trees, but never commit stray ones)
+*.codediffer-result/
+compare-*/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodeDiffer.Core\CodeDiffer.Core.csproj" />
+    <ProjectReference Include="..\CodeDiffer.Mcp\CodeDiffer.Mcp.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- net10 to match the MCP server (first-party .NET MCP SDK); both publish self-contained. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>codediffer</AssemblyName>
+    <RootNamespace>CodeDiffer.Cli</RootNamespace>
+  </PropertyGroup>
+
+</Project>

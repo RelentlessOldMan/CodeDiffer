@@ -1,0 +1,48 @@
+<Project>
+
+  <!--
+    Versioning: base is 1.0 (bump VersionPrefix by hand for real milestones). The patch number is the
+    git commit count, so it auto-bumps on every check-in; the informational version also carries the
+    short commit SHA so a user's reported version pins the exact commit. Falls back to 1.0.0+nogit when
+    git isn't available (e.g. a source drop or a not-yet-initialised repo), so builds never fail on this.
+
+    AssemblyVersion stays 1.0.0.0 (stable, so assembly binding doesn't churn per commit).
+    FileVersion / InformationalVersion carry the real number for the .exe properties and the logs.
+    Mirrors the CodeCompass/CodeSpawner scheme so the family stamps versions identically.
+  -->
+  <PropertyGroup>
+    <Company>RelentlessOldMan</Company>
+    <Product>CodeDiffer</Product>
+    <VersionPrefix>1.0</VersionPrefix>
+    <CDGitCount>0</CDGitCount>
+    <CDGitSha>nogit</CDGitSha>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <!-- Only stamp when this is actually a git repo, so a pre-git source drop builds clean with no
+       MSB3073 warnings; falls back to the 1.0 prefix until then. Once committed, the stamp kicks in. -->
+  <Target Name="CDStampVersion"
+          BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo"
+          Condition="'$(CDStamped)' != 'true' and Exists('$(MSBuildThisFileDirectory).git')">
+    <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" ContinueOnError="true"
+          StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_CDCount" />
+      <Output TaskParameter="ExitCode" PropertyName="_CDCountRc" />
+    </Exec>
+    <Exec Command="git rev-parse --short=8 HEAD" ConsoleToMSBuild="true" ContinueOnError="true"
+          StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_CDSha" />
+      <Output TaskParameter="ExitCode" PropertyName="_CDShaRc" />
+    </Exec>
+    <PropertyGroup>
+      <CDGitCount Condition="'$(_CDCountRc)' == '0' and '$(_CDCount)' != ''">$(_CDCount)</CDGitCount>
+      <CDGitSha Condition="'$(_CDShaRc)' == '0' and '$(_CDSha)' != ''">$(_CDSha)</CDGitSha>
+      <Version>$(VersionPrefix).$(CDGitCount)</Version>
+      <AssemblyVersion>$(VersionPrefix).0.0</AssemblyVersion>
+      <FileVersion>$(VersionPrefix).$(CDGitCount).0</FileVersion>
+      <InformationalVersion>$(VersionPrefix).$(CDGitCount)+$(CDGitSha)</InformationalVersion>
+      <CDStamped>true</CDStamped>
+    </PropertyGroup>
+  </Target>
+
+</Project>

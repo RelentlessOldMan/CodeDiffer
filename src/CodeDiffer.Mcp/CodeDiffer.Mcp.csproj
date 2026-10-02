@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodeDiffer.Core\CodeDiffer.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- net10 for the first-party .NET MCP SDK (wired in a later step). -->
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>CodeDiffer.Mcp</RootNamespace>
+  </PropertyGroup>
+
+</Project>

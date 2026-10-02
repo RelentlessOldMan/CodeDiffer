@@ -1,0 +1,174 @@
+CodeDiffer
+==========
+
+A 2-/3-/n-way diff tool built for VERY large trees (~100 GB) with individual files over 1 GB,
+local or over a network share (SMB/UNC) - and built agent-first, so an AI coding agent can diff
+two trees, understand what changed, and port a change from one tree to another without being
+crushed by the scale or drowned in output.
+
+This document is the north star and the record of why. Where a decision has a non-obvious "why",
+it is written down, because the reasons matter more than the code. Sister tools in C:\Playground\
+(CodeCompass, CodeCarver, CodeSpawner) share the author, the stack, and several hard-won patterns;
+this file notes where we borrow from them.
+
+
+The problem
+-----------
+
+Classic diff tools (diff -r, git diff --no-index, WinMerge/Meld/Beyond Compare) are built for
+human-scale trees and for humans or shell pipelines. Point one at a dozens-of-GB firmware tree with
+1 GB machine-generated register headers over an SMB share and it either falls over (holds everything
+in memory, emits one unusable report) or floods the consumer with far more than they can use. An AI
+agent diffing such a tree has a second failure mode: a monolithic result blows its entire context
+window on content it never needed.
+
+The informing artifact is a review of a throwaway prototype (a TS MCP server wrapping Python stdlib
+diff). Its verdict: the SHAPE is right - an agent-callable comparison that emits both machine-readable
+JSON and a shareable HTML report, aimed at porting changes between trees - but the engine is basic,
+has confirmed correctness bugs, doesn't run as built, and won't scale past small trees. CodeDiffer
+keeps the shape and rebuilds everything underneath. The review's confirmed bugs become our first
+regression tests (see "Regression suite").
+
+
+Goals
+-----
+
+- Diff trees far bigger than any diff tool expects: ~100 GB, individual files > 1 GB, over SMB/UNC,
+  without exhausting RAM and without crushing the agent or human with output.
+- Agent-first: a small, paged, bounded MCP surface - the agent pays for a summary plus only the
+  files it chooses to open, never a monolithic dump.
+- Two faithful renderings from one comparison: structured, versioned JSON for machines and a
+  self-contained, lazily-loaded HTML report for humans - the same result for both.
+- Honest at scale: never a confident wrong answer. Every bound/cap/sample is disclosed; every
+  "modified" carries a reason; "identical" (compared & equal) is distinct from "not compared".
+- Correct text handling: detect encoding, preserve/report EOL, check binary on BOTH sides, and emit
+  real patch-applicable unified diffs (verified against `git apply`/`patch` in tests).
+- 2-way first; 3-way merge with conflict reporting; n-way as a generalization.
+- Make "change porting" (diff A->B, apply to C, report per-hunk applied/fuzzy/conflict) first-class -
+  the prototype's best idea and the thing no mainstream diff tool does well for agents.
+- Standalone: no hard dependency on any sister tool; point it at any two paths and go.
+
+
+Non-goals (v1)
+--------------
+
+- No structural/syntactic (AST) diff in v1. v1 is line/hunk + a size/hash summary for binary.
+  Structural diff is a deferred v2 layer that will reuse CodeCompass's symbol index + find-references
+  for change blast-radius (see "CodeCompass interop").
+- No binary delta (bsdiff-style). Binary files are reported as changed with a size/hash summary.
+- No always-on service / multi-user product. A compare is a one-shot that produces a result store;
+  the MCP server is long-lived only for the length of an agent session.
+
+
+Locked decisions
+----------------
+
+- Stack: .NET / C#. Reasons mirror the family - first-party MCP SDK, self-contained native Windows
+  binaries ("grab it and go"), excellent memory-mapped-file / span / parallel-IO story, and it is the
+  stack the author maintains. Libraries target net8.0 (fleet floor); CLI + MCP target net10.0.
+- The output is a SESSION, not a document. A compare writes one on-disk RESULT STORE (outside the
+  compared trees, timestamped); the agent pages queries against it and the HTML lazily loads from it.
+  Nothing materializes the full diff up front. (Review recommendation (b), made load-bearing.)
+- Cost-ordered funnel. Classify every path before reading content; descend only on demand:
+    Tier 0  walk + stat (size/mtime off the enumeration - CodeCompass's SMB trick, no per-file stat
+            round-trips; walk directories concurrently, bounded) -> per-path status candidate.
+    Tier 1  hash (SHA-256 of raw bytes) only where size matches; cached by (path,size,mtime) so a
+            re-compare is near-instant; giants hashed in ~1 MB streamed chunks -> identical vs modified.
+    Tier 2  reason classification (content|eol|whitespace|encoding|binary|metadata) from hashes + a
+            small head read -> the reason label.
+    Tier 3  real line diff - ONLY for the one file a consumer opens, bounded by a per-file cap -> hunks.
+  Tiers 0-2 run over the whole tree and emit only counts + per-file status. Tier 3 is lazy.
+- Giant files are diffed at the BLOCK level, never whole. Reusing CodeCompass's block/positional
+  sidecar idea: cut the file into line-aligned ~1 MB blocks, compare block content-hashes between the
+  two sides, and line-diff only the blocks that differ (a few MB, streamable over SMB). Aggregate to a
+  bounded summary; emit the full hunk set by reference (a .patch in the result store), never inline.
+- Hash discipline = SHA-256 of raw file bytes, lowercase hex. This is (a) the same hash the CodeSpawner
+  delta contract uses, so our verify-adapter asserts directly; and (b) the loose-coupling point with a
+  CodeCompass index (see interop) - a shared fact, not a shared binary.
+- Honesty contract (borrowed from CodeCompass): truncation is a floor not a total ("showing N of M");
+  a skipped-by-cap file is disclosed, never silently dropped; a "modified" ALWAYS has a reason and
+  never an empty diff; output is deterministic so a diff of two runs is a real change.
+
+
+Architecture
+------------
+
+- CodeDiffer.Core - the engine. Tree walk, content hashing + hash cache, reason classifier, line-diff
+  (Myers/patience over lines), giant-file block index, the result store, and the diffTruthSha digest.
+  No external packages in v1 (SHA-256 is built-in); no sister-tool dependency.
+- CodeDiffer.Cli - the `codediffer` command: compare, summary/list/show against a result store,
+  patch export, doctor, version. A stateless one-shot (open store -> answer -> exit), like the
+  CodeCompass CLI.
+- CodeDiffer.Mcp - the agent-facing server: start_compare -> compare_id, get_summary, list_files
+  (paged/filtered, hides identical by default), get_file_diff (bounded, "summary only" fallback),
+  get_stats, and the change-porting tools (export_changeset, apply_changeset dry-run). Long-lived for
+  a session; progress + cancellation.
+- CodeDiffer.Tests - xUnit. The regression suite below plus the CodeSpawner ground-truth oracle.
+
+Full output model: docs/OUTPUT.md. Full ground-truth contract: docs/diff-delta-contract.md.
+
+
+Change porting (the first-class workflow)
+-----------------------------------------
+
+diff A->B yields a CHANGESET (a set of reason-tagged, patch-applicable hunks + rename ops). Applying it
+to C is a dry-run that reports, per hunk: applied | fuzzy (applied at an offset) | conflict (context
+doesn't match). Clean application emits a patch; conflicts surface for a human or a 3-way merge. This is
+the review's strongest direction and the bridge to n-way: a 3-way merge is "apply (B relative to base)
+onto C=another variant, report conflicts" under diff3 line-range-overlap semantics.
+
+
+Testing / ground truth
+----------------------
+
+CodeDiffer's correctness oracle is CodeSpawner's delta manifest. CodeSpawner's bulk `mutate` regenerates
+the SAME ~100 GB corpus with a dialable, deterministic set of changes and emits a base->variant
+`<corpus>-delta.json`; our verify-adapter composes `truth = base (+) delta`, asserts our diff output
+equals it, and independently reproduces `diffTruthSha`. The contract (hunk schema, reason taxonomy,
+rename similarity, 3-way conflict model, run-rule for giant files, the digest) is locked - see
+docs/diff-delta-contract.md.
+
+Regression suite (seeded from the prototype review's confirmed bugs - each is a named test):
+- EOL-only change (LF<->CRLF) must report reason=eol, NOT "modified" with an empty diff.
+- Encoding-only change (UTF-8<->UTF-16 / BOM) must report reason=encoding, decoded text equal.
+- Whitespace-only change collapses under the ignore-whitespace option.
+- Binary detected on BOTH sides; a one-sided text->binary flip never emits a text diff with raw NULs.
+- Missing / mistyped input path is a hard error, never silent success reported as all-added/all-deleted.
+- Emitted unified diffs are patch-applicable (round-trip through `git apply`/`patch`).
+- Filenames with HTML metacharacters are escaped in the report (no injection).
+- A rename is detected (not reported as delete+add) at/above the similarity threshold; decoys are not.
+
+Big corpora are never committed (.corpus/ is gitignored); the big tier generates/regenerates them via
+the vendored CodeSpawner on demand.
+
+
+CodeCompass interop (standalone-first; optional accelerator; v2 structural)
+---------------------------------------------------------------------------
+
+CodeDiffer has NO dependency on CodeCompass. A diff is two (or N) different, often transient trees; a
+CodeCompass index is one live-watched repo, and its size caps can SKIP exactly the giant files we care
+about - trusting it as inventory or as truth would make us produce wrong diffs. So we own our walk/hash.
+
+But if a side IS a fresh CodeCompass-indexed repo, its on-disk change-detection ledger
+(path -> size/mtime/content-hash, memory-mapped) is precisely our Tier 0/1 result. Because both tools
+key on SHA-256 of raw bytes, that ledger is an OPTIONAL warm hash source: read hashes for files it has,
+re-walk for completeness (never use its file list as inventory), validate freshness rather than trust.
+Our own (path,size,mtime)->hash cache already captures most of this benefit decoupled, so this is a
+nice-to-have, not a requirement.
+
+The deep win is v2 structural diff: CodeCompass's symbol index + find-references is the change
+blast-radius layer ("this signature changed -> here are its 400 call sites"). At that point requiring
+one indexed tree (the "after") is a fair, opt-in ask. v1 line/byte diff gets nothing from it; v2
+structural diff gets a lot.
+
+
+Open questions / risks
+----------------------
+
+- Real throughput of the walk+hash funnel on a genuine ~100 GB tree over SMB is unmeasured - measure
+  early against the death corpus (local and the share), as CodeCompass did in its phase 1.
+- Rename detection at scale is O(added x deleted) if naive; bound it with size bucketing + line-hash
+  MinHash/Jaccard, and lead with exact-hash renames (free from the Tier 1 hashes).
+- The per-file diff size cap default (and giant-file always-by-reference) trades completeness for
+  survival; the honesty contract makes the trade visible, but the defaults want validation on real data.
+- diff3 is the v1 conflict model (well understood, patch-safe). Structural/semantic merge is out of scope.
