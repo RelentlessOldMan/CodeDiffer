@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using CodeDiffer.Core.Compare;
+using CodeDiffer.Core.Giant;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Verify;
 
@@ -16,6 +17,8 @@ static int Run(string[] args)
             return 0;
         case "compare":
             return Compare(args);
+        case "blockdiff":
+            return BlockDiff(args);
         case "verify":
             return Verify(args);
         case "help" or "--help" or "-h":
@@ -49,6 +52,41 @@ static int Compare(string[] args)
     }
 
     PrintSummary(args[1], args[2], report);
+    return 0;
+}
+
+static int BlockDiff(string[] args)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("usage: codediffer blockdiff <left-file> <right-file>");
+        return 64;
+    }
+    if (!File.Exists(args[1]) || !File.Exists(args[2]))
+    {
+        Console.Error.WriteLine("error: both arguments must be existing files");
+        return 2;
+    }
+
+    var r = GiantFileDiffer.Diff(args[1], args[2]);
+    Console.WriteLine($"blockdiff: {args[1]}  vs  {args[2]}");
+    Console.WriteLine($"  size       {r.OldSize} -> {r.NewSize} bytes");
+    Console.WriteLine($"  blocks     {r.OldBlocks} -> {r.NewBlocks} (content-defined)");
+    if (r.Identical)
+    {
+        Console.WriteLine("  identical  (no blocks changed)");
+        return 0;
+    }
+
+    double pct = r.OldSize == 0 ? 100 : 100.0 * r.ChangedOldBytes / r.OldSize;
+    Console.WriteLine($"  changed    {r.Changes.Count} region(s) · {r.ChangedOldBytes} old / {r.ChangedNewBytes} new bytes ({pct:0.00}% of old) · {r.UnchangedBytes} bytes unchanged");
+    int shown = 0;
+    foreach (var c in r.Changes)
+    {
+        if (shown++ == 20) { Console.WriteLine($"    … {r.Changes.Count - 20} more"); break; }
+        var tag = c.Op switch { HunkOp.Insert => "INS", HunkOp.Delete => "DEL", _ => "REP" };
+        Console.WriteLine($"    {tag} old[{c.OldOffset},+{c.OldLength}) -> new[{c.NewOffset},+{c.NewLength})");
+    }
     return 0;
 }
 
@@ -237,6 +275,8 @@ static void PrintUsage()
         usage:
           codediffer version                   print version
           codediffer compare <left> <right>    compare two trees (engine WIP)
+          codediffer blockdiff <a> <b>         content-defined block diff of two large files
+                                               (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]
                                                reproduce a delta's diffTruthSha; with trees,
                                                also assert CodeDiffer's hunks match the manifest
