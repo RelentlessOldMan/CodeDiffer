@@ -138,7 +138,33 @@ static int VerifyConflict(string[] args)
     Console.WriteLine($"  conflictTruthSha stated     {v.Stated ?? "(none)"}");
     Console.WriteLine($"  conflictTruthSha recomputed {v.Recomputed}");
     Console.WriteLine(v.Ok ? "  OK — digest reproduced" : "  FAIL — digest mismatch");
-    return v.Ok ? 0 : 1;
+
+    // With the three trees, run CodeDiffer's own 3-way merge and assert it reproduces the decomposition.
+    string? baseDir = FlagValue(args, "--base");
+    string? v1Dir = FlagValue(args, "--v1");
+    string? v2Dir = FlagValue(args, "--v2");
+    bool mergeOk = true;
+    if (baseDir is not null || v1Dir is not null || v2Dir is not null)
+    {
+        if (baseDir is null || v1Dir is null || v2Dir is null ||
+            !Directory.Exists(baseDir) || !Directory.Exists(v1Dir) || !Directory.Exists(v2Dir))
+        {
+            Console.Error.WriteLine("error: --base, --v1 and --v2 must all be existing directories");
+            return 2;
+        }
+
+        var cc = ConflictTreeCrossCheck.Run(baseDir, v1Dir, v2Dir, manifest);
+        Console.WriteLine($"  3-way reconstruction over {cc.FilesChecked} files:");
+        Console.WriteLine($"    V1 rebuilt {cc.V1Reconstructed}/{cc.FilesChecked} · V2 rebuilt {cc.V2Reconstructed}/{cc.FilesChecked}");
+        foreach (var f in cc.Files.Where(f => !f.V1Reconstructs)) Console.WriteLine($"    FAIL V1 {f.Path}");
+        foreach (var f in cc.Files.Where(f => !f.V2Reconstructs)) Console.WriteLine($"    FAIL V2 {f.Path}");
+        Console.WriteLine(cc.Ok
+            ? "  OK — manifest's per-side coords reconstruct both variant trees"
+            : "  FAIL — a side's coords do not rebuild the variant");
+        mergeOk = cc.Ok;
+    }
+
+    return v.Ok && mergeOk ? 0 : 1;
 }
 
 /// <summary>Peek at <c>_meta.deltaKind</c> so verify can route diff vs conflict-3way.</summary>
@@ -206,6 +232,9 @@ static void PrintUsage()
           codediffer verify <delta.json> [--base <dir> --variant <dir>]
                                                reproduce a delta's diffTruthSha; with trees,
                                                also assert CodeDiffer's hunks match the manifest
+          codediffer verify <conflict.json> [--base <B> --v1 <dir> --v2 <dir>]
+                                               reproduce a 3-way conflictTruthSha; with trees,
+                                               also assert CodeDiffer's 3-way merge decomposition
           codediffer help                      this help
         """);
 }
