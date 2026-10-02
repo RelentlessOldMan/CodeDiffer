@@ -40,9 +40,11 @@ public static class ThreeWayMerger
         var m2 = BuildMatchMap(h2, n);
 
         // All change hunks from both sides, as half-open base ranges [oStart,oEnd), sorted; v1 before v2.
+        // An insert (OldLines 0) sits in the gap AFTER base line OldStart, so its base position is OldStart;
+        // replace/delete start at OldStart-1 (0-based first affected line).
         var regions = new List<(int oStart, int oEnd, int side)>(h1.Count + h2.Count);
-        foreach (var h in h1) regions.Add((h.OldStart - 1, h.OldStart - 1 + h.OldLines, 0));
-        foreach (var h in h2) regions.Add((h.OldStart - 1, h.OldStart - 1 + h.OldLines, 1));
+        foreach (var h in h1) { int s = BaseStart0(h); regions.Add((s, s + h.OldLines, 0)); }
+        foreach (var h in h2) { int s = BaseStart0(h); regions.Add((s, s + h.OldLines, 1)); }
         regions.Sort((x, y) => x.oStart != y.oStart ? x.oStart.CompareTo(y.oStart) : x.side.CompareTo(y.side));
 
         var conflicts = new List<Conflict>();
@@ -66,6 +68,9 @@ public static class ThreeWayMerger
             int v2e = rEnd == n ? v2Lines.Count : m2[rEnd];
 
             int baseLen = rEnd - rStart, len1 = v1e - v1s, len2 = v2e - v2s;
+            // baseStart: an insert region (baseLen 0) anchors on the line after which it goes (= rStart);
+            // a replace/delete region on its first affected line (= rStart+1).
+            int baseStart = baseLen == 0 ? rStart : rStart + 1;
 
             bool v1Changed = !SeqEqual(v1Lines, v1s, len1, baseLines, rStart, baseLen);
             bool v2Changed = !SeqEqual(v2Lines, v2s, len2, baseLines, rStart, baseLen);
@@ -73,21 +78,21 @@ public static class ThreeWayMerger
             if (v1Changed && v2Changed && !SeqEqual(v1Lines, v1s, len1, v2Lines, v2s, len2))
             {
                 conflicts.Add(new Conflict(
-                    path, rStart + 1, baseLen,
+                    path, baseStart, baseLen,
                     Op(baseLen, len1), v1s + 1, len1,
                     Op(baseLen, len2), v2s + 1, len2));
             }
             else if (v1Changed && !v2Changed)
             {
-                clean.Add(new CleanMerge(path, "v1", Op(baseLen, len1), rStart + 1, baseLen, v1s + 1, len1));
+                clean.Add(new CleanMerge(path, "v1", Op(baseLen, len1), baseStart, baseLen, v1s + 1, len1));
             }
             else if (v2Changed && !v1Changed)
             {
-                clean.Add(new CleanMerge(path, "v2", Op(baseLen, len2), rStart + 1, baseLen, v2s + 1, len2));
+                clean.Add(new CleanMerge(path, "v2", Op(baseLen, len2), baseStart, baseLen, v2s + 1, len2));
             }
             else // both changed identically ⇒ agreed edit, canonical side "v1"
             {
-                clean.Add(new CleanMerge(path, "v1", Op(baseLen, len1), rStart + 1, baseLen, v1s + 1, len1));
+                clean.Add(new CleanMerge(path, "v1", Op(baseLen, len1), baseStart, baseLen, v1s + 1, len1));
             }
         }
 
@@ -103,10 +108,10 @@ public static class ThreeWayMerger
         int basePos = 0, varPos = 0;
         foreach (var h in hunks)
         {
-            int ob0 = h.OldStart - 1, nb0 = h.NewStart - 1;
+            int ob0 = BaseStart0(h), nb0 = h.NewStart - 1;
             for (; basePos < ob0; basePos++, varPos++) // unchanged run before the hunk maps 1:1
                 map[basePos] = varPos;
-            basePos = ob0 + h.OldLines; // skip the base lines the hunk removed/replaced
+            basePos = ob0 + h.OldLines; // skip the base lines the hunk removed/replaced (insert: none)
             varPos = nb0 + h.NewLines;  // variant position resumes after the hunk's new content
         }
         for (; basePos < n; basePos++, varPos++) // trailing unchanged tail
@@ -114,6 +119,10 @@ public static class ThreeWayMerger
 
         return map;
     }
+
+    /// <summary>0-based base position of a hunk: an insert sits in the gap after line OldStart; a
+    /// replace/delete starts at the first affected line (OldStart-1).</summary>
+    private static int BaseStart0(Hunk h) => h.OldLines == 0 ? h.OldStart : h.OldStart - 1;
 
     private static HunkOp Op(int baseLines, int sideLines)
         => baseLines == 0 ? HunkOp.Insert : sideLines == 0 ? HunkOp.Delete : HunkOp.Replace;

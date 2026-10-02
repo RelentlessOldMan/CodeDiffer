@@ -64,10 +64,11 @@ public class ThreeWayMergerTests
     [Fact]
     public void AddAdd_IsConflict_ZeroBaseLines_TwoInserts()
     {
-        // both insert a different line between a and b.
+        // both insert a different line after base line 1 (between a and b).
         var r = Merge("a\nb\n", "a\nX\nb\n", "a\nY\nb\n");
         var c = Assert.Single(r.Conflicts);
-        Assert.Equal(new Conflict("f", 2, 0, HunkOp.Insert, 2, 1, HunkOp.Insert, 2, 1), c);
+        // add/add anchors on the line after which (1), baseLines 0, each side inserts 1 line at new line 2.
+        Assert.Equal(new Conflict("f", 1, 0, HunkOp.Insert, 2, 1, HunkOp.Insert, 2, 1), c);
     }
 
     [Fact]

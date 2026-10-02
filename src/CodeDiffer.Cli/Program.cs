@@ -154,13 +154,21 @@ static int VerifyConflict(string[] args)
         }
 
         var cc = ConflictTreeCrossCheck.Run(baseDir, v1Dir, v2Dir, manifest);
-        Console.WriteLine($"  3-way reconstruction over {cc.FilesChecked} files:");
-        Console.WriteLine($"    V1 rebuilt {cc.V1Reconstructed}/{cc.FilesChecked} · V2 rebuilt {cc.V2Reconstructed}/{cc.FilesChecked}");
-        foreach (var f in cc.Files.Where(f => !f.V1Reconstructs)) Console.WriteLine($"    FAIL V1 {f.Path}");
-        foreach (var f in cc.Files.Where(f => !f.V2Reconstructs)) Console.WriteLine($"    FAIL V2 {f.Path}");
+        Console.WriteLine($"  3-way cross-check over {cc.FilesChecked} files:");
+        Console.WriteLine($"    [1] my diff3 decomposition: conflicts {cc.MyConflicts} · clean {cc.MyClean}  (manifest {cc.ManifestConflicts} · {cc.ManifestClean})");
+        Console.WriteLine($"        conflictTruthSha from my merge {cc.MyDigest}");
+        Console.WriteLine(cc.DecompositionMatches
+            ? "        OK — my 3-way merge reproduces the exact decomposition"
+            : "        (differs — expected on identical-line corpora; see reconstruction below)");
+        if (!cc.DecompositionMatches)
+        {
+            foreach (var c in cc.ConflictsOnlyInMine) Console.WriteLine($"        + mine-only conflict {c.Path}:{c.BaseStart},{c.BaseLines}");
+            foreach (var c in cc.ConflictsOnlyInManifest) Console.WriteLine($"        - manifest-only conflict {c.Path}:{c.BaseStart},{c.BaseLines}");
+        }
+        Console.WriteLine($"    [2] reconstruction from manifest coords: V1 {cc.V1Reconstructed}/{cc.FilesChecked} · V2 {cc.V2Reconstructed}/{cc.FilesChecked}");
         Console.WriteLine(cc.Ok
-            ? "  OK — manifest's per-side coords reconstruct both variant trees"
-            : "  FAIL — a side's coords do not rebuild the variant");
+            ? "  OK — 3-way verified (decomposition match and/or reconstruction)"
+            : "  FAIL — neither my merge nor reconstruction confirms the manifest");
         mergeOk = cc.Ok;
     }
 

@@ -33,12 +33,13 @@ public class LineDifferTests
     }
 
     [Fact]
-    public void SingleInsert_BeforeConvention()
+    public void SingleInsert_AnchorsOnLineAfterWhich()
     {
         var a = new[] { "a", "b" };
         var b = new[] { "a", "INS", "b" };
-        // insert 1 line before old line 2, at new line 2 (CodeSpawner's Insert(k+1,0,newStart,K))
-        Assert.Equal([new Hunk(HunkOp.Insert, 2, 0, 2, 1)], LineDiffer.Diff(a, b));
+        // "INS" is inserted AFTER old line 1, landing at new line 2 — unified/CodeSpawner convention
+        // (@@ -1,0 +2,1 @@), so oldStart = 1 (the line after which), not 2.
+        Assert.Equal([new Hunk(HunkOp.Insert, 1, 0, 2, 1)], LineDiffer.Diff(a, b));
         AssertRoundTrips(a, b);
     }
 
@@ -90,7 +91,8 @@ public class LineDifferTests
     {
         var a = new[] { "a", "b" };
         var b = new[] { "a", "b", "c", "d" };
-        Assert.Equal([new Hunk(HunkOp.Insert, 3, 0, 3, 2)], LineDiffer.Diff(a, b));
+        // appended after old line 2 (@@ -2,0 +3,2 @@) ⇒ oldStart = 2 (line after which), newStart = 3.
+        Assert.Equal([new Hunk(HunkOp.Insert, 2, 0, 3, 2)], LineDiffer.Diff(a, b));
         AssertRoundTrips(a, b);
     }
 

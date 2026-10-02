@@ -42,7 +42,10 @@ public static class LineDiffer
                 i++;
             }
             var op = del > 0 && ins > 0 ? HunkOp.Replace : del > 0 ? HunkOp.Delete : HunkOp.Insert;
-            hunks.Add(new Hunk(op, oldStart0 + 1, del, newStart0 + 1, ins));
+            // Insert anchors on the line AFTER WHICH content is added (oldStart0 base lines precede it) —
+            // the unified-diff / CodeSpawner convention. Replace/delete anchor on the first affected line.
+            int oldStart = del == 0 ? oldStart0 : oldStart0 + 1;
+            hunks.Add(new Hunk(op, oldStart, del, newStart0 + 1, ins));
         }
         return hunks;
     }

@@ -8,6 +8,10 @@ namespace CodeDiffer.Core.Diff;
 /// file from (old + hunks + new-content) is the round-trip correctness check: if the coordinates
 /// partition both files correctly, the result equals the new file exactly. This is also the basis of
 /// change-porting (apply a changeset's hunks onto a third tree) in a later increment.
+///
+/// Hunks are sorted by base position before applying, since a manifest may list them in any order (the
+/// diffTruthSha is order-independent, so CodeSpawner emits e.g. inserts last) — applying out of order
+/// would corrupt the walk.
 /// </summary>
 public static class HunkApplier
 {
@@ -17,9 +21,18 @@ public static class HunkApplier
         var result = new List<string>();
         int oi = 0; // 0-based position in oldLines
 
-        foreach (var h in hunks)
+        // Sort by base position (insert sits after OldStart; replace/delete start at OldStart-1), then by
+        // new position to break ties deterministically.
+        var ordered = hunks
+            .OrderBy(h => h.OldLines == 0 ? h.OldStart : h.OldStart - 1)
+            .ThenBy(h => h.NewStart)
+            .ToList();
+
+        foreach (var h in ordered)
         {
-            int copyUntil = h.OldStart - 1; // copy unchanged old lines up to the hunk
+            // Insert anchors on the line AFTER WHICH it goes (oldStart lines precede it); replace/delete
+            // anchor on the first affected line, so copy up to oldStart-1.
+            int copyUntil = h.OldLines == 0 ? h.OldStart : h.OldStart - 1;
             for (; oi < copyUntil; oi++)
                 result.Add(oldLines[oi]);
 
