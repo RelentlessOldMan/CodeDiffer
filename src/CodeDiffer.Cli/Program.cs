@@ -1,6 +1,7 @@
 ﻿using System.Reflection;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Model;
+using CodeDiffer.Core.Verify;
 
 return Run(args);
 
@@ -15,6 +16,8 @@ static int Run(string[] args)
             return 0;
         case "compare":
             return Compare(args);
+        case "verify":
+            return Verify(args);
         case "help" or "--help" or "-h":
             PrintUsage();
             return 0;
@@ -47,6 +50,36 @@ static int Compare(string[] args)
 
     PrintSummary(args[1], args[2], report);
     return 0;
+}
+
+static int Verify(string[] args)
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("usage: codediffer verify <delta.json>");
+        return 64;
+    }
+
+    DeltaManifest manifest;
+    try
+    {
+        manifest = DeltaManifestParser.ParseFile(args[1]);
+        DeltaVerifier.AssertSupportedVersion(manifest);
+    }
+    catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or NotSupportedException or FormatException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 2;
+    }
+
+    var v = DeltaVerifier.VerifyDigest(manifest);
+    Console.WriteLine($"verify: {args[1]}");
+    Console.WriteLine($"  manifestVersion {manifest.ManifestVersion}");
+    Console.WriteLine($"  modified {manifest.Modified.Count} · added {manifest.Added.Count} · removed {manifest.Removed.Count} · renamed {manifest.Renamed.Count}");
+    Console.WriteLine($"  diffTruthSha stated     {v.Stated ?? "(none)"}");
+    Console.WriteLine($"  diffTruthSha recomputed {v.Recomputed}");
+    Console.WriteLine(v.Ok ? "  OK — digest reproduced" : "  FAIL — digest mismatch");
+    return v.Ok ? 0 : 1;
 }
 
 static void PrintSummary(string left, string right, CompareReport r)
@@ -92,6 +125,7 @@ static void PrintUsage()
         usage:
           codediffer version                   print version
           codediffer compare <left> <right>    compare two trees (engine WIP)
+          codediffer verify <delta.json>       reproduce a CodeSpawner delta's diffTruthSha
           codediffer help                      this help
         """);
 }

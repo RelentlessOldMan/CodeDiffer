@@ -75,4 +75,28 @@ public class DiffTruthDigestTests
         var twice = DiffTruthDigest.Compute(Manifest([F1, F1], [])); // identical record deduped
         Assert.Equal(once, twice);
     }
+
+    /// <summary>
+    /// THE cross-tool gate: reproduce CodeSpawner's frozen diffTruthSha golden vector (its
+    /// digest-selftest, Program.cs). The input is deliberately adversarial — files out of order (proves
+    /// the ordinal sort), a coalesced hunk, a two-hunk file, a giant-file run-rule, and empty renames.
+    /// If this matches, CodeDiffer's digest is byte-compatible with CodeSpawner's and the coupling holds.
+    /// </summary>
+    [Fact]
+    public void GoldenVector_ReproducesCodeSpawnerDiffTruthSha()
+    {
+        var files = new List<FileDelta>
+        {
+            new("z/last.c", ChangeReason.Content, "o1", "n1", 100, 110,
+                [new Hunk(HunkOp.Replace, 5, 2, 5, 2)], []),
+            new("a/first.c", ChangeReason.Content, "o2", "n2", 200, 205,
+                [new Hunk(HunkOp.Replace, 1, 1, 1, 1), new Hunk(HunkOp.Replace, 9, 3, 9, 3)], []),
+            new("big.h", ChangeReason.Content, "o3", "n3", 1_048_576, 1_050_000,
+                [], [new RunHunk(HunkOp.Replace, 20, 1, 5000, 1)]),
+        };
+        var manifest = new DeltaManifest(ManifestVersion: 1, Added: [], Removed: [], Renamed: [], Modified: files, DiffTruthSha: null);
+
+        Assert.Equal("66c7e62566ee105e63dce7e770d47e1a9fbe71b86d50249e209f5bf41f03d542",
+            DiffTruthDigest.Compute(manifest));
+    }
 }
