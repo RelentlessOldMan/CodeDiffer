@@ -72,6 +72,9 @@ static int Verify(string[] args)
         return 2;
     }
 
+    string? baseDir = FlagValue(args, "--base");
+    string? variantDir = FlagValue(args, "--variant");
+
     var v = DeltaVerifier.VerifyDigest(manifest);
     Console.WriteLine($"verify: {args[1]}");
     Console.WriteLine($"  manifestVersion {manifest.ManifestVersion}");
@@ -79,7 +82,33 @@ static int Verify(string[] args)
     Console.WriteLine($"  diffTruthSha stated     {v.Stated ?? "(none)"}");
     Console.WriteLine($"  diffTruthSha recomputed {v.Recomputed}");
     Console.WriteLine(v.Ok ? "  OK — digest reproduced" : "  FAIL — digest mismatch");
-    return v.Ok ? 0 : 1;
+
+    bool crossOk = true;
+    if (baseDir is not null && variantDir is not null)
+    {
+        if (!Directory.Exists(baseDir) || !Directory.Exists(variantDir))
+        {
+            Console.Error.WriteLine("error: --base and --variant must both be existing directories");
+            return 2;
+        }
+
+        var cc = DeltaTreeCrossCheck.Run(baseDir, variantDir, manifest);
+        Console.WriteLine($"  hunk cross-check: {cc.Reconstructed}/{cc.Checked} reconstructed · exact {cc.ExactMatches}/{cc.Checked} · {cc.Skipped} skipped (binary/eol/encoding/giant)");
+        foreach (var f in cc.Files.Where(f => f.Checked && !f.Reconstructs))
+            Console.WriteLine($"    MISMATCH {f.Path} (manifest hunks do not rebuild the variant)");
+        Console.WriteLine(cc.Ok ? "  OK — hunks reconstruct the variant" : "  FAIL — a manifest hunk set does not rebuild the variant");
+        crossOk = cc.Ok;
+    }
+
+    return v.Ok && crossOk ? 0 : 1;
+}
+
+static string? FlagValue(string[] args, string flag)
+{
+    for (int i = 2; i < args.Length - 1; i++)
+        if (args[i] == flag)
+            return args[i + 1];
+    return null;
 }
 
 static void PrintSummary(string left, string right, CompareReport r)
@@ -125,7 +154,9 @@ static void PrintUsage()
         usage:
           codediffer version                   print version
           codediffer compare <left> <right>    compare two trees (engine WIP)
-          codediffer verify <delta.json>       reproduce a CodeSpawner delta's diffTruthSha
+          codediffer verify <delta.json> [--base <dir> --variant <dir>]
+                                               reproduce a delta's diffTruthSha; with trees,
+                                               also assert CodeDiffer's hunks match the manifest
           codediffer help                      this help
         """);
 }
