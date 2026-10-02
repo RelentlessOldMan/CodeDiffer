@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using CodeDiffer.Core.Compare;
+using CodeDiffer.Core.Model;
 
 return Run(args);
 
@@ -32,20 +33,49 @@ static int Compare(string[] args)
         return 64;
     }
 
+    CompareReport report;
     try
     {
-        InputValidation.ValidateTrees(args[1], args[2]);
+        report = new DirectoryComparer().Compare(args[1], args[2]);
     }
-    catch (Exception ex)
+    catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
     {
         // Honesty contract: a bad input is a loud error, never a silent all-added/all-deleted "success".
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
     }
 
-    Console.WriteLine($"compare: {args[1]}  vs  {args[2]}");
-    Console.WriteLine("engine not yet implemented (scaffold). See DESIGN.txt / docs/OUTPUT.md.");
+    PrintSummary(args[1], args[2], report);
     return 0;
+}
+
+static void PrintSummary(string left, string right, CompareReport r)
+{
+    Console.WriteLine($"compare: {left}  vs  {right}");
+    Console.WriteLine($"  files      {r.Total}");
+    Console.WriteLine($"  identical  {r.Count(ChangeStatus.Identical)}   (hidden)");
+    Console.WriteLine($"  added      {r.Count(ChangeStatus.Added)}");
+    Console.WriteLine($"  removed    {r.Count(ChangeStatus.Removed)}");
+    Console.WriteLine(
+        $"  modified   {r.Count(ChangeStatus.Modified)}   " +
+        $"content {r.ReasonCount(ChangeReason.Content)} · eol {r.ReasonCount(ChangeReason.Eol)} · " +
+        $"whitespace {r.ReasonCount(ChangeReason.Whitespace)} · encoding {r.ReasonCount(ChangeReason.Encoding)} · " +
+        $"binary {r.ReasonCount(ChangeReason.Binary)}");
+
+    foreach (var c in r.Changes)
+    {
+        if (c.Status == ChangeStatus.Identical) continue; // hide identical by default (noise on big trees)
+        var tag = c.Status switch
+        {
+            ChangeStatus.Added => "A",
+            ChangeStatus.Removed => "D",
+            ChangeStatus.Modified => "M",
+            ChangeStatus.Renamed => "R",
+            _ => "?",
+        };
+        var reason = c.Reason is { } rr ? $" [{CanonicalTokens.Token(rr)}]" : "";
+        Console.WriteLine($"    {tag} {c.RelativePath}{reason}");
+    }
 }
 
 static string Version()
