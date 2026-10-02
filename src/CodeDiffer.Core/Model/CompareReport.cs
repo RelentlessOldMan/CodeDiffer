@@ -1,12 +1,18 @@
 namespace CodeDiffer.Core.Model;
 
-/// <summary>One path's verdict in a 2-way compare. <see cref="Reason"/> is set only for Modified.</summary>
+/// <summary>
+/// One path's verdict in a 2-way compare. <see cref="Reason"/> is set only for Modified.
+/// For a <see cref="ChangeStatus.Renamed"/>, <see cref="RelativePath"/> is the destination (the "to"
+/// path), <see cref="RenamedFrom"/> is the source, and <see cref="SimilarityMilli"/> is round(sim*1000).
+/// </summary>
 public sealed record FileChange(
     string RelativePath,
     ChangeStatus Status,
     ChangeReason? Reason,
     long LeftSize,
-    long RightSize);
+    long RightSize,
+    string? RenamedFrom = null,
+    int? SimilarityMilli = null);
 
 /// <summary>
 /// The result of a 2-way directory compare: every path's status (changes sorted by path, ordinal, so

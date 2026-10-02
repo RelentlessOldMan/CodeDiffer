@@ -60,6 +60,21 @@ static int Verify(string[] args)
         return 64;
     }
 
+    // Route on deltaKind: a 3-way artifact carries conflictTruthSha, not diffTruthSha.
+    string deltaKind;
+    try
+    {
+        deltaKind = DeltaKind(args[1]);
+    }
+    catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 2;
+    }
+
+    if (deltaKind == "conflict-3way")
+        return VerifyConflict(args);
+
     DeltaManifest manifest;
     try
     {
@@ -101,6 +116,40 @@ static int Verify(string[] args)
     }
 
     return v.Ok && crossOk ? 0 : 1;
+}
+
+static int VerifyConflict(string[] args)
+{
+    ConflictManifest manifest;
+    try
+    {
+        manifest = ConflictManifestParser.ParseFile(args[1]);
+    }
+    catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or FormatException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 2;
+    }
+
+    var v = DeltaVerifier.VerifyConflictDigest(manifest);
+    Console.WriteLine($"verify: {args[1]}");
+    Console.WriteLine($"  manifestVersion {manifest.ManifestVersion}  (deltaKind conflict-3way)");
+    Console.WriteLine($"  conflicts {manifest.Conflicts.Count} · clean-merges {manifest.CleanMerges.Count}  (v1Tree {manifest.V1Tree ?? "?"} · v2Tree {manifest.V2Tree ?? "?"})");
+    Console.WriteLine($"  conflictTruthSha stated     {v.Stated ?? "(none)"}");
+    Console.WriteLine($"  conflictTruthSha recomputed {v.Recomputed}");
+    Console.WriteLine(v.Ok ? "  OK — digest reproduced" : "  FAIL — digest mismatch");
+    return v.Ok ? 0 : 1;
+}
+
+/// <summary>Peek at <c>_meta.deltaKind</c> so verify can route diff vs conflict-3way.</summary>
+static string DeltaKind(string path)
+{
+    using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+    return doc.RootElement.TryGetProperty("_meta", out var meta)
+           && meta.TryGetProperty("deltaKind", out var dk)
+           && dk.ValueKind == System.Text.Json.JsonValueKind.String
+        ? dk.GetString()!
+        : "diff";
 }
 
 static string? FlagValue(string[] args, string flag)

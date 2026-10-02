@@ -11,6 +11,12 @@ public sealed class CompareOptions
 
     /// <summary>Above this per-file size, reason classification stays coarse (content), not decoded.</summary>
     public long MaxClassifyBytes { get; init; } = 8L * 1024 * 1024;
+
+    /// <summary>Resolve added/removed pairs into renames (pure + edited). On by default.</summary>
+    public bool DetectRenames { get; init; } = true;
+
+    /// <summary>Minimum similarityMilli for an EDITED rename to be kept. 500 = git's -M50% default.</summary>
+    public int RenameSimilarityThresholdMilli { get; init; } = 500;
 }
 
 /// <summary>
@@ -42,6 +48,8 @@ public sealed class DirectoryComparer
         paths.UnionWith(rightMap.Keys);
 
         var changes = new List<FileChange>(paths.Count);
+        var removed = new List<FileEntry>();
+        var added = new List<FileEntry>();
         foreach (var path in paths)
         {
             bool inLeft = leftMap.TryGetValue(path, out var le);
@@ -49,12 +57,12 @@ public sealed class DirectoryComparer
 
             if (inLeft && !inRight)
             {
-                changes.Add(new FileChange(path, ChangeStatus.Removed, null, le.Length, 0));
+                removed.Add(le); // held back — may resolve into a rename below
                 continue;
             }
             if (!inLeft && inRight)
             {
-                changes.Add(new FileChange(path, ChangeStatus.Added, null, 0, re.Length));
+                added.Add(re);
                 continue;
             }
 
@@ -71,6 +79,41 @@ public sealed class DirectoryComparer
             }
         }
 
+        AddResolvedAddsRemovesAndRenames(changes, removed, added);
+
+        changes.Sort((a, b) => string.CompareOrdinal(a.RelativePath, b.RelativePath));
         return new CompareReport(changes);
+    }
+
+    /// <summary>
+    /// Turn the held-back left-only / right-only entries into Renamed changes (when enabled) plus the
+    /// leftover Added / Removed. A rename's destination path is its RelativePath; its source rides in
+    /// RenamedFrom. Left/right sizes are carried so the summary can show both ends of a move.
+    /// </summary>
+    private void AddResolvedAddsRemovesAndRenames(List<FileChange> changes, List<FileEntry> removed, List<FileEntry> added)
+    {
+        IReadOnlyList<FileEntry> leftoverRemoved = removed;
+        IReadOnlyList<FileEntry> leftoverAdded = added;
+
+        if (_options.DetectRenames)
+        {
+            var result = new RenameDetector(_options).Detect(removed, added);
+            leftoverRemoved = result.UnmatchedRemoved;
+            leftoverAdded = result.UnmatchedAdded;
+
+            var removedByPath = removed.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
+            var addedByPath = added.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
+            foreach (var r in result.Renames)
+            {
+                long fromSize = removedByPath.TryGetValue(r.From, out var fe) ? fe.Length : 0;
+                long toSize = addedByPath.TryGetValue(r.To, out var te) ? te.Length : 0;
+                changes.Add(new FileChange(r.To, ChangeStatus.Renamed, null, fromSize, toSize, r.From, r.SimilarityMilli));
+            }
+        }
+
+        foreach (var e in leftoverRemoved)
+            changes.Add(new FileChange(e.RelativePath, ChangeStatus.Removed, null, e.Length, 0));
+        foreach (var e in leftoverAdded)
+            changes.Add(new FileChange(e.RelativePath, ChangeStatus.Added, null, 0, e.Length));
     }
 }
