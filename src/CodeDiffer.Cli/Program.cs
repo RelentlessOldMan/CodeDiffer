@@ -1,6 +1,7 @@
 ﻿using System.Reflection;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Giant;
+using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Verify;
 
@@ -35,14 +36,24 @@ static int Compare(string[] args)
 {
     if (args.Length < 3)
     {
-        Console.Error.WriteLine("usage: codediffer compare <left-tree> <right-tree>");
+        Console.Error.WriteLine("usage: codediffer compare <left-tree> <right-tree> [--threads N] [--no-cache | --rehash]");
         return 64;
     }
 
+    int threads = new CompareOptions().Parallelism;
+    if (FlagValue(args, "--threads") is { } t && (!int.TryParse(t, out threads) || threads < 1))
+    {
+        Console.Error.WriteLine("error: --threads needs a positive integer");
+        return 64;
+    }
+    var cache = args.Contains("--no-cache") ? CacheMode.Off : args.Contains("--rehash") ? CacheMode.Rehash : CacheMode.On;
+    var options = new CompareOptions { Parallelism = threads, Cache = cache };
+
     CompareReport report;
+    var sw = System.Diagnostics.Stopwatch.StartNew();
     try
     {
-        report = new DirectoryComparer().Compare(args[1], args[2]);
+        report = new DirectoryComparer(options).Compare(args[1], args[2]);
     }
     catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
     {
@@ -52,6 +63,17 @@ static int Compare(string[] args)
     }
 
     PrintSummary(args[1], args[2], report);
+    Console.WriteLine($"  elapsed    {sw.Elapsed.ToString(@"hh\:mm\:ss")}  (threads {options.Parallelism}, cache {cache.ToString().ToLowerInvariant()})");
+    Console.WriteLine($"  content    {report.ComparedPairs} same-size pair(s) · {report.CacheHits} side(s) from hash cache" +
+        (report.CodeCompassHits > 0 ? $" ({report.CodeCompassHits} via CodeCompass)" : "") +
+        $" · {report.BytesRead / (1024.0 * 1024 * 1024):F1} GB read");
+    if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
+    {
+        Console.Error.WriteLine(
+            $"WARNING: incomplete walk — {report.LeftDroppedDirectories} left / {report.RightDroppedDirectories} right " +
+            "director(ies) could not be listed; adds/removes under them may be listing failures.");
+        return 3;
+    }
     return 0;
 }
 
@@ -274,7 +296,11 @@ static void PrintUsage()
 
         usage:
           codediffer version                   print version
-          codediffer compare <left> <right>    compare two trees (engine WIP)
+          codediffer compare <left> <right> [--threads N] [--no-cache | --rehash]
+                                       compare two trees (parallel; default min(cores,8)).
+                                       Hash cache ON by default: a file whose path+size+mtime
+                                       match a trusted ledger entry isn't re-read. --no-cache
+                                       proves every byte; --rehash re-reads and refreshes it.
           codediffer blockdiff <a> <b>         content-defined block diff of two large files
                                                (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]

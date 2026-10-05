@@ -15,4 +15,9 @@
     <InternalsVisibleTo Include="CodeDiffer.Tests" />
   </ItemGroup>
 
+  <!-- XxHash128: the CodeCompass ledger hash (equality-only content hash, ~10x SHA-256 speed). -->
+  <ItemGroup>
+    <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
+  </ItemGroup>
+
 </Project>

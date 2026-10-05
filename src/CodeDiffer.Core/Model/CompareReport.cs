@@ -23,7 +23,25 @@ public sealed class CompareReport
 {
     public IReadOnlyList<FileChange> Changes { get; }
 
-    public CompareReport(IReadOnlyList<FileChange> changes) => Changes = changes;
+    /// <summary>Directories that could not be listed on each side — a non-zero count means the report is
+    /// INCOMPLETE there (missing files may be listing failures, not real removals). Never hidden.</summary>
+    public int LeftDroppedDirectories { get; }
+    public int RightDroppedDirectories { get; }
+
+    /// <summary>Same-size pairs that needed a content verdict (the only ones that can cost a read).</summary>
+    public int ComparedPairs { get; init; }
+    /// <summary>File sides answered from a trusted hash ledger instead of being read (of them, via CodeCompass).</summary>
+    public int CacheHits { get; init; }
+    public int CodeCompassHits { get; init; }
+    /// <summary>Content bytes read to reach the verdicts (an upper bound when early exit applies).</summary>
+    public long BytesRead { get; init; }
+
+    public CompareReport(IReadOnlyList<FileChange> changes, int leftDroppedDirectories = 0, int rightDroppedDirectories = 0)
+    {
+        Changes = changes;
+        LeftDroppedDirectories = leftDroppedDirectories;
+        RightDroppedDirectories = rightDroppedDirectories;
+    }
 
     public int Total => Changes.Count;
 
