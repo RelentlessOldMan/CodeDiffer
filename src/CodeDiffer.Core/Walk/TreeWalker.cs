@@ -6,8 +6,8 @@ namespace CodeDiffer.Core.Walk;
 public sealed record WalkResult(IReadOnlyList<FileEntry> Files, int DroppedDirectories);
 
 /// <summary>
-/// Walks a tree and yields every file as a <see cref="FileEntry"/>, reading size/mtime off the
-/// directory enumeration (no separate per-file stat — the round-trip that dominated a naive SMB walk).
+/// Walks a tree and yields every file as a <see cref="FileEntry"/>, reading size/mtime/ChangeTime/FileId
+/// off the directory listing (no separate per-file stat — the round-trip that dominated a naive SMB walk).
 /// Directories whose name is in the ignore set are skipped whole.
 ///
 /// Directories are listed with bounded concurrency, one frontier (depth level) at a time: over SMB each
@@ -33,11 +33,6 @@ public sealed class TreeWalker
     public WalkResult WalkAll(string root)
     {
         var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var opts = new EnumerationOptions
-        {
-            IgnoreInaccessible = true,
-            AttributesToSkip = FileAttributes.ReparsePoint, // don't follow junctions/symlinks (v1)
-        };
 
         var files = new ConcurrentBag<FileEntry>();
         int dropped = 0;
@@ -47,24 +42,24 @@ public sealed class TreeWalker
             var next = new ConcurrentBag<string>();
             Parallel.ForEach(frontier, new ParallelOptions { MaxDegreeOfParallelism = _parallelism }, dir =>
             {
-                var entries = ListWithRetry(dir, opts, dir == rootFull);
-                if (entries is null)
+                var rows = ListWithRetry(dir, dir == rootFull);
+                if (rows is null)
                 {
                     Interlocked.Increment(ref dropped);
                     return;
                 }
-                foreach (var info in entries)
+                foreach (var row in rows)
                 {
-                    switch (info)
+                    if (row.IsReparsePoint) continue; // don't follow junctions/symlinks (v1)
+                    var full = Path.Combine(dir, row.Name);
+                    if (row.IsDirectory)
                     {
-                        case DirectoryInfo sub when !_ignoredDirs.Contains(sub.Name):
-                            next.Add(sub.FullName);
-                            break;
-                        case FileInfo fi:
-                            var rel = Path.GetRelativePath(rootFull, fi.FullName).Replace('\\', '/');
-                            files.Add(new FileEntry(rel, fi.FullName, fi.Length, fi.LastWriteTimeUtc));
-                            break;
+                        if (!_ignoredDirs.Contains(row.Name)) next.Add(full);
+                        continue;
                     }
+                    var rel = Path.GetRelativePath(rootFull, full).Replace('\\', '/');
+                    files.Add(new FileEntry(rel, full, row.Length, new DateTime(row.LastWriteUtcTicks, DateTimeKind.Utc),
+                        row.ChangeUtcTicks, row.FileId));
                 }
             });
             frontier = [.. next];
@@ -76,17 +71,17 @@ public sealed class TreeWalker
     }
 
     /// <summary>
-    /// List one directory's entries, materialized so an IO error surfaces here. EnumerateFileSystemInfos
-    /// pre-fills Length/mtime from the one listing. A failure is retried once after a short pause (a
-    /// transient SMB error); null means the directory is genuinely unreadable and must be counted.
+    /// List one directory (size/mtime/ChangeTime/FileId straight off the listing). A failure is retried once
+    /// after a short pause (a transient SMB error); null means the directory is genuinely unreadable and must
+    /// be counted. The ROOT failing is fatal — there is no tree to compare.
     /// </summary>
-    private static FileSystemInfo[]? ListWithRetry(string dir, EnumerationOptions opts, bool isRoot)
+    private static List<DirRow>? ListWithRetry(string dir, bool isRoot)
     {
         for (int attempt = 0; attempt < 2; attempt++)
         {
             try
             {
-                return new DirectoryInfo(dir).EnumerateFileSystemInfos("*", opts).ToArray();
+                return DirectoryLister.List(dir);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

@@ -27,6 +27,12 @@ public sealed class CompareOptions
     /// <summary>Hash-ledger use: On (default; trust path+size+mtime), Off (--no-cache), Rehash (--rehash).</summary>
     public CacheMode Cache { get; init; } = CacheMode.On;
 
+    /// <summary>
+    /// Confirm every cache hit against the live HANDLE stat (~0.4 ms/file over SMB), not just the listing —
+    /// a listing can be stale while a writer holds the file open. Default on; off = listing-only (faster).
+    /// </summary>
+    public bool StrictStat { get; init; } = true;
+
     /// <summary>Override for the ledger base dir (tests); default %LOCALAPPDATA%\CodeDiffer or CODEDIFFER_CACHE_DIR.</summary>
     public string? CacheBaseDir { get; init; }
 
@@ -61,8 +67,8 @@ public sealed class DirectoryComparer
         var leftMap = lw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
         var rightMap = rw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
         var classifier = new ReasonClassifier(_options.MaxClassifyBytes);
-        var leftCache = HashCache.Open(left, _options.Cache, _options.CacheBaseDir, _options.CodeCompassBaseDir);
-        var rightCache = HashCache.Open(right, _options.Cache, _options.CacheBaseDir, _options.CodeCompassBaseDir);
+        var leftCache = HashCache.Open(left, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir);
+        var rightCache = HashCache.Open(right, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir);
         long bytesRead = 0;
 
         var paths = new SortedSet<string>(StringComparer.Ordinal);
@@ -98,33 +104,34 @@ public sealed class DirectoryComparer
             {
                 var (le, re) = sameSize[i];
                 bool equal;
-                bool hasL = leftCache.TryGet(le, out var hl);
-                bool hasR = rightCache.TryGet(re, out var hr);
-                if (hasL && hasR)
+                bool hasL = leftCache.TryGet(le, out var cl);
+                bool hasR = rightCache.TryGet(re, out var cr);
+                bool? cached = hasL && hasR ? ContentId.Same(cl, cr) : null;
+                if (cached is { } same)
                 {
-                    equal = hl == hr; // both sides proven by trusted ledgers — no bytes cross the wire
+                    equal = same; // both sides proven by trusted ledgers — no bytes cross the wire
                 }
                 else if (_options.Cache == CacheMode.Off)
                 {
-                    var r = await PairComparer.CompareAsync(le.FullPath, re.FullPath, hashes: false, ct).ConfigureAwait(false);
+                    var r = await PairComparer.CompareAsync(le, re, hashes: false, ct).ConfigureAwait(false);
                     equal = r.Equal;
                     Interlocked.Add(ref bytesRead, 2 * le.Length); // upper bound (early exit on a difference)
                 }
-                else if (hasL || hasR)
+                else if (hasL != hasR)
                 {
-                    // One side cached: read only the other side, and compare hashes.
-                    var (e, cache) = hasL ? (re, rightCache) : (le, leftCache);
-                    var h = await PairComparer.HashAsync(e.FullPath, ct).ConfigureAwait(false);
+                    // One side cached: read only the other side, and compare hashes (SHA-256 when both have it).
+                    var (e, cache, known) = hasL ? (re, rightCache, cl) : (le, leftCache, cr);
+                    var h = await PairComparer.HashAsync(e, ct).ConfigureAwait(false);
                     cache.Record(e, h);
-                    equal = h == (hasL ? hl : hr);
+                    equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
                     Interlocked.Add(ref bytesRead, e.Length);
                 }
                 else
                 {
-                    // Neither cached: read both at once, compare bytes, and keep both hashes for next time.
-                    var r = await PairComparer.CompareAsync(le.FullPath, re.FullPath, hashes: true, ct).ConfigureAwait(false);
-                    leftCache.Record(le, r.LeftHash!);
-                    rightCache.Record(re, r.RightHash!);
+                    // Neither usable: read both at once, compare bytes, and keep both hashes for next time.
+                    var r = await PairComparer.CompareAsync(le, re, hashes: true, ct).ConfigureAwait(false);
+                    leftCache.Record(le, r.Left!);
+                    rightCache.Record(re, r.Right!);
                     equal = r.Equal;
                     Interlocked.Add(ref bytesRead, 2 * le.Length);
                 }
@@ -144,6 +151,7 @@ public sealed class DirectoryComparer
         {
             CacheHits = leftCache.Hits + rightCache.Hits,
             CodeCompassHits = leftCache.CodeCompassHits + rightCache.CodeCompassHits,
+            UnstableFiles = leftCache.Unstable + rightCache.Unstable,
             ComparedPairs = sameSize.Count,
             BytesRead = bytesRead,
         };

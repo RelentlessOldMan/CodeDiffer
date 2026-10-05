@@ -36,7 +36,7 @@ static int Compare(string[] args)
 {
     if (args.Length < 3)
     {
-        Console.Error.WriteLine("usage: codediffer compare <left-tree> <right-tree> [--threads N] [--no-cache | --rehash]");
+        Console.Error.WriteLine("usage: codediffer compare <left-tree> <right-tree> [--threads N] [--no-cache | --rehash] [--fast-stat]");
         return 64;
     }
 
@@ -47,7 +47,7 @@ static int Compare(string[] args)
         return 64;
     }
     var cache = args.Contains("--no-cache") ? CacheMode.Off : args.Contains("--rehash") ? CacheMode.Rehash : CacheMode.On;
-    var options = new CompareOptions { Parallelism = threads, Cache = cache };
+    var options = new CompareOptions { Parallelism = threads, Cache = cache, StrictStat = !args.Contains("--fast-stat") };
 
     CompareReport report;
     var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -67,6 +67,8 @@ static int Compare(string[] args)
     Console.WriteLine($"  content    {report.ComparedPairs} same-size pair(s) · {report.CacheHits} side(s) from hash cache" +
         (report.CodeCompassHits > 0 ? $" ({report.CodeCompassHits} via CodeCompass)" : "") +
         $" · {report.BytesRead / (1024.0 * 1024 * 1024):F1} GB read");
+    if (report.UnstableFiles > 0)
+        Console.Error.WriteLine($"note: {report.UnstableFiles} file(s) changed while being read (live writer) — compared as read, not cached.");
     if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
     {
         Console.Error.WriteLine(
@@ -296,11 +298,13 @@ static void PrintUsage()
 
         usage:
           codediffer version                   print version
-          codediffer compare <left> <right> [--threads N] [--no-cache | --rehash]
+          codediffer compare <left> <right> [--threads N] [--no-cache | --rehash] [--fast-stat]
                                        compare two trees (parallel; default min(cores,8)).
                                        Hash cache ON by default: a file whose path+size+mtime
                                        match a trusted ledger entry isn't re-read. --no-cache
                                        proves every byte; --rehash re-reads and refreshes it.
+                                       Cache hits are confirmed by a live per-file stat;
+                                       --fast-stat trusts the directory listing alone.
           codediffer blockdiff <a> <b>         content-defined block diff of two large files
                                                (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]

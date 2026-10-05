@@ -32,17 +32,29 @@ public class ParallelCompareTests : IDisposable
         return b;
     }
 
+    /// <summary>A walk-style entry for a file, from its live stat (so hashes come back Stable).</summary>
+    private static FileEntry E(string path)
+    {
+        var st = FileStat.OfPath(path);
+        return new FileEntry(Path.GetFileName(path), path, st.Length, new DateTime(st.LastWriteUtcTicks, DateTimeKind.Utc), st.ChangeUtcTicks, st.FileId);
+    }
+
     [Fact]
     public async Task IdenticalMultiChunkFiles_AreEqual_AndHashesMatch()
     {
         var data = Payload(PairComparer.ChunkBytes * 2 + 123, 1); // spans 3 chunks
-        var a = Put("a.bin", data);
-        var b = Put("b.bin", data);
+        var a = E(Put("a.bin", data));
+        var b = E(Put("b.bin", data));
         var r = await PairComparer.CompareAsync(a, b, hashes: true);
         Assert.True(r.Equal);
-        Assert.NotNull(r.LeftHash);
-        Assert.Equal(r.LeftHash, r.RightHash);
-        Assert.Equal(r.LeftHash, await PairComparer.HashAsync(a));
+        Assert.NotNull(r.Left);
+        Assert.Equal(r.Left!.XxHash128, r.Right!.XxHash128);
+        Assert.Equal(r.Left.Sha256, r.Right.Sha256);
+        Assert.Equal(64, r.Left.Sha256.Length);
+        Assert.True(r.Left.Stable && r.Right.Stable);
+        var single = await PairComparer.HashAsync(a);
+        Assert.Equal((r.Left.XxHash128, r.Left.Sha256), (single.XxHash128, single.Sha256));
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)), single.Sha256);
     }
 
     [Fact]
@@ -51,9 +63,9 @@ public class ParallelCompareTests : IDisposable
         var data = Payload(PairComparer.ChunkBytes * 2 + 10, 2);
         var edited = (byte[])data.Clone();
         edited[^1] ^= 0xFF;
-        var r = await PairComparer.CompareAsync(Put("a", data), Put("b", edited), hashes: false);
+        var r = await PairComparer.CompareAsync(E(Put("a", data)), E(Put("b", edited)), hashes: false);
         Assert.False(r.Equal);
-        Assert.Null(r.LeftHash); // no hashing requested
+        Assert.Null(r.Left); // no hashing requested
     }
 
     [Fact]
@@ -62,21 +74,33 @@ public class ParallelCompareTests : IDisposable
         var data = Payload(PairComparer.ChunkBytes + 500, 3);
         var edited = (byte[])data.Clone();
         edited[0] ^= 0xFF;
-        var a = Put("a", data);
-        var b = Put("b", edited);
+        var a = E(Put("a", data));
+        var b = E(Put("b", edited));
         var r = await PairComparer.CompareAsync(a, b, hashes: true);
         Assert.False(r.Equal);
-        Assert.Equal(await PairComparer.HashAsync(a), r.LeftHash);
-        Assert.Equal(await PairComparer.HashAsync(b), r.RightHash);
-        Assert.NotEqual(r.LeftHash, r.RightHash);
+        Assert.Equal((await PairComparer.HashAsync(a)).Sha256, r.Left!.Sha256);
+        Assert.Equal((await PairComparer.HashAsync(b)).Sha256, r.Right!.Sha256);
+        Assert.NotEqual(r.Left.Sha256, r.Right.Sha256);
     }
 
     [Fact]
     public async Task EmptyFiles_AreEqual()
     {
-        var r = await PairComparer.CompareAsync(Put("a", []), Put("b", []), hashes: true);
+        var r = await PairComparer.CompareAsync(E(Put("a", [])), E(Put("b", [])), hashes: true);
         Assert.True(r.Equal);
-        Assert.Equal(r.LeftHash, r.RightHash);
+        Assert.Equal(r.Left!.Sha256, r.Right!.Sha256);
+    }
+
+    [Fact]
+    public async Task StaleListing_MakesHashesUnstable_SoTheyAreNeverCached()
+    {
+        // The listing row says one mtime, the live handle says another — exactly what a directory entry
+        // looks like while a writer holds the file open. The hash describes the LIVE bytes, so it must not be
+        // filed under the stale identity.
+        var p = Put("a", Payload(1000, 4));
+        var stale = E(p) with { LastWriteTimeUtc = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc) };
+        Assert.False((await PairComparer.HashAsync(stale)).Stable);
+        Assert.True((await PairComparer.HashAsync(E(p))).Stable);
     }
 
     [Fact]
@@ -120,3 +144,4 @@ public class ParallelCompareTests : IDisposable
             report.Changes.Select(c => c.RelativePath)); // deterministic ordinal order survives parallelism
     }
 }
+
