@@ -57,13 +57,19 @@ public sealed class DirectoryComparer
 
     public CompareReport Compare(string left, string right)
     {
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var timings = new List<(string, TimeSpan)>();
+        void Phase(string name) { timings.Add((name, timer.Elapsed)); timer.Restart(); }
+
         InputValidation.ValidateTrees(left, right);
+        Phase("validate");
 
         // Walk both sides at once — two independent trees (often two shares) shouldn't queue behind each other.
         var walker = new TreeWalker(_options.IgnoredDirectoryNames, _options.Parallelism);
         var leftWalk = Task.Run(() => walker.WalkAll(left));
         var rightWalk = Task.Run(() => walker.WalkAll(right));
         var (lw, rw) = (leftWalk.GetAwaiter().GetResult(), rightWalk.GetAwaiter().GetResult());
+        Phase("walk");
         var leftMap = lw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
         var rightMap = rw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
         var classifier = new ReasonClassifier(_options.MaxClassifyBytes);
@@ -79,6 +85,7 @@ public sealed class DirectoryComparer
         var removed = new List<FileEntry>();
         var added = new List<FileEntry>();
         var sameSize = new List<(FileEntry L, FileEntry R)>();
+        var sizeChanged = new List<(FileEntry L, FileEntry R)>();
         foreach (var path in paths)
         {
             bool inLeft = leftMap.TryGetValue(path, out var le);
@@ -90,11 +97,19 @@ public sealed class DirectoryComparer
             if (le.Length == re.Length)
                 sameSize.Add((le, re)); // size is the cheap filter; same size still needs the bytes
             else
-                changes.Add(Modified(classifier, le, re));
+                sizeChanged.Add((le, re)); // modified for sure; only the reason needs the bytes
         }
+
+        // Classify the size-changed pairs concurrently: each is a couple of opens/reads, and over SMB those
+        // round-trips must overlap, not stack (serially, ~33 files cost ~10 s against a real share).
+        var classified = new FileChange[sizeChanged.Count];
+        Parallel.For(0, sizeChanged.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism },
+            i => classified[i] = Modified(classifier, sizeChanged[i].L, sizeChanged[i].R));
+        changes.AddRange(classified);
 
         // Same-size pairs: the only place bytes cross the wire. Biggest first so a 1.5 GB header starts
         // early instead of becoming the lone straggler at the end (top 2% of files ≈ 80% of the bytes).
+        Phase("pair+classify size-changed");
         sameSize.Sort((a, b) => b.L.Length.CompareTo(a.L.Length));
         var verdicts = new FileChange[sameSize.Count];
         Parallel.ForEachAsync(
@@ -141,11 +156,14 @@ public sealed class DirectoryComparer
             }).GetAwaiter().GetResult();
         changes.AddRange(verdicts);
 
+        Phase("same-size content");
         AddResolvedAddsRemovesAndRenames(changes, removed, added);
+        Phase("renames");
 
         changes.Sort((a, b) => string.CompareOrdinal(a.RelativePath, b.RelativePath));
         leftCache.Save(lw.Files);
         rightCache.Save(rw.Files);
+        Phase("ledger save");
 
         return new CompareReport(changes, lw.DroppedDirectories, rw.DroppedDirectories)
         {
@@ -154,6 +172,7 @@ public sealed class DirectoryComparer
             UnstableFiles = leftCache.Unstable + rightCache.Unstable,
             ComparedPairs = sameSize.Count,
             BytesRead = bytesRead,
+            Timings = timings,
         };
     }
 

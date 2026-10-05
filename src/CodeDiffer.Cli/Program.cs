@@ -20,6 +20,8 @@ static int Run(string[] args)
             return Compare(args);
         case "blockdiff":
             return BlockDiff(args);
+        case "diff":
+            return DiffFiles(args);
         case "verify":
             return Verify(args);
         case "help" or "--help" or "-h":
@@ -36,7 +38,7 @@ static int Compare(string[] args)
 {
     if (args.Length < 3)
     {
-        Console.Error.WriteLine("usage: codediffer compare <left-tree> <right-tree> [--threads N] [--no-cache | --rehash] [--fast-stat]");
+        Console.Error.WriteLine("usage: codediffer compare <left-tree> <right-tree> [--threads N] [--no-cache | --rehash] [--fast-stat] [--patch [-U N] [--literal]]");
         return 64;
     }
 
@@ -62,9 +64,30 @@ static int Compare(string[] args)
         return 2;
     }
 
-    PrintSummary(args[1], args[2], report);
-    Console.WriteLine($"  elapsed    {sw.Elapsed.ToString(@"hh\:mm\:ss")}  (threads {options.Parallelism}, cache {cache.ToString().ToLowerInvariant()})");
-    Console.WriteLine($"  content    {report.ComparedPairs} same-size pair(s) · {report.CacheHits} side(s) from hash cache" +
+    if (args.Contains("--timings"))
+        foreach (var (phase, elapsed) in report.Timings)
+            Console.Error.WriteLine($"  timing     {phase,-28} {elapsed.TotalMilliseconds,9:N0} ms");
+
+    // --patch: the patch goes to stdout (pipe it to a file or `git apply`), the summary to stderr.
+    bool patch = args.Contains("--patch");
+    var info = patch ? Console.Error : Console.Out;
+    if (patch)
+    {
+        if (!TryPatchOptions(args, out var popt)) return 64;
+        using var stdout = PatchStdout();
+        var ps = PatchWriter.Write(stdout, report, args[1], args[2], popt);
+        stdout.Flush();
+        info.WriteLine($"patch: {ps.TextFiles} text · {ps.BinaryFiles} binary · {ps.GiantFiles} large (block ranges) · {ps.NoteFiles} eol/encoding note(s)" +
+            (ps.CoarseFiles > 0 ? $" · {ps.CoarseFiles} coarse (edit-distance budget exceeded)" : ""));
+    }
+    else
+    {
+        PrintChanges(report);
+    }
+
+    PrintSummary(info, args[1], args[2], report);
+    info.WriteLine($"  elapsed    {sw.Elapsed.ToString(@"hh\:mm\:ss")}  (threads {options.Parallelism}, cache {cache.ToString().ToLowerInvariant()})");
+    info.WriteLine($"  content    {report.ComparedPairs} same-size pair(s) · {report.CacheHits} side(s) from hash cache" +
         (report.CodeCompassHits > 0 ? $" ({report.CodeCompassHits} via CodeCompass)" : "") +
         $" · {report.BytesRead / (1024.0 * 1024 * 1024):F1} GB read");
     if (report.UnstableFiles > 0)
@@ -256,19 +279,24 @@ static string? FlagValue(string[] args, string flag)
     return null;
 }
 
-static void PrintSummary(string left, string right, CompareReport r)
+static void PrintSummary(TextWriter o, string left, string right, CompareReport r)
 {
-    Console.WriteLine($"compare: {left}  vs  {right}");
-    Console.WriteLine($"  files      {r.Total}");
-    Console.WriteLine($"  identical  {r.Count(ChangeStatus.Identical)}   (hidden)");
-    Console.WriteLine($"  added      {r.Count(ChangeStatus.Added)}");
-    Console.WriteLine($"  removed    {r.Count(ChangeStatus.Removed)}");
-    Console.WriteLine(
+    o.WriteLine($"compare: {left}  vs  {right}");
+    o.WriteLine($"  files      {r.Total}");
+    o.WriteLine($"  identical  {r.Count(ChangeStatus.Identical)}   (hidden)");
+    o.WriteLine($"  added      {r.Count(ChangeStatus.Added)}");
+    o.WriteLine($"  removed    {r.Count(ChangeStatus.Removed)}");
+    o.WriteLine($"  renamed    {r.Count(ChangeStatus.Renamed)}");
+    o.WriteLine(
         $"  modified   {r.Count(ChangeStatus.Modified)}   " +
         $"content {r.ReasonCount(ChangeReason.Content)} · eol {r.ReasonCount(ChangeReason.Eol)} · " +
         $"whitespace {r.ReasonCount(ChangeReason.Whitespace)} · encoding {r.ReasonCount(ChangeReason.Encoding)} · " +
         $"binary {r.ReasonCount(ChangeReason.Binary)}");
+}
 
+/// <summary>The per-file change list (non-patch mode): one line per non-identical path.</summary>
+static void PrintChanges(CompareReport r)
+{
     foreach (var c in r.Changes)
     {
         if (c.Status == ChangeStatus.Identical) continue; // hide identical by default (noise on big trees)
@@ -281,9 +309,52 @@ static void PrintSummary(string left, string right, CompareReport r)
             _ => "?",
         };
         var reason = c.Reason is { } rr ? $" [{CanonicalTokens.Token(rr)}]" : "";
-        Console.WriteLine($"    {tag} {c.RelativePath}{reason}");
+        var from = c.RenamedFrom is { } f ? $"{f} -> " : "";
+        Console.WriteLine($"    {tag} {from}{c.RelativePath}{reason}");
     }
 }
+
+static int DiffFiles(string[] args)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("usage: codediffer diff <left-file> <right-file> [-U N] [--literal]");
+        return 64;
+    }
+    if (Directory.Exists(args[1]) || Directory.Exists(args[2]))
+    {
+        Console.Error.WriteLine("error: diff takes two files; for trees use `codediffer compare <left> <right> --patch`");
+        return 64;
+    }
+    var left = File.Exists(args[1]) ? args[1] : null;
+    var right = File.Exists(args[2]) ? args[2] : null;
+    if (left is null && right is null)
+    {
+        Console.Error.WriteLine($"error: neither {args[1]} nor {args[2]} exists");
+        return 2;
+    }
+    if (!TryPatchOptions(args, out var popt)) return 64;
+    using var stdout = PatchStdout();
+    PatchWriter.WriteFiles(stdout, left, right, Path.GetFileName(args[1]), Path.GetFileName(args[2]), popt);
+    return 0;
+}
+
+static bool TryPatchOptions(string[] args, out PatchOptions options)
+{
+    int context = PatchOptions.DefaultContextLines;
+    if (FlagValue(args, "-U") is { } u && (!int.TryParse(u, out context) || context < 0))
+    {
+        Console.Error.WriteLine("error: -U needs a non-negative integer");
+        options = new PatchOptions();
+        return false;
+    }
+    options = new PatchOptions { Context = context, Literal = args.Contains("--literal") };
+    return true;
+}
+
+/// <summary>stdout as UTF-8 (no BOM) with '\n' line ends — a patch must be byte-exact, not console-encoded.</summary>
+static StreamWriter PatchStdout()
+    => new(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false), 1 << 16) { NewLine = "\n" };
 
 static string Version()
     => Assembly.GetExecutingAssembly()
@@ -299,12 +370,17 @@ static void PrintUsage()
         usage:
           codediffer version                   print version
           codediffer compare <left> <right> [--threads N] [--no-cache | --rehash] [--fast-stat]
+                                       [--patch [-U N] [--literal]]
                                        compare two trees (parallel; default min(cores,8)).
                                        Hash cache ON by default: a file whose path+size+mtime
                                        match a trusted ledger entry isn't re-read. --no-cache
                                        proves every byte; --rehash re-reads and refreshes it.
                                        Cache hits are confirmed by a live per-file stat;
                                        --fast-stat trusts the directory listing alone.
+                                       --patch writes a git-style unified diff to stdout
+                                       (git apply-able; summary goes to stderr).
+          codediffer diff <a> <b> [-U N] [--literal]
+                                       unified diff of two files
           codediffer blockdiff <a> <b>         content-defined block diff of two large files
                                                (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]

@@ -37,6 +37,8 @@ public sealed class CompareReport
     public int UnstableFiles { get; init; }
     /// <summary>Content bytes read to reach the verdicts (an upper bound when early exit applies).</summary>
     public long BytesRead { get; init; }
+    /// <summary>Wall time per compare phase, in order (for --timings).</summary>
+    public IReadOnlyList<(string Phase, TimeSpan Elapsed)> Timings { get; init; } = [];
 
     public CompareReport(IReadOnlyList<FileChange> changes, int leftDroppedDirectories = 0, int rightDroppedDirectories = 0)
     {

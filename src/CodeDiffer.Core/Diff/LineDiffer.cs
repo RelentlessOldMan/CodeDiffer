@@ -19,11 +19,39 @@ public static class LineDiffer
 {
     private enum Edit { Equal, Delete, Insert }
 
+    /// <summary>
+    /// Edit-distance budget. The backtrack trace costs ~D² ints (D = number of differing lines), so 3000
+    /// caps it near 36 MB whatever the file size. Past it the diff falls back to ONE replace over the
+    /// differing middle (common prefix/suffix still matched) — still a correct diff, just not minimal.
+    /// </summary>
+    public const int DefaultMaxEditDistance = 3000;
+
     public static List<Hunk> Diff(string oldText, string newText)
         => Diff(LineText.SplitLines(oldText), LineText.SplitLines(newText));
 
     public static List<Hunk> Diff(IReadOnlyList<string> a, IReadOnlyList<string> b)
-        => BuildHunks(ShortestEdit(a, b));
+        => Diff(a, b, DefaultMaxEditDistance, out _);
+
+    /// <summary>Diff with an explicit edit-distance budget; <paramref name="coarse"/> = the budget was exceeded.</summary>
+    public static List<Hunk> Diff(IReadOnlyList<string> a, IReadOnlyList<string> b, int maxEditDistance, out bool coarse)
+    {
+        var moves = ShortestEdit(a, b, maxEditDistance);
+        coarse = moves is null;
+        return moves is null ? CoarseHunks(a, b) : BuildHunks(moves);
+    }
+
+    /// <summary>Over-budget fallback: match the common prefix and suffix, replace the middle as one hunk.</summary>
+    private static List<Hunk> CoarseHunks(IReadOnlyList<string> a, IReadOnlyList<string> b)
+    {
+        int pre = 0;
+        while (pre < a.Count && pre < b.Count && a[pre] == b[pre]) pre++;
+        int suf = 0;
+        while (suf < a.Count - pre && suf < b.Count - pre && a[a.Count - 1 - suf] == b[b.Count - 1 - suf]) suf++;
+        int del = a.Count - pre - suf, ins = b.Count - pre - suf;
+        if (del == 0 && ins == 0) return [];
+        var op = del > 0 && ins > 0 ? HunkOp.Replace : del > 0 ? HunkOp.Delete : HunkOp.Insert;
+        return [new Hunk(op, del == 0 ? pre : pre + 1, del, pre + 1, ins)];
+    }
 
     private static List<Hunk> BuildHunks(List<Edit> moves)
     {
@@ -50,21 +78,26 @@ public static class LineDiffer
         return hunks;
     }
 
-    /// <summary>Myers O(ND) shortest edit script as a forward list of Equal/Delete/Insert moves.</summary>
-    private static List<Edit> ShortestEdit(IReadOnlyList<string> a, IReadOnlyList<string> b)
+    /// <summary>
+    /// Myers O(ND) shortest edit script as a forward list of Equal/Delete/Insert moves, or null if the edit
+    /// distance exceeds <paramref name="maxD"/>. The trace keeps only each step's live diagonals (k ∈ [-d, d],
+    /// 2d+3 ints) instead of a full copy of V, so memory is O(D²), not O(D·(N+M)) — same moves, same output.
+    /// </summary>
+    private static List<Edit>? ShortestEdit(IReadOnlyList<string> a, IReadOnlyList<string> b, int maxD)
     {
         int n = a.Count, m = b.Count, max = n + m;
         var moves = new List<Edit>();
         if (max == 0) return moves;
 
-        int off = max;
-        var v = new int[2 * max + 1];
+        int off = max + 1; // one spare diagonal each side: step 0's backtrack reads diagonal +1
+        var v = new int[2 * max + 3];
         var trace = new List<int[]>();
 
         bool done = false;
         for (int d = 0; d <= max && !done; d++)
         {
-            trace.Add((int[])v.Clone());
+            if (d > maxD) return null;
+            trace.Add(v.AsSpan(off - d - 1, 2 * d + 3).ToArray()); // diagonals -d-1..d+1 (state after step d-1)
             for (int k = -d; k <= d; k += 2)
             {
                 int x = k == -d || (k != d && v[off + k - 1] < v[off + k + 1])
@@ -83,8 +116,9 @@ public static class LineDiffer
         {
             var vd = trace[d];
             int k = px - py;
-            int prevK = k == -d || (k != d && vd[off + k - 1] < vd[off + k + 1]) ? k + 1 : k - 1;
-            int prevX = vd[off + prevK];
+            // vd is the -d-1..d+1 slice, so diagonal j lives at vd[j + d + 1].
+            int prevK = k == -d || (k != d && vd[k + d] < vd[k + d + 2]) ? k + 1 : k - 1;
+            int prevX = vd[prevK + d + 1];
             int prevY = prevX - prevK;
 
             while (px > prevX && py > prevY) { moves.Add(Edit.Equal); px--; py--; }

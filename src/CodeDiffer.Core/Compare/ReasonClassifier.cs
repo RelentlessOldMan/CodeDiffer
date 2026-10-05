@@ -20,19 +20,21 @@ public sealed class ReasonClassifier
 
     public ChangeReason Classify(string leftPath, long leftLength, string rightPath, long rightLength)
     {
-        var leftHead = TextInspector.ReadHead(leftPath);
-        var rightHead = TextInspector.ReadHead(rightPath);
+        // One open per side: a small file is read whole (its head is a prefix of it); a large one only its head.
+        bool large = leftLength > _maxClassifyBytes || rightLength > _maxClassifyBytes;
+        var leftBytes = large ? TextInspector.ReadHead(leftPath) : File.ReadAllBytes(leftPath);
+        var rightBytes = large ? TextInspector.ReadHead(rightPath) : File.ReadAllBytes(rightPath);
 
-        if (TextInspector.LooksBinary(leftHead) || TextInspector.LooksBinary(rightHead))
+        if (TextInspector.LooksBinary(Head(leftBytes)) || TextInspector.LooksBinary(Head(rightBytes)))
             return ChangeReason.Binary;
 
         // Too large to fully decode on the eager Tier-2 pass; bytes differ, so it's a content change.
         // The precise block-level picture is produced lazily on demand (see docs/OUTPUT.md §3).
-        if (leftLength > _maxClassifyBytes || rightLength > _maxClassifyBytes)
+        if (large)
             return ChangeReason.Content;
 
-        var leftText = TextInspector.Decode(File.ReadAllBytes(leftPath));
-        var rightText = TextInspector.Decode(File.ReadAllBytes(rightPath));
+        var leftText = TextInspector.Decode(leftBytes);
+        var rightText = TextInspector.Decode(rightBytes);
 
         if (string.Equals(leftText, rightText, StringComparison.Ordinal))
             return ChangeReason.Encoding; // same text, different bytes
@@ -47,4 +49,6 @@ public sealed class ReasonClassifier
 
         return ChangeReason.Content;
     }
+
+    private static ReadOnlySpan<byte> Head(byte[] bytes) => bytes.AsSpan(0, Math.Min(bytes.Length, TextInspector.HeadBytes));
 }
