@@ -5,7 +5,9 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <!-- net10 for the first-party .NET MCP SDK (wired in a later step). -->
+    <!-- Its own exe, CodeDiffer.Mcp.exe (stdio MCP server), like CodeCompass.Mcp.exe; net10 for the
+         first-party .NET MCP SDK. -->
+    <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

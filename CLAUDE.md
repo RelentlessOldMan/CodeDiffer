@@ -32,7 +32,9 @@ full contract is in [`docs/diff-delta-contract.md`](docs/diff-delta-contract.md)
   from source); the CLI and MCP server target **net10.0** (MCP SDK is first-party .NET). Self-contained
   single-file publish is the "grab it and go" distribution.
 - `src/CodeDiffer.Core` — the engine (walk · hash · classify · hunks · giant-file block index · digest).
-- `src/CodeDiffer.Cli` — the `codediffer` command.
-- `src/CodeDiffer.Mcp` — the agent-facing MCP server (paged, bounded queries).
+- `src/CodeDiffer.Cli` — the `codediffer` command, built as **`CodeDiffer.Cli.exe`**.
+- `src/CodeDiffer.Mcp` — the agent-facing stdio MCP server (paged, bounded queries), its own exe
+  **`CodeDiffer.Mcp.exe`**. Same model as CodeCompass (`CodeCompass.Cli.exe` + `CodeCompass.Mcp.exe`):
+  two exes over one Core; the CLI does not reference the MCP project.
 - `tests/CodeDiffer.Tests` — xUnit; seed it from the prototype-review regression bugs (see DESIGN.txt).
 - Public-repo conventions live in `C:\Playground\RelentlessOldMan\Project_Instructions\REPO-SETUP.md`.

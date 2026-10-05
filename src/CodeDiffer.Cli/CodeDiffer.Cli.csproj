@@ -2,17 +2,17 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CodeDiffer.Core\CodeDiffer.Core.csproj" />
-    <ProjectReference Include="..\CodeDiffer.Mcp\CodeDiffer.Mcp.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <!-- net10 to match the MCP server (first-party .NET MCP SDK); both publish self-contained. -->
+    <!-- net10 to match the MCP server; both publish self-contained. Exe = CodeDiffer.Cli.exe (the CodeCompass
+         model: CodeCompass.Cli.exe + CodeCompass.Mcp.exe, two exes over one Core; the command is still
+         spoken of as `codediffer`). -->
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
-    <AssemblyName>codediffer</AssemblyName>
     <RootNamespace>CodeDiffer.Cli</RootNamespace>
   </PropertyGroup>
 
