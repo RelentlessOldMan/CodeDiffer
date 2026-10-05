@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Diff;
@@ -9,7 +9,7 @@ namespace CodeDiffer.Tests;
 
 /// <summary>
 /// The patch output is judged by the strictest available oracle: real <c>git apply</c>. A patch generated
-/// for L→R, applied to a copy of L, must reproduce R byte for byte — every edge case included (edits at
+/// for Lâ†’R, applied to a copy of L, must reproduce R byte for byte â€” every edge case included (edits at
 /// both ends, newline-at-EOF gained/lost, CRLF, unicode, add/remove/empty/rename). Plus rendering details.
 /// </summary>
 public class PatchTests : IDisposable
@@ -40,7 +40,7 @@ public class PatchTests : IDisposable
         Put("L/lose-eol.txt", "a\nb\nc\n");          Put("R/lose-eol.txt", "a\nb\nc");
         Put("L/noeol-edit.txt", "a\nb\nc");          Put("R/noeol-edit.txt", "a\nB\nc");
         Put("L/crlf.txt", "one\r\ntwo\r\nthree\r\n"); Put("R/crlf.txt", "one\r\nTWO\r\nthree\r\n");
-        Put("L/unicode.txt", "héllo\n日本語\nend\n");  Put("R/unicode.txt", "héllo\n日本語です\nend\n");
+        Put("L/unicode.txt", "hÃ©llo\næ—¥æœ¬èªž\nend\n");  Put("R/unicode.txt", "hÃ©llo\næ—¥æœ¬èªžã§ã™\nend\n");
         Put("L/removed.txt", Lines(1, 5));
         Put("R/added.txt", Lines(1, 5, "fresh"));
         Put("R/added-noeol.txt", "x\ny");
@@ -79,7 +79,7 @@ public class PatchTests : IDisposable
         var w = new StringWriter { NewLine = "\n" };
         UnifiedDiff.Write(w, "f", "f", Lines(1, 30), Lines(1, 9) + "X\n" + Lines(11, 14) + "Y\n" + Lines(16, 30), context: 3);
         var text = w.ToString();
-        // Edits at 10 and 15 are 4 lines apart (≤ 2×context) ⇒ ONE hunk covering 7..18.
+        // Edits at 10 and 15 are 4 lines apart (â‰¤ 2Ã—context) â‡’ ONE hunk covering 7..18.
         Assert.Single(text.Split('\n').Where(l => l.StartsWith("@@")));
         Assert.Contains("@@ -7,12 +7,12 @@", text);
     }
@@ -109,7 +109,7 @@ public class PatchTests : IDisposable
     {
         var a = Enumerable.Range(0, 200).Select(i => $"a{i}").ToArray();
         var b = Enumerable.Range(0, 200).Select(i => i is < 5 or >= 195 ? $"a{i}" : $"b{i}").ToArray();
-        var hunks = LineDiffer.Diff(a, b, maxEditDistance: 10, out bool coarse);
+        var hunks = LineDiffer.Diff(a, b, maxEditDistance: 10, out bool coarse, maxWork: 100);
         Assert.True(coarse);
         Assert.Single(hunks);
         Assert.Equal(b, HunkApplier.Reconstruct(a, b, hunks)); // still a correct diff
