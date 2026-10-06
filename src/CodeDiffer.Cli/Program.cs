@@ -202,9 +202,10 @@ static int Report(string[] args)
     return WriteHtml(s, args, Console.Out) ?? 0;
 }
 
-/// <summary>results: list saved compares, newest first.</summary>
+/// <summary>results: list saved compares, newest first; --prune deletes old ones (a dry run unless --yes).</summary>
 static int Results(string[] args)
 {
+    if (args.Contains("--prune")) return Prune(args);
     int max = 20;
     if (FlagValue(args, "--max", from: 1) is { } m && (!int.TryParse(m, out max) || max < 1))
     {
@@ -221,6 +222,58 @@ static int Results(string[] args)
         Console.WriteLine($"        {string.Join(", ", counts)}{(c.Error is { } e ? $"  error: {e}" : "")}");
     }
     return 0;
+}
+
+/// <summary>results --prune [--keep N] [--older-than DAYS] [--yes]: delete all but the newest N saved compares.</summary>
+static int Prune(string[] args)
+{
+    int keep = 20;
+    if (FlagValue(args, "--keep", from: 1) is { } k && (!int.TryParse(k, out keep) || keep < 0))
+    {
+        Console.Error.WriteLine("error: --keep needs a non-negative integer");
+        return 64;
+    }
+    TimeSpan? olderThan = null;
+    if (FlagValue(args, "--older-than", from: 1) is { } d)
+    {
+        if (!double.TryParse(d, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var days) || days < 0)
+        {
+            Console.Error.WriteLine("error: --older-than needs a number of days");
+            return 64;
+        }
+        olderThan = TimeSpan.FromDays(days);
+    }
+    bool yes = args.Contains("--yes");
+    var root = ResultStore.DefaultRoot;
+    var doomed = ResultStore.PruneCandidates(root, keep, olderThan, DateTime.UtcNow);
+    var rule = $"all but the newest {keep}" + (olderThan is { } o ? $", started over {o.TotalDays:0.#} day(s) ago" : "");
+    if (doomed.Count == 0)
+    {
+        Console.WriteLine($"nothing to prune in {root} ({rule})");
+        return 0;
+    }
+    long total = 0;
+    int deleted = 0;
+    Console.WriteLine($"{(yes ? "deleting" : "would delete")} {doomed.Count} saved compare(s) in {root} ({rule}):");
+    foreach (var c in doomed)
+    {
+        long size = ResultStore.SizeOf(c.Dir);
+        total += size;
+        Console.WriteLine($"  {c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.State,-9} {AgentViews.Bytes(size),9}  {Path.GetFileName(c.Dir)}");
+        if (!yes) continue;
+        try
+        {
+            ResultStore.Delete(root, c);
+            deleted++;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException)
+        {
+            Console.Error.WriteLine($"    not deleted: {ex.Message}");
+        }
+    }
+    Console.WriteLine(yes ? $"deleted {deleted} of {doomed.Count} ({AgentViews.Bytes(total)})"
+                          : $"{AgentViews.Bytes(total)} in all; run again with --yes to delete them");
+    return deleted == doomed.Count || !yes ? 0 : 1;
 }
 
 static int BlockDiff(string[] args)
@@ -657,6 +710,10 @@ static void PrintUsage()
                                        each file's diff loaded on expand; opens from disk.
                                        --large also block-diffs files over 16 MB.
           codediffer results [--max N]   saved compares, newest first
+          codediffer results --prune [--keep N] [--older-than DAYS] [--yes]
+                                       delete all but the newest N (default 20) saved compares,
+                                       only those older than DAYS if given. Dry run unless --yes.
+          Ctrl+C stops a running compare/compare3/apply; the hashes read so far are kept.
           codediffer diff <a> <b> [-U N] [--literal]
                                        unified diff of two files
           codediffer apply <left> <right> <target> [--write]

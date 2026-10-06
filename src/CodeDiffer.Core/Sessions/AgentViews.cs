@@ -528,7 +528,7 @@ public static class AgentViews
 
     private static string Clock(TimeSpan t) => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
 
-    internal static string Bytes(long b) => b switch
+    public static string Bytes(long b) => b switch
     {
         >= 1L << 30 => $"{b / (double)(1L << 30):F1} GB",
         >= 1L << 20 => $"{b / (double)(1L << 20):F1} MB",

@@ -173,6 +173,39 @@ public static class ResultStore
         return list;
     }
 
+    // ---- prune ----
+
+    /// <summary>A "running" result younger than this may belong to a live process (an MCP server); prune leaves it.</summary>
+    public static readonly TimeSpan RunningGrace = TimeSpan.FromDays(1);
+
+    /// <summary>
+    /// The saved compares <c>results --prune</c> would delete: all but the newest <paramref name="keep"/>, and of those
+    /// only the ones older than <paramref name="olderThan"/> when it is given. A "running" result started within
+    /// <see cref="RunningGrace"/> is never picked (it may still be running elsewhere). Only directories that hold a
+    /// CodeDiffer compare.json are considered, so nothing else under the root is ever touched.
+    /// </summary>
+    public static IReadOnlyList<SavedCompare> PruneCandidates(string root, int keep, TimeSpan? olderThan, DateTime nowUtc)
+        => List(root, int.MaxValue)
+            .Skip(Math.Max(0, keep))
+            .Where(c => olderThan is not { } age || c.StartedUtc < nowUtc - age)
+            .Where(c => c.State != "running" || c.StartedUtc < nowUtc - RunningGrace)
+            .ToList();
+
+    /// <summary>Bytes on disk under a result directory (its patches and report included).</summary>
+    public static long SizeOf(string dir)
+        => new DirectoryInfo(dir).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
+
+    /// <summary>Delete one saved compare. Refuses anything that is not a CodeDiffer result directly under <paramref name="root"/>.</summary>
+    public static void Delete(string root, SavedCompare c)
+    {
+        var dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(c.Dir));
+        var parent = Path.GetDirectoryName(dir);
+        if (!string.Equals(parent, Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"{dir} is not directly under the results directory {root}");
+        using (ReadMeta(dir)) { } // throws unless it is a CodeDiffer result
+        Directory.Delete(dir, recursive: true);
+    }
+
     /// <summary>Reopen a finished compare. Throws <see cref="InvalidDataException"/> if it is not a finished
     /// CodeDiffer result (unknown format/version, still running, failed, or a data file is missing).</summary>
     public static Session Load(string dir)
