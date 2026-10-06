@@ -93,6 +93,13 @@ on the other ⇒ merged at the new name). The same `get_summary` / `list_files` 
 serve it; `get_file_diff` shows the merged file with diff3 markers (`<<<<<<< v1 / ||||||| base / ======= /
 >>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested).
 
+Full-scale check (2026-10-05, CodeSpawner `death` 1.0.9 base / v1 / v2 on `\\IRISH\TestHole`, 68,661 base
+files, `--threads 4`, warm hash cache): `compare3` in 3:59 (base→v1 124 s, base→v2 109 s, merge 5 s; 0 bytes
+re-hashed), 1,723 touched paths → 369 v1 only · 162 v2 only · 251 merged · 941 conflict, 11,371 conflict
+regions. `verify death_1.0.9-conflict.json --base --v1 --v2` (30 s): the merge's own decomposition
+(11,371 conflict · 32,615 clean) reproduces `conflictTruthSha` exactly. `apply` base→v1 onto v2 (dry run,
+1:57) agrees: 620 files clean, 941 conflict, 21,246 hunks applied, 11,371 conflict, 0 fuzzy.
+
 ## 5. The human HTML report
 
 Self-contained shell + a sidecar data dir in the result store. Summary tiles; a tree view with folder

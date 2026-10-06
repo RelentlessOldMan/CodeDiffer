@@ -273,7 +273,8 @@ public static class AgentViews
             hs.GroupBy(h => h.Outcome).Select(g => $"{g.Count()} {g.Key.ToString().ToLowerInvariant()}"));
         var where = f.Status == PortStatus.Conflict && hs.FirstOrDefault(h => h.Outcome == HunkOutcome.Conflict) is { BaseLine: > 0 } c
             ? $" (first at base line {c.BaseLine}, target line {c.TargetLine})" : "";
-        return $"{f.Status.ToString().ToLowerInvariant(),-8} {f.Action,-7} {name}{detail}{where}{(f.Note is null ? "" : " — " + f.Note)}";
+        var action = f.Action == "none" ? "" : f.Action; // conflict/already files do nothing; don't print "none"
+        return $"{f.Status.ToString().ToLowerInvariant(),-8} {action,-7} {name}{detail}{where}{(f.Note is null ? "" : " — " + f.Note)}";
     }
 
     // ---- rendering ----
