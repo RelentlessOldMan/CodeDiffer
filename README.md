@@ -52,8 +52,15 @@ Two exes over one engine (the CodeCompass model):
   `git apply`-able patch), `compare3 <base> <v1> <v2>` (3-way: v1 only · v2 only · agreed · merged ·
   conflict), `apply <left> <right> <target> [--write]` (port a change set onto a third tree), `diff <a> <b>`,
   `blockdiff`, `verify`. `help` lists the flags.
-- **`CodeDiffer.Mcp.exe`** — the stdio MCP server for agents. Register it with
-  `claude mcp add codediffer -- <path>\CodeDiffer.Mcp.exe`. Tools: `start_compare` / `start_compare3`
+- **`CodeDiffer.Mcp.exe`** — the stdio MCP server for agents. Publish it outside the build tree (a running
+  server locks its exe) and register it:
+
+  ```powershell
+  dotnet publish src\CodeDiffer.Mcp -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $env:LOCALAPPDATA\CodeDiffer\bin
+  claude mcp add --scope user codediffer -- $env:LOCALAPPDATA\CodeDiffer\bin\CodeDiffer.Mcp.exe
+  ```
+
+  Tools: `start_compare` / `start_compare3`
   (background, return an id), `get_summary` (constant size), `list_files` (paged/filtered), `get_file_diff`
   (one file, capped — a 2-way patch, or a 3-way merge with diff3 conflict markers; the overflow goes to a
   file), `get_stats`, `export_changeset` (whole patch to a file), `apply_changeset` (port the changes onto a
