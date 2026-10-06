@@ -119,6 +119,15 @@ on the other ⇒ merged at the new name). The same `get_summary` / `list_files` 
 serve it; `get_file_diff` shows the merged file with diff3 markers (`<<<<<<< v1 / ||||||| base / ======= /
 >>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested).
 
+**Merge overlay (built):** `write_merge(id[, out_dir])` (CLI `compare3 … --merge-out DIR`) writes the merge
+as an overlay on v1, never the whole tree: `files\` holds only what the merge changes in v1 (v2's one-sided
+changes, clean merges in v1's encoding and line endings, text conflicts with diff3 markers),
+`deletes.txt` the v1 paths to delete (v2's deletes, the old side of a move), `conflicts.txt` the conflicts
+with markers plus those that can't be one file (binary, large, modify/delete, rename/rename, path collision)
+with each side's file, and `OVERLAY.txt` how to apply it: copy `files\` over v1, then delete `deletes.txt`.
+A move's old path is listed only once its new file is written, so a failed read never loses v1's copy.
+Unlike `apply --write` (which skips any file with a conflict), conflicts land in the overlay with markers.
+
 Full-scale check (2026-10-05, CodeSpawner `death` 1.0.9 base / v1 / v2 on `\\IRISH\TestHole`, 68,661 base
 files, `--threads 4`, warm hash cache): `compare3` in 3:59 (base→v1 124 s, base→v2 109 s, merge 5 s; 0 bytes
 re-hashed), 1,723 touched paths → 369 v1 only · 162 v2 only · 251 merged · 941 conflict, 11,371 conflict

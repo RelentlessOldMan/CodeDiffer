@@ -580,7 +580,7 @@ static int Compare3(string[] args)
 {
     if (args.Length < 4)
     {
-        Console.Error.WriteLine("usage: codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache]");
+        Console.Error.WriteLine("usage: codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache] [--merge-out DIR]");
         return 64;
     }
     int threads = new CompareOptions().Parallelism;
@@ -619,6 +619,15 @@ static int Compare3(string[] args)
     {
         if (s.ResultDir is null || s.SaveError is not null) Console.Error.WriteLine("note: --html needs a saved result; drop --no-save");
         else if (WriteHtml(s, args, Console.Out) is { } bad) return bad;
+    }
+    if (FlagValue(args, "--merge-out", from: 4) is { } outDir)
+    {
+        try { Console.Write(ThreeWayViews.OverlayText(MergeOverlay.Write(r, s.Base, s.V1, s.V2, outDir, threads))); }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"error: merge overlay: {ex.Message}");
+            return 2;
+        }
     }
     if (r.DroppedDirectories > 0) return 3;
     return r.Count(Merge3Outcome.Conflict) > 0 ? 1 : 0;
@@ -704,7 +713,11 @@ static void PrintUsage()
                                        The result is saved (see `results`; --no-save skips);
                                        --html also writes the HTML report (report flags below).
           codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache] [--no-save] [--html]
+                              [--merge-out DIR]
                                        3-way: v1 only | v2 only | agreed | merged | conflict
+                                       --merge-out writes the merge as an overlay on v1 (new or
+                                       empty DIR): files\ to copy over v1 (text conflicts with
+                                       diff3 markers), deletes.txt, conflicts.txt, OVERLAY.txt.
           codediffer report <id|result-dir> [--large] [--include-identical] [--max-diffs N] [--out DIR]
                                        HTML report of a saved compare: folder tree, filters,
                                        each file's diff loaded on expand; opens from disk.

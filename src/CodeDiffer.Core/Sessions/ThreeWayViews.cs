@@ -42,6 +42,14 @@ public static class ThreeWayViews
         return o.ToString();
     }
 
+    /// <summary>What a merge overlay holds and how to apply it (the CLI's --merge-out and the write_merge tool).</summary>
+    public static string OverlayText(OverlayResult o)
+        => $"merge overlay: {o.Dir}\n" +
+           $"  files\\       {o.FromV2:N0} from v2 · {o.Merged:N0} merged · {o.Markers:N0} with conflict markers · {o.Moved:N0} moved ({AgentViews.Bytes(o.Bytes)})\n" +
+           $"  deletes.txt  {o.Deletes:N0} path(s)\n" +
+           $"  conflicts.txt {o.Markers:N0} with markers · {o.Unresolved:N0} not written (v1's version stays until decided)\n" +
+           "  apply: copy files\\ over v1, then delete the paths in deletes.txt (OVERLAY.txt says the same)\n";
+
     public static string Stats(Compare3Session s)
     {
         var text = Summary(s);

@@ -68,7 +68,8 @@ Windows x64 zip (no .NET needed; `INSTALL.txt` inside); `release.ps1` builds it 
   differences found so far, which `list_files` / `get_file_diff` can already open), `list_files` (paged/filtered), `get_file_diff`
   (one file, capped — a 2-way patch, or a 3-way merge with diff3 conflict markers; the overflow goes to a
   file), `get_stats`, `export_changeset` (whole patch to a file), `apply_changeset` (port the changes onto a
-  third tree by 3-way merge; dry run unless `write=true`), `write_report` (the HTML report, for a human),
+  third tree by 3-way merge; dry run unless `write=true`), `write_report` (the HTML report, for a human), `write_merge` (a compare3's merge as an overlay on v1:
+  the changed files, text conflicts with diff3 markers, a deletes list; CLI `compare3 --merge-out DIR`),
   `list_compares` (saved compares; any id reopens without re-comparing), `cancel_compare` (stop a running
   compare; the hashes it read are kept, so starting it again only reads the rest; Ctrl+C in the CLI).
 

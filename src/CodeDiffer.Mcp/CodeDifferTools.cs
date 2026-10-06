@@ -3,6 +3,7 @@ using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Report;
 using CodeDiffer.Core.Sessions;
+using CodeDiffer.Core.ThreeWay;
 using ModelContextProtocol.Server;
 
 namespace CodeDiffer.Mcp;
@@ -206,6 +207,32 @@ public static class CodeDifferTools
         await WaitAsync(s, 30);
         return s.IsDone ? $"compare {s.Id}: {(s.Cancelled ? AgentViews.CancelledText(s) : "finished before the cancel took effect\n")}"
                         : $"compare {s.Id}: cancelling — still saving what it read; get_summary shows when it has stopped\n";
+    }
+
+    [McpServerTool(Name = "write_merge")]
+    [Description("Write a finished compare3's merge as an overlay on v1: only the files the merge changes in v1 (v2's " +
+                 "one-sided changes, clean merges, text conflicts with diff3 markers) plus deletes.txt and conflicts.txt " +
+                 "(binary/large/delete/rename conflicts with each side's file). Copy files\\ over v1 and apply deletes.txt " +
+                 "to get the merged tree. Reads the changed files of the three trees.")]
+    public static string WriteMerge(
+        [Description("compare3 id (default: the most recent).")] string? compare_id = null,
+        [Description("A new or empty directory outside the three trees (default: merge\\ in the compare's result directory).")] string? out_dir = null)
+    {
+        if (Find(compare_id, out var s) is { } err) return err;
+        if (s is not Compare3Session t) return $"compare {s!.Id} is a 2-way compare; write_merge needs a compare3 (apply_changeset ports a 2-way change set)";
+        if (!t.IsDone) return $"compare {t.Id} is still running — wait for it (get_summary wait_seconds) first";
+        if (t.Error is { } failed) return $"compare {t.Id} {(t.Cancelled ? "was cancelled" : $"failed: {failed}")}";
+        var dir = out_dir ?? (t.ResultDir is { } rd ? Path.Combine(rd, "merge") : null);
+        if (dir is null) return "error: out_dir is required (this compare has no result directory)";
+        try
+        {
+            var o = MergeOverlay.Write(t.Report!, t.Base, t.V1, t.V2, dir, t.Options.Parallelism);
+            return (t.Reopened ? "note: reopened compare — written from the trees as they are now\n" : "") + ThreeWayViews.OverlayText(o);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return $"error: {ex.Message}";
+        }
     }
 
     [McpServerTool(Name = "write_report")]

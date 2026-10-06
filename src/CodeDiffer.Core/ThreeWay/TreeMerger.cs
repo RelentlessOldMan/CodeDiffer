@@ -184,6 +184,17 @@ public static class TreeMerger
     public static string? MergedText(Merge3Entry e, string b, string v1, string v2) => Compose(e, b, v1, v2)?.Merged;
 
     /// <summary>
+    /// The merged file as bytes to write: <see cref="MergedText"/> in v1's encoding, and in v1's line endings when the
+    /// sides' endings differed (it was merged ignoring them). Null when the entry has no line-level merge.
+    /// </summary>
+    public static byte[]? MergedBytes(Merge3Entry e, string b, string v1, string v2)
+    {
+        if (Compose(e, b, v1, v2) is not { } m) return null;
+        var text = m.Normalized && m.V1.Eol == "CRLF" ? m.Merged.Replace("\n", "\r\n") : m.Merged;
+        return m.V1.Encode(text);
+    }
+
+    /// <summary>
     /// What a clean merge does to the base, as a unified diff (base → merged result). Null when the entry has
     /// no line-level merge. When the sides' line endings differed, the base is compared EOL-normalized, the
     /// way it was merged.
@@ -196,7 +207,7 @@ public static class TreeMerger
         return w.ToString();
     }
 
-    private static (string Base, string Merged)? Compose(Merge3Entry e, string b, string v1, string v2)
+    private static (string Base, string Merged, ChangePorter.Text V1, bool Normalized)? Compose(Merge3Entry e, string b, string v1, string v2)
     {
         if (e.V1 is null || e.V2 is null || e.ConflictKind is not (null or "content" or "add/add") || e.Outcome == Merge3Outcome.Agreed) return null;
         bool added = e.V1.Status == ChangeStatus.Added;
@@ -239,7 +250,7 @@ public static class TreeMerger
             }
         }
         Emit(lb, cursor, lb.Count - cursor);
-        return (string.Concat(lb), o.ToString());
+        return (string.Concat(lb), o.ToString(), t1, normalize);
     }
 
     private static bool LooksBinary(byte[] bytes) => TextInspector.LooksBinary(bytes.AsSpan(0, Math.Min(bytes.Length, TextInspector.HeadBytes)));
