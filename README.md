@@ -45,11 +45,23 @@ CodeDiffer is one of a family of local, large-repo tools (shared author, stack, 
   correctness oracle: its bulk `mutate` regenerates the same ~100 GB corpus with a dialable set of
   changes and emits a delta manifest CodeDiffer asserts against.
 
+## Use it
+
+Two exes over one engine (the CodeCompass model):
+
+- **`CodeDiffer.Cli.exe`** — `compare <left> <right>` (status + reason per file; `--patch` for a
+  `git apply`-able patch), `diff <a> <b>`, `blockdiff`, `verify`. `help` lists the flags.
+- **`CodeDiffer.Mcp.exe`** — the stdio MCP server for agents. Register it with
+  `claude mcp add codediffer -- <path>\CodeDiffer.Mcp.exe`. Tools: `start_compare` (background, returns
+  an id), `get_summary` (constant size), `list_files` (paged/filtered), `get_file_diff` (one file, capped;
+  the overflow goes to a `.patch` file), `get_stats`, `export_changeset` (whole patch to a file). Compares
+  live in the server's memory for its session (the most recent 8).
+
 ## Build & test
 
 ```powershell
-dotnet build CodeDiffer.sln -c Release
-dotnet test  CodeDiffer.sln -c Release
+dotnet build CodeDiffer.slnx -c Release
+dotnet test  CodeDiffer.slnx -c Release
 ```
 
 Libraries target **net8.0** (fleet floor); the CLI + MCP server target **net10.0** (requires the .NET 10

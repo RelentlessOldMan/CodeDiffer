@@ -74,6 +74,12 @@ when large.
 Change-porting tools: `export_changeset(A→B)` and `apply_changeset(onto=C)` dry-run → per-hunk
 `applied | fuzzy | conflict`.
 
+**Built so far** (`CodeDiffer.Mcp.exe`, views in `CodeDiffer.Core/Sessions`): `start_compare` (background,
+returns an id, optional wait), `get_summary`, `list_files` (`status`/`path_glob`/`reason`/page, `lines=true`
+renders ±lines for just that page), `get_file_diff` (cap `max_lines`, page with `start_line`; overflow written
+whole to a `.patch`), `get_stats`, `export_changeset` (to a file, `literal` for a byte-exact `git apply`).
+Compares live in the server process (most recent 8), not yet an on-disk store. `apply_changeset` is next.
+
 ## 5. The human HTML report
 
 Self-contained shell + a sidecar data dir in the result store. Summary tiles; a tree view with folder

@@ -81,7 +81,8 @@ public static class PatchWriter
         return stats;
     }
 
-    private static void WriteChange(TextWriter w, FileChange c, string leftRoot, string rightRoot, PatchOptions opt, PatchStats stats)
+    /// <summary>One change's patch section (what <see cref="Write"/> emits for it).</summary>
+    public static void WriteChange(TextWriter w, FileChange c, string leftRoot, string rightRoot, PatchOptions opt, PatchStats stats)
     {
         switch (c.Status)
         {

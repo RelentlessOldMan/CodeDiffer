@@ -1,12 +1,18 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\CodeDiffer.Core\CodeDiffer.Core.csproj" />
   </ItemGroup>
 
+  <!-- Same SDK versions as CodeCompass.Mcp. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+    <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
+  </ItemGroup>
+
   <PropertyGroup>
-    <!-- Its own exe, CodeDiffer.Mcp.exe (stdio MCP server), like CodeCompass.Mcp.exe; net10 for the
-         first-party .NET MCP SDK. -->
+    <!-- Its own exe, CodeDiffer.Mcp.exe (stdio MCP server), like CodeCompass.Mcp.exe. net10: the MCP SDK
+         depends on the .NET 10 base-library family, so a net8 self-contained publish would crash on launch. -->
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
