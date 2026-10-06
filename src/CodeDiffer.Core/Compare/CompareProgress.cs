@@ -51,17 +51,49 @@ public sealed class CompareProgress
     }
 
     /// <summary>Rough time left for the content phase; null until there is enough to go on.</summary>
-    public TimeSpan? Remaining()
+    public TimeSpan? Remaining() => Remaining(_contentClock.Elapsed);
+
+    internal TimeSpan? Remaining(TimeSpan contentElapsed)
     {
         if (_phase != ComparePhase.Contents) return null;
-        double secs = _contentClock.Elapsed.TotalSeconds;
+        double secs = contentElapsed.TotalSeconds;
         long pairs = PairsDone, bytes = BytesDone;
-        if (secs < 5 || pairs == 0 || SameSizePairs == 0) return null;
-        // Both a per-file and a per-byte estimate, and the larger wins: biggest files go first, so the byte
-        // rate is front-loaded, and a warm cache makes the per-file cost (a stat each) what dominates.
-        double byPairs = (SameSizePairs - pairs) * secs / pairs;
-        double byBytes = bytes > 0 && SameSizeBytes > 0 ? (SameSizeBytes - bytes) * secs / bytes : 0;
-        return TimeSpan.FromSeconds(Math.Max(byPairs, byBytes));
+        if (secs < 5 || SameSizePairs == 0) return null;
+        // Files are checked biggest first. When files are being READ, time follows bytes: a per-file rate taken
+        // over the first few giants would project hours of them onto 60k small files. When everything comes
+        // from the cache, bytes "finish" at once and time follows the per-file cost (a stat each).
+        // The exception is the tail: once the bytes are nearly all done, tens of thousands of small files can
+        // remain (death: 58k files, 0.1 GB, 3.5 min), so there it is the recent files-per-second rate that counts.
+        if (BytesRead > 0)
+        {
+            if (bytes == 0 || SameSizeBytes == 0) return null;
+            double byBytes = (SameSizeBytes - bytes) * secs / bytes;
+            bool tail = SameSizeBytes - bytes < SameSizeBytes / 50;
+            double? rate = RecentFileRate(secs);
+            return TimeSpan.FromSeconds(tail && rate > 0 ? Math.Max(byBytes, (SameSizePairs - pairs) / rate.Value) : byBytes);
+        }
+        return pairs > 0 ? TimeSpan.FromSeconds((SameSizePairs - pairs) * secs / pairs) : null;
+    }
+
+    // Files-done samples at least 10 s apart (content-phase seconds): the recent rate is over the older one.
+    private double _sampleOldT = -1, _sampleNewT;
+    private long _sampleOldPairs, _sampleNewPairs;
+
+    internal void Sample(double secs)
+    {
+        if (secs - Volatile.Read(ref _sampleNewT) < 10) return;
+        lock (_gate)
+        {
+            if (secs - _sampleNewT < 10) return;
+            (_sampleOldT, _sampleOldPairs) = (_sampleNewT, _sampleNewPairs);
+            (_sampleNewT, _sampleNewPairs) = (secs, PairsDone);
+        }
+    }
+
+    private double? RecentFileRate(double now)
+    {
+        lock (_gate)
+            return _sampleOldT < 0 || now <= _sampleOldT ? null : (PairsDone - _sampleOldPairs) / (now - _sampleOldT);
     }
 
     internal void SetPhase(ComparePhase phase)
@@ -84,9 +116,18 @@ public sealed class CompareProgress
         SameSizeBytes = sameSizeBytes;
     }
 
+    /// <summary>A chunk read mid-pair: bytes count as they stream, so a multi-GB file shows progress before it ends.</summary>
+    internal void Streamed(int advance, int read)
+    {
+        Interlocked.Add(ref _bytesDone, advance);
+        Interlocked.Add(ref _bytesRead, read);
+    }
+
+    /// <param name="size">The pair's size not already counted by <see cref="Streamed"/>.</param>
     internal void PairChecked(long size, long read, int cacheSides)
     {
         Interlocked.Increment(ref _pairsDone);
+        Sample(_contentClock.Elapsed.TotalSeconds);
         Interlocked.Add(ref _bytesDone, size);
         if (read > 0) Interlocked.Add(ref _bytesRead, read);
         if (cacheSides > 0) Interlocked.Add(ref _cacheSides, cacheSides);

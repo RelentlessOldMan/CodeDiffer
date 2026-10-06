@@ -48,7 +48,8 @@ public static class ThreeWayViews
         if (s.Report is not { } r) return text;
         var o = new StringBuilder(text);
         o.Append("phases: ").Append(string.Join(" · ", r.Timings.Select(t => $"{t.Phase} {t.Elapsed.TotalSeconds:F1}s"))).Append('\n');
-        o.Append($"read cost: base->v1 {Gb(r.V1Report.BytesRead)} ({r.V1Report.CacheHits:N0} cache hits) · base->v2 {Gb(r.V2Report.BytesRead)} ({r.V2Report.CacheHits:N0} cache hits)\n");
+        o.Append($"read cost: base->v1 {Gb(r.V1Report.BytesRead)} ({r.V1Report.CacheHits:N0} cache hits) · base->v2 {Gb(r.V2Report.BytesRead)} ({r.V2Report.CacheHits:N0} cache hits" +
+                 (r.V2Report.ReusedLeftFiles > 0 ? $", {r.V2Report.ReusedLeftFiles:N0} base files reused from base->v1" : "") + ")\n");
         var worst = r.Entries.Where(e => e.ConflictRegions > 0).OrderByDescending(e => e.ConflictRegions).ThenBy(e => e.Path, StringComparer.Ordinal).Take(10).ToList();
         if (worst.Count > 0)
         {

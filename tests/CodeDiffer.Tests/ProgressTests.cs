@@ -155,6 +155,44 @@ public class ProgressTests : IDisposable
     }
 
     [Fact]
+    public void TimeLeft_FollowsBytesWhenReading_AndFilesWhenAllCached()
+    {
+        // Cold: the first (giant) file is still streaming — no file is done yet, but bytes are.
+        var cold = new CompareProgress();
+        cold.Paired(1000, 100, 1000);
+        cold.SetPhase(ComparePhase.Contents);
+        cold.Streamed(100, 200);
+        Assert.Equal(TimeSpan.FromSeconds(90), cold.Remaining(TimeSpan.FromSeconds(10)));
+        // A few giants done must not project their per-file pace onto the many small files left.
+        cold.PairChecked(0, 0, 0);
+        Assert.Equal(TimeSpan.FromSeconds(90), cold.Remaining(TimeSpan.FromSeconds(10)));
+
+        // Warm: bytes are "done" at once (cache hits, biggest first); files are what take the time.
+        var warm = new CompareProgress();
+        warm.Paired(1000, 100, 1000);
+        warm.SetPhase(ComparePhase.Contents);
+        for (int i = 0; i < 10; i++) warm.PairChecked(i == 0 ? 900 : 10, 0, 2);
+        Assert.Equal(TimeSpan.FromSeconds(90), warm.Remaining(TimeSpan.FromSeconds(10)));
+
+        Assert.Null(warm.Remaining(TimeSpan.FromSeconds(2))); // too early
+
+        // The tail of a cold run: bytes 99% done, but most FILES (the small ones) still to go — the recent
+        // files-per-second rate decides, not the bytes (death: 58k files, 0.1 GB, 3.5 min).
+        var tail = new CompareProgress();
+        tail.Paired(1000, 1000, 1000);
+        tail.SetPhase(ComparePhase.Contents);
+        tail.Streamed(990, 1980);
+        for (int i = 0; i < 100; i++) tail.PairChecked(0, 0, 0);
+        tail.Sample(10);
+        for (int i = 0; i < 100; i++) tail.PairChecked(0, 0, 0);
+        tail.Sample(20);
+        // 100 files between t=10 and now (t=30) ⇒ 5 files/s; 800 left ⇒ 160 s.
+        Assert.Equal(TimeSpan.FromSeconds(160), tail.Remaining(TimeSpan.FromSeconds(30)));
+        Assert.Equal("30:00:05", ProgressView.Clock(TimeSpan.FromHours(30) + TimeSpan.FromSeconds(5)));
+        Assert.Equal("4:07", ProgressView.Clock(TimeSpan.FromSeconds(247)));
+    }
+
+    [Fact]
     public void RunningCompare3_NamesThePathsBothSidesChanged()
     {
         var b = Path.Combine(_dir, "B");

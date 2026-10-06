@@ -285,6 +285,7 @@ public static class ResultStore
         w.WriteNumber("comparedPairs", r.ComparedPairs);
         w.WriteNumber("cacheHits", r.CacheHits);
         w.WriteNumber("codeCompassHits", r.CodeCompassHits);
+        w.WriteNumber("reusedLeftFiles", r.ReusedLeftFiles);
         w.WriteNumber("unstableFiles", r.UnstableFiles);
         w.WriteNumber("pendingFiles", r.PendingFiles);
         w.WriteNumber("bytesRead", r.BytesRead);
@@ -319,6 +320,7 @@ public static class ResultStore
             ComparedPairs = stats.GetProperty("comparedPairs").GetInt32(),
             CacheHits = stats.GetProperty("cacheHits").GetInt32(),
             CodeCompassHits = stats.GetProperty("codeCompassHits").GetInt32(),
+            ReusedLeftFiles = stats.TryGetProperty("reusedLeftFiles", out var reused) ? reused.GetInt32() : 0, // absent in results saved before 2026-10-06
             UnstableFiles = stats.GetProperty("unstableFiles").GetInt32(),
             PendingFiles = stats.GetProperty("pendingFiles").GetInt32(),
             BytesRead = stats.GetProperty("bytesRead").GetInt64(),

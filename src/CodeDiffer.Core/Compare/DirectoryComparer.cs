@@ -59,7 +59,10 @@ public sealed class DirectoryComparer
     public DirectoryComparer(CompareOptions? options = null) => _options = options ?? new CompareOptions();
 
     /// <param name="progress">Optional live progress, including the differences found so far (see <see cref="CompareProgress"/>).</param>
-    public CompareReport Compare(string left, string right, CompareProgress? progress = null)
+    /// <param name="sharedLeft">Optional: the left tree shared with another compare of the same left root. The first
+    /// compare fills it (listing + content ids proven this run); a later one reuses them instead of re-listing and
+    /// re-checking the left tree.</param>
+    public CompareReport Compare(string left, string right, CompareProgress? progress = null, SharedTree? sharedLeft = null)
     {
         var timer = System.Diagnostics.Stopwatch.StartNew();
         var timings = new List<(string, TimeSpan)>();
@@ -73,9 +76,15 @@ public sealed class DirectoryComparer
         var walker = new TreeWalker(_options.IgnoredDirectoryNames, _options.Parallelism);
         Action<int>? listedL = progress is null ? null : n => progress.Listed(true, n);
         Action<int>? listedR = progress is null ? null : n => progress.Listed(false, n);
-        var leftWalk = Task.Run(() => walker.WalkAll(left, listedL));
+        var leftFull = Path.GetFullPath(left);
+        var reused = sharedLeft?.For(leftFull);
+        var leftWalk = reused is not null ? Task.FromResult(reused) : Task.Run(() => walker.WalkAll(left, listedL));
         var rightWalk = Task.Run(() => walker.WalkAll(right, listedR));
         var (lw, rw) = (leftWalk.GetAwaiter().GetResult(), rightWalk.GetAwaiter().GetResult());
+        if (reused is not null) progress?.Listed(true, lw.Files.Count);
+        else sharedLeft?.Begin(leftFull, lw);
+        var shareIds = reused is null ? sharedLeft?.Ids : null; // filled by this compare for the next one
+        int reusedFiles = 0;
         Phase("walk");
         progress?.SetPhase(ComparePhase.Pairing);
         var leftMap = lw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
@@ -139,8 +148,14 @@ public sealed class DirectoryComparer
                 var (le, re) = sameSize[i];
                 bool equal;
                 long read = 0;
-                bool hasL = leftCache.TryGet(le, out var cl);
+                long streamed = 0; // this pair's bytes already shown by progress as they were read
+                Action<int, int>? onChunk = progress is null ? null : (advance, bytes) => { streamed += advance; progress.Streamed(advance, bytes); };
+                ContentId cl = default;
+                bool shared = reused is not null && sharedLeft!.Ids.TryGetValue(le.RelativePath, out cl);
+                if (shared) Interlocked.Increment(ref reusedFiles);
+                bool hasL = shared || leftCache.TryGet(le, out cl);
                 bool hasR = rightCache.TryGet(re, out var cr);
+                ContentId? provenL = hasL ? cl : null; // the left id this run established, passed on via shareIds
                 bool? cached = hasL && hasR ? ContentId.Same(cl, cr) : null;
                 if (cached is { } same)
                 {
@@ -148,7 +163,7 @@ public sealed class DirectoryComparer
                 }
                 else if (_options.Cache == CacheMode.Off)
                 {
-                    var r = await PairComparer.CompareAsync(le, re, hashes: false, ct).ConfigureAwait(false);
+                    var r = await PairComparer.CompareAsync(le, re, hashes: false, ct, onChunk).ConfigureAwait(false);
                     equal = r.Equal;
                     read = 2 * le.Length; // upper bound (early exit on a difference)
                 }
@@ -156,20 +171,23 @@ public sealed class DirectoryComparer
                 {
                     // One side cached: read only the other side, and compare hashes (SHA-256 when both have it).
                     var (e, cache, known) = hasL ? (re, rightCache, cl) : (le, leftCache, cr);
-                    var h = await PairComparer.HashAsync(e, ct).ConfigureAwait(false);
+                    var h = await PairComparer.HashAsync(e, ct, onChunk).ConfigureAwait(false);
                     cache.Record(e, h);
                     equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
+                    if (!hasL && h.Stable) provenL = new ContentId(h.XxHash128, h.Sha256);
                     read = e.Length;
                 }
                 else
                 {
                     // Neither usable: read both at once, compare bytes, and keep both hashes for next time.
-                    var r = await PairComparer.CompareAsync(le, re, hashes: true, ct).ConfigureAwait(false);
+                    var r = await PairComparer.CompareAsync(le, re, hashes: true, ct, onChunk).ConfigureAwait(false);
                     leftCache.Record(le, r.Left!);
                     rightCache.Record(re, r.Right!);
                     equal = r.Equal;
+                    if (r.Left!.Stable) provenL = new ContentId(r.Left.XxHash128, r.Left.Sha256);
                     read = 2 * le.Length;
                 }
+                if (shareIds is not null && provenL is { } id) shareIds[le.RelativePath] = id;
                 Interlocked.Add(ref bytesRead, read);
                 verdicts[i] = equal
                     ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
@@ -177,7 +195,7 @@ public sealed class DirectoryComparer
                 if (progress is not null)
                 {
                     if (!equal) progress.Add(verdicts[i]);
-                    progress.PairChecked(le.Length, read, (hasL ? 1 : 0) + (hasR ? 1 : 0));
+                    progress.PairChecked(le.Length - streamed, 0, (hasL ? 1 : 0) + (hasR ? 1 : 0));
                 }
             }).GetAwaiter().GetResult();
         changes.AddRange(verdicts);
@@ -198,6 +216,7 @@ public sealed class DirectoryComparer
         {
             CacheHits = leftCache.Hits + rightCache.Hits,
             CodeCompassHits = leftCache.CodeCompassHits + rightCache.CodeCompassHits,
+            ReusedLeftFiles = reusedFiles,
             UnstableFiles = leftCache.Unstable + rightCache.Unstable,
             PendingFiles = leftCache.Pending + rightCache.Pending,
             ComparedPairs = sameSize.Count,

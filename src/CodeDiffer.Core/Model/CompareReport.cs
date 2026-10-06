@@ -33,6 +33,9 @@ public sealed class CompareReport
     /// <summary>File sides answered from a trusted hash ledger instead of being read (of them, via CodeCompass).</summary>
     public int CacheHits { get; init; }
     public int CodeCompassHits { get; init; }
+    /// <summary>Left files whose content was already proven by the previous compare of the same left tree
+    /// (compare3's second compare reusing the base): neither read nor stat-checked again.</summary>
+    public int ReusedLeftFiles { get; init; }
     /// <summary>Files whose metadata moved WHILE being read (a live writer): compared as read, never cached.</summary>
     public int UnstableFiles { get; init; }
     /// <summary>Files hashed this run but modified too recently to trust yet: cached as pending, re-read next run.</summary>

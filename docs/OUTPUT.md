@@ -85,8 +85,9 @@ others are replaced atomically. Binary / EOL- or encoding-only / >16 MB / non-ro
 only when C equals the base byte for byte.
 
 **Progress and partial answers (built):** while a compare runs, `get_summary` says what it is doing (listing
-files with counts per side · checking contents N/M files, GB read and MB/s · a rough time left, the larger of
-a per-file and a per-byte estimate) and lists the differences found so far. Adds and removes are known right
+files with counts per side · checking contents N/M files, GB read as they stream and MB/s · a rough time
+left: by bytes while files are being read, by the recent file rate in the small-file tail, by files when
+everything is a cache hit) and lists the differences found so far. Adds and removes are known right
 after the walk (flagged: a rename may still pair them up), size-changed files a moment later, same-size
 edits as their contents are checked. `list_files` and `get_file_diff` already work on that partial set
 (in the order found, so pages don't shift); `get_stats`, the export, apply and the report wait for the end.
@@ -104,8 +105,9 @@ the directory) reopens without re-comparing (`list_compares`, CLI `results`), an
 from the live trees warns when a file's size no longer matches what was compared. Capped patches, apply
 reports and the HTML report go into the same directory.
 
-`start_compare3(base, v1, v2)` (CLI `compare3`): base→v1 then base→v2 (sequential, so the second reuses
-the base hashes the first cached instead of re-reading the base over SMB), then every touched path is
+`start_compare3(base, v1, v2)` (CLI `compare3`): base→v1 then base→v2, sequential, and the second reuses
+the first's base listing and the base hashes it proved (no re-listing, no re-reading, not even a per-file
+stat of the base; both compares judge the same snapshot of it), then every touched path is
 v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content, modify/delete,
 add/add, rename/rename, path collision, binary, large. Renames are followed (renamed on one side, edited
 on the other ⇒ merged at the new name). The same `get_summary` / `list_files` / `get_file_diff` / `get_stats`
@@ -118,6 +120,13 @@ re-hashed), 1,723 touched paths → 369 v1 only · 162 v2 only · 251 merged · 
 regions. `verify death_1.0.9-conflict.json --base --v1 --v2` (30 s): the merge's own decomposition
 (11,371 conflict · 32,615 clean) reproduces `conflictTruthSha` exactly. `apply` base→v1 onto v2 (dry run,
 1:57) agrees: 620 files clean, 941 conflict, 21,246 hunks applied, 11,371 conflict, 0 fuzzy.
+
+Cold and warm compare3 (2026-10-06, 8 threads cold / 4 warm): **cold, nothing cached: 51:03** — base→v1
+32:58 reading 188.8 GB at ~100 MB/s (the link), base→v2 18:00 reading only v2 (94.4 GB, base from the
+first compare), merge 5 s, HTML report 6 s; verdicts identical file for file to the warm run. **Warm:
+2:13** with the base shared between the two compares (base→v2 44 s), against 2:52 before (84 s). On a
+cold run the bytes go first (biggest files first), then a tail of ~58k small files takes ~3.5 min for
+0.1 GB, which is why the time-left estimate follows bytes, then the recent files-per-second rate.
 
 CodeCompass v2 ledger at full scale (2026-10-06, CodeCompass 1.0.243): `codecompass index` of base and v1 on
 IRISH (66,337 of 68,661 files each; it skips the rest by size), then `compare` base→v1 with an empty

@@ -35,7 +35,7 @@ public static class PairComparer
 {
     public const int ChunkBytes = 1 << 20;
 
-    public static async Task<PairResult> CompareAsync(FileEntry left, FileEntry right, bool hashes, CancellationToken ct = default)
+    public static async Task<PairResult> CompareAsync(FileEntry left, FileEntry right, bool hashes, CancellationToken ct = default, Action<int, int>? onChunk = null)
     {
         using var lh = Open(left.FullPath);
         using var rh = Open(right.FullPath);
@@ -60,6 +60,7 @@ public static class PairComparer
                 int nl = await tl.ConfigureAwait(false);
                 int nr = await tr.ConfigureAwait(false);
                 if (nl == 0 && nr == 0) break; // file shrank under us — the after-stat marks it unstable
+                onChunk?.Invoke(nl, nl + nr); // progress: one side's advance, bytes read
 
                 if (equal && (nl != nr || !bufL.AsSpan(0, nl).SequenceEqual(bufR.AsSpan(0, nr))))
                 {
@@ -84,7 +85,7 @@ public static class PairComparer
     }
 
     /// <summary>Whole-file XxHash128 + SHA-256 of one file (streamed, 1 MB chunks), stat-bracketed.</summary>
-    public static async Task<FileHashes> HashAsync(FileEntry file, CancellationToken ct = default)
+    public static async Task<FileHashes> HashAsync(FileEntry file, CancellationToken ct = default, Action<int, int>? onChunk = null)
     {
         using var h = Open(file.FullPath);
         long hashedAt = DateTime.UtcNow.Ticks;
@@ -97,6 +98,7 @@ public static class PairComparer
             int n;
             while ((n = await RandomAccess.ReadAsync(h, buf.AsMemory(0, ChunkBytes), off, ct).ConfigureAwait(false)) > 0)
             {
+                onChunk?.Invoke(n, n);
                 hasher.Append(buf.AsSpan(0, n));
                 off += n;
             }

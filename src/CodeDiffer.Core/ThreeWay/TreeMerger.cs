@@ -68,10 +68,13 @@ public static class TreeMerger
         var opt = options ?? new CompareOptions();
         var timings = new List<(string, TimeSpan)>();
         var sw = Stopwatch.StartNew();
-        var r1 = new DirectoryComparer(opt).Compare(baseDir, v1Dir, progress1);
+        // The second compare reuses the first one's base listing and base hashes: the base is listed and
+        // checked once, and both compares see the same snapshot of it.
+        var sharedBase = new SharedTree();
+        var r1 = new DirectoryComparer(opt).Compare(baseDir, v1Dir, progress1, sharedBase);
         timings.Add(("compare base->v1", sw.Elapsed));
         sw.Restart();
-        var r2 = new DirectoryComparer(opt).Compare(baseDir, v2Dir, progress2);
+        var r2 = new DirectoryComparer(opt).Compare(baseDir, v2Dir, progress2, sharedBase);
         timings.Add(("compare base->v2", sw.Elapsed));
         sw.Restart();
 

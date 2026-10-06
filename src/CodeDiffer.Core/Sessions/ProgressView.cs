@@ -36,5 +36,6 @@ public static class ProgressView
         return s;
     }
 
-    internal static string Clock(TimeSpan t) => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
+    /// <summary>m:ss, or h:mm:ss with the TOTAL hours (a TimeSpan's "h" would drop whole days).</summary>
+    internal static string Clock(TimeSpan t) => t.TotalHours >= 1 ? $"{(long)t.TotalHours}:{t:mm\\:ss}" : t.ToString(@"m\:ss");
 }
