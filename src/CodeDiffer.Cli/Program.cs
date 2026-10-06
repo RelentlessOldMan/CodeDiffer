@@ -67,9 +67,11 @@ static int Compare(string[] args)
     var started = DateTime.UtcNow;
     var sw = System.Diagnostics.Stopwatch.StartNew();
     var progress = new CompareProgress();
+    using var stop = new CancellationTokenSource();
     try
     {
-        report = WithProgress(() => new DirectoryComparer(options).Compare(args[1], args[2], progress), () => ProgressView.Line(progress));
+        report = WithProgress(() => new DirectoryComparer(options).Compare(args[1], args[2], progress, ct: stop.Token),
+            () => ProgressView.Line(progress), stop.Cancel);
     }
     catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
     {
@@ -77,6 +79,7 @@ static int Compare(string[] args)
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
     }
+    catch (OperationCanceledException) { return Cancelled(sw.Elapsed, options.Cache); }
     var compareTime = sw.Elapsed;
 
     if (args.Contains("--timings"))
@@ -495,10 +498,13 @@ static int Apply(string[] args)
     }
     var options = new CompareOptions { Parallelism = threads, Cache = args.Contains("--no-cache") ? CacheMode.Off : CacheMode.On };
     PortResult result;
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    using var stop = new CancellationTokenSource();
     try
     {
         var progress = new CompareProgress();
-        var report = WithProgress(() => new DirectoryComparer(options).Compare(args[1], args[2], progress), () => ProgressView.Line(progress));
+        var report = WithProgress(() => new DirectoryComparer(options).Compare(args[1], args[2], progress, ct: stop.Token),
+            () => ProgressView.Line(progress), stop.Cancel);
         if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
         {
             Console.Error.WriteLine("error: incomplete walk (unlistable directories) — refusing to port a partial change set");
@@ -511,6 +517,7 @@ static int Apply(string[] args)
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
     }
+    catch (OperationCanceledException) { return Cancelled(sw.Elapsed, options.Cache); }
     Console.Write(AgentViews.PortText(result, $"{args[1]} -> {args[2]}", null, maxFiles: int.MaxValue, writeHint: "run again with --write"));
     return result.Count(PortStatus.Conflict) > 0 ? 1 : 0;
 }
@@ -541,7 +548,8 @@ static int Compare3(string[] args)
     WithProgress(() => s.Wait(Timeout.InfiniteTimeSpan), () =>
         s.Progress1!.Phase != ComparePhase.Done ? "base->v1: " + ProgressView.Line(s.Progress1)
         : s.Progress2!.Phase != ComparePhase.Done ? "base->v2: " + ProgressView.Line(s.Progress2)
-        : "classifying and merging the paths both sides touched");
+        : "classifying and merging the paths both sides touched", () => s.Cancel());
+    if (s.Cancelled) return Cancelled(s.Elapsed, options.Cache);
     if (s.Error is { } err)
     {
         Console.Error.WriteLine($"error: {err}");
@@ -566,10 +574,27 @@ static int Compare3(string[] args)
 /// <summary>
 /// Run <paramref name="work"/> while showing <paramref name="line"/> on stderr: redrawn in place twice a second on a
 /// console, or written as a plain line every 30 s when stderr is redirected (a log). Nothing for a quick run.
+/// The first Ctrl+C calls <paramref name="cancel"/> (the work then stops after saving the hashes it read); a second
+/// one ends the process at once.
 /// </summary>
-static T WithProgress<T>(Func<T> work, Func<string> line)
+static T WithProgress<T>(Func<T> work, Func<string> line, Action? cancel = null)
 {
-    var task = Task.Run(work);
+    bool cancelling = false;
+    ConsoleCancelEventHandler? onCtrlC = cancel is null ? null : (_, e) =>
+    {
+        if (cancelling) return; // second Ctrl+C: let it end the process
+        cancelling = true;
+        e.Cancel = true;
+        Console.Error.WriteLine("\ncancelling (Ctrl+C again to quit at once)");
+        cancel();
+    };
+    if (onCtrlC is not null) Console.CancelKeyPress += onCtrlC;
+    try { return Show(Task.Run(work), line); }
+    finally { if (onCtrlC is not null) Console.CancelKeyPress -= onCtrlC; }
+}
+
+static T Show<T>(Task<T> task, Func<string> line)
+{
     bool console = !Console.IsErrorRedirected;
     var sw = System.Diagnostics.Stopwatch.StartNew();
     var logged = TimeSpan.Zero;
@@ -594,6 +619,15 @@ static T WithProgress<T>(Func<T> work, Func<string> line)
     }
     if (drawn > 0) Console.Error.Write("\r" + new string(' ', drawn) + "\r");
     return task.GetAwaiter().GetResult(); // the work's own exception, not an AggregateException
+}
+
+/// <summary>Report a run stopped by Ctrl+C; exit code 130 (the shell convention for SIGINT).</summary>
+static int Cancelled(TimeSpan elapsed, CacheMode cache)
+{
+    Console.Error.WriteLine($"cancelled after {ProgressView.Clock(elapsed)}: " + (cache == CacheMode.Off
+        ? "nothing was cached (--no-cache), so running it again reads everything again"
+        : "the hashes read so far are kept, so running it again only reads the rest"));
+    return 130;
 }
 
 static void PrintUsage()

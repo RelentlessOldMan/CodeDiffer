@@ -95,6 +95,11 @@ A running `compare3` shows each of its two compares and the paths changed on bot
 draws the same line on stderr (redrawn in place, or a line every 30 s when stderr is redirected). Death
 base→v1, warm: all 1,561 differences listed at 0:30 of a 1:40 run; "about 1:20 left" at 0:30 (actual 1:18).
 
+**Cancel (built):** `cancel_compare(id)` stops a running compare or compare3; in the CLI the first Ctrl+C does
+the same (a second one quits at once; exit 130). It stops within a chunk per file in flight (death, cold,
+25 s in: stopped in 0.1 s), saves the hashes it already read to the ledgers, and is saved as state
+`cancelled`. So a cancelled cold run is not wasted: the next run of the same compare reads only the rest.
+
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
 `<results>\yyyyMMdd-HHmmss-<id>\` (default `%LOCALAPPDATA%\CodeDiffer\results`, `CODEDIFFER_RESULTS_DIR`
 overrides; refused if it would land inside a compared tree). `compare.json` (format/version, kind, state

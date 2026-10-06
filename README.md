@@ -69,7 +69,8 @@ Windows x64 zip (no .NET needed; `INSTALL.txt` inside); `release.ps1` builds it 
   (one file, capped — a 2-way patch, or a 3-way merge with diff3 conflict markers; the overflow goes to a
   file), `get_stats`, `export_changeset` (whole patch to a file), `apply_changeset` (port the changes onto a
   third tree by 3-way merge; dry run unless `write=true`), `write_report` (the HTML report, for a human),
-  `list_compares` (saved compares; any id reopens without re-comparing).
+  `list_compares` (saved compares; any id reopens without re-comparing), `cancel_compare` (stop a running
+  compare; the hashes it read are kept, so starting it again only reads the rest; Ctrl+C in the CLI).
 
 Every finished compare is saved to a fresh `yyyyMMdd-HHmmss-<id>` directory under
 `%LOCALAPPDATA%\CodeDiffer\results` (override `CODEDIFFER_RESULTS_DIR`; never inside a compared tree): the

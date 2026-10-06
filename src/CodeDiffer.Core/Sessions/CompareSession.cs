@@ -52,8 +52,25 @@ public abstract class Session
     public bool IsDone => Task.IsCompleted;
     public TimeSpan Elapsed => _finished ?? _clock.Elapsed;
 
-    /// <summary>The failure message when the compare threw, else null.</summary>
-    public string? Error => Task.IsFaulted ? (Task.Exception!.InnerException ?? Task.Exception).Message : null;
+    /// <summary>Cancelled before it finished (<see cref="Cancel"/>).</summary>
+    public bool Cancelled => Task.IsCanceled;
+
+    /// <summary>The failure message when the compare threw or was cancelled, else null.</summary>
+    public string? Error => Task.IsCanceled ? "cancelled"
+        : Task.IsFaulted ? (Task.Exception!.InnerException ?? Task.Exception).Message : null;
+
+    /// <summary>The token the running compare watches.</summary>
+    protected CancellationToken Token => _cts.Token;
+    private readonly CancellationTokenSource _cts = new();
+
+    /// <summary>Ask a running compare to stop; false when it had already finished. It stops within moments (a
+    /// chunk per file in flight), keeping the hashes it read so a re-run picks up from there.</summary>
+    public bool Cancel()
+    {
+        if (IsDone) return false;
+        _cts.Cancel();
+        return true;
+    }
 
     /// <summary>Wait up to <paramref name="timeout"/> for the compare to finish; true when it has.</summary>
     public bool Wait(TimeSpan timeout)
@@ -64,20 +81,34 @@ public abstract class Session
     }
 
     /// <summary>Run the compare in the background; on success save it (a save failure is recorded, not thrown).</summary>
-    protected Task<T> Run<T>(Func<T> work) => System.Threading.Tasks.Task.Run(() =>
+    protected Task<T> Run<T>(Func<T> work)
     {
-        T result;
-        try { result = work(); }
-        catch (Exception ex)
+        var task = System.Threading.Tasks.Task.Run(() =>
+        {
+            T result;
+            try { result = work(); }
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(_cts.Token); // Task.Run's own token, so the task ends Canceled
+            }
+            catch (Exception ex)
+            {
+                _finished = _clock.Elapsed;
+                if (ResultDir is not null) ResultStore.TryMarkFailed(this, "failed", (ex.InnerException ?? ex).Message);
+                throw;
+            }
+            _finished = _clock.Elapsed;
+            Persist(result!);
+            return result;
+        }, _cts.Token);
+        // Also covers a cancel that lands before the work even started (Task.Run then never runs it).
+        task.ContinueWith(_ =>
         {
             _finished = _clock.Elapsed;
-            if (ResultDir is not null) ResultStore.TryMarkFailed(this, ex);
-            throw;
-        }
-        _finished = _clock.Elapsed;
-        Persist(result!);
-        return result;
-    });
+            if (ResultDir is not null) ResultStore.TryMarkFailed(this, "cancelled", null);
+        }, CancellationToken.None, TaskContinuationOptions.OnlyOnCanceled | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return task;
+    }
 
     /// <summary>Save a just-finished result (also used by the CLI for a compare it ran itself).</summary>
     internal void Persist(object result)
@@ -112,7 +143,7 @@ public sealed class CompareSession : Session
         Left = left;
         Right = right;
         Progress = new CompareProgress();
-        _task = Run(() => new DirectoryComparer(options).Compare(left, right, Progress));
+        _task = Run(() => new DirectoryComparer(options).Compare(left, right, Progress, ct: Token));
     }
 
     /// <summary>Tests: a compare whose completion the caller controls, to look at it while it "runs".</summary>
@@ -161,7 +192,7 @@ public sealed class Compare3Session : Session
         V2 = v2;
         Progress1 = new CompareProgress();
         Progress2 = new CompareProgress();
-        _task = Run(() => TreeMerger.Run(baseDir, v1, v2, options, Progress1, Progress2));
+        _task = Run(() => TreeMerger.Run(baseDir, v1, v2, options, Progress1, Progress2, Token));
     }
 
     /// <summary>Tests: a 3-way compare whose completion the caller controls.</summary>

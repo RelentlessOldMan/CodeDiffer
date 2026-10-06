@@ -62,8 +62,9 @@ public static class TreeMerger
 {
     /// <param name="progress1">Optional live progress of the base→v1 compare.</param>
     /// <param name="progress2">Optional live progress of the base→v2 compare (it starts when the first one ends).</param>
+    /// <param name="ct">Cancels the run (throws <see cref="OperationCanceledException"/>); hashes read so far are kept.</param>
     public static ThreeWayReport Run(string baseDir, string v1Dir, string v2Dir, CompareOptions? options = null,
-        CompareProgress? progress1 = null, CompareProgress? progress2 = null)
+        CompareProgress? progress1 = null, CompareProgress? progress2 = null, CancellationToken ct = default)
     {
         var opt = options ?? new CompareOptions();
         var timings = new List<(string, TimeSpan)>();
@@ -71,10 +72,10 @@ public static class TreeMerger
         // The second compare reuses the first one's base listing and base hashes: the base is listed and
         // checked once, and both compares see the same snapshot of it.
         var sharedBase = new SharedTree();
-        var r1 = new DirectoryComparer(opt).Compare(baseDir, v1Dir, progress1, sharedBase);
+        var r1 = new DirectoryComparer(opt).Compare(baseDir, v1Dir, progress1, sharedBase, ct);
         timings.Add(("compare base->v1", sw.Elapsed));
         sw.Restart();
-        var r2 = new DirectoryComparer(opt).Compare(baseDir, v2Dir, progress2, sharedBase);
+        var r2 = new DirectoryComparer(opt).Compare(baseDir, v2Dir, progress2, sharedBase, ct);
         timings.Add(("compare base->v2", sw.Elapsed));
         sw.Restart();
 
@@ -85,7 +86,7 @@ public static class TreeMerger
         var keys = side1.Keys.Union(side2.Keys).OrderBy(k => k.Path, StringComparer.Ordinal).ThenBy(k => k.Added).ToList();
 
         var entries = new Merge3Entry[keys.Count];
-        Parallel.For(0, keys.Count, new ParallelOptions { MaxDegreeOfParallelism = opt.Parallelism }, i =>
+        Parallel.For(0, keys.Count, new ParallelOptions { MaxDegreeOfParallelism = opt.Parallelism, CancellationToken = ct }, i =>
         {
             var k = keys[i];
             side1.TryGetValue(k, out var c1);

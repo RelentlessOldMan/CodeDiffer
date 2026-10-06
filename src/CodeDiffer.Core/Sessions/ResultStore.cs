@@ -21,7 +21,7 @@ public sealed record SavedCompare(
 /// <c>&lt;root&gt;\yyyyMMdd-HHmmss-&lt;id&gt;\</c>, never inside a compared tree (we never diff our own output),
 /// never reused. It holds:
 /// <list type="bullet">
-/// <item><c>compare.json</c> — format/version, kind, id, state (running | done | failed), roots, options, read
+/// <item><c>compare.json</c> — format/version, kind, id, state (running | done | failed | cancelled), roots, options, read
 ///   cost and phase timings, summary counts. Written first as "running", replaced atomically when finished.</item>
 /// <item>2-way: <c>changes.jsonl</c> — one line per path (identical included), sorted by path.</item>
 /// <item>3-way: <c>v1.jsonl</c> / <c>v2.jsonl</c> (each side's 2-way changes) and <c>entries.jsonl</c> (one line per
@@ -117,8 +117,9 @@ public static class ResultStore
         }
     }
 
-    /// <summary>Best effort: record that the compare failed (so a listing doesn't show it as still running).</summary>
-    internal static void TryMarkFailed(Session s, Exception ex)
+    /// <summary>Best effort: record that the compare failed or was cancelled (so a listing doesn't show it as still running).</summary>
+    /// <param name="state">"failed" or "cancelled".</param>
+    internal static void TryMarkFailed(Session s, string state, string? error)
     {
         try
         {
@@ -130,9 +131,9 @@ public static class ResultStore
             };
             WriteMeta(s.ResultDir!, w =>
             {
-                Head(w, kind, s.Id, "failed", s.StartedUtc, s.Elapsed);
+                Head(w, kind, s.Id, state, s.StartedUtc, s.Elapsed);
                 Roots(w, kind, roots);
-                w.WriteString("error", (ex.InnerException ?? ex).Message);
+                if (error is not null) w.WriteString("error", error);
             });
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
@@ -182,9 +183,12 @@ public static class ResultStore
         var id = Str(m, "id");
         var state = Str(m, "state");
         if (state != "done")
-            throw new InvalidDataException(state == "failed"
-                ? $"compare {id} failed: {(m.TryGetProperty("error", out var e) ? e.GetString() : "?")}"
-                : $"compare {id} in {dir} never finished (state '{state}') — the process running it stopped");
+            throw new InvalidDataException(state switch
+            {
+                "failed" => $"compare {id} failed: {(m.TryGetProperty("error", out var e) ? e.GetString() : "?")}",
+                "cancelled" => $"compare {id} was cancelled before it finished",
+                _ => $"compare {id} in {dir} never finished (state '{state}') — the process running it stopped",
+            });
         var opt = m.GetProperty("options");
         var options = new CompareOptions
         {

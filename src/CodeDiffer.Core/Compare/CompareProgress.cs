@@ -131,7 +131,11 @@ public sealed class CompareProgress
         Interlocked.Add(ref _bytesDone, size);
         if (read > 0) Interlocked.Add(ref _bytesRead, read);
         if (cacheSides > 0) Interlocked.Add(ref _cacheSides, cacheSides);
+        AfterPairChecked?.Invoke(PairsDone);
     }
+
+    /// <summary>Tests: called after each pair is checked, with the number done (e.g. to cancel at a known point).</summary>
+    internal Action<long>? AfterPairChecked { get; set; }
 
     internal void Add(FileChange c, bool mayBeRename = false)
     {

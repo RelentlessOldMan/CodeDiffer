@@ -194,6 +194,20 @@ public static class CodeDifferTools
         return o.ToString();
     }
 
+    [McpServerTool(Name = "cancel_compare")]
+    [Description("Stop a running compare (2- or 3-way). The hashes it already read are kept, so starting the same compare " +
+                 "again only reads what this one didn't get to.")]
+    public static async Task<string> CancelCompare([Description("Compare id (required: the one to stop).")] string compare_id)
+    {
+        if (string.IsNullOrWhiteSpace(compare_id)) return "error: compare_id is required (get_summary or list_compares shows ids)";
+        if (Find(compare_id, out var s) is { } err) return err;
+        if (!s!.Cancel()) return $"compare {s.Id} is not running ({(s.Error is { } e ? e : "finished")}); nothing to cancel";
+        // It stops within moments (a chunk per file in flight) after saving the hashes it read.
+        await WaitAsync(s, 30);
+        return s.IsDone ? $"compare {s.Id}: {(s.Cancelled ? AgentViews.CancelledText(s) : "finished before the cancel took effect\n")}"
+                        : $"compare {s.Id}: cancelling — still saving what it read; get_summary shows when it has stopped\n";
+    }
+
     [McpServerTool(Name = "write_report")]
     [Description("Write a browsable HTML report of a compare (2- or 3-way) into its result directory and return the path to " +
                  "open — for a human. A folder tree with filters; each file's diff loads when expanded (inline or side by side; " +

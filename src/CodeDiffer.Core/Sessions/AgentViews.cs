@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeDiffer.Core.Compare;
+using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Port;
 
@@ -417,11 +418,17 @@ public static class AgentViews
 
     private static string? Pending(CompareSession s)
     {
+        if (s.Cancelled) return CancelledText(s);
         if (s.Error is { } e) return $"FAILED after {Clock(s.Elapsed)}: {e}\n";
         if (!s.IsDone) return $"running · {Clock(s.Elapsed)} elapsed — this needs the finished compare; get_summary shows progress " +
                               "and what is found so far, get_summary(wait_seconds=…) waits for it\n";
         return null;
     }
+
+    public static string CancelledText(Session s)
+        => $"CANCELLED after {Clock(s.Elapsed)} — " + (s.Options.Cache == CacheMode.Off
+            ? "nothing was cached (cache=off), so starting it again reads everything again\n"
+            : "the hashes it read are kept, so starting the same compare again only reads what this one didn't get to\n");
 
     /// <summary>The live progress of a compare still running in this process, else null.</summary>
     private static CompareProgress? Partial(CompareSession s) => s.IsDone ? null : s.Progress;

@@ -62,7 +62,10 @@ public sealed class DirectoryComparer
     /// <param name="sharedLeft">Optional: the left tree shared with another compare of the same left root. The first
     /// compare fills it (listing + content ids proven this run); a later one reuses them instead of re-listing and
     /// re-checking the left tree.</param>
-    public CompareReport Compare(string left, string right, CompareProgress? progress = null, SharedTree? sharedLeft = null)
+    /// <param name="ct">Cancels the compare: it throws <see cref="OperationCanceledException"/> promptly (within a chunk
+    /// per file in flight), after saving the hashes already read, so a re-run picks up from there.</param>
+    public CompareReport Compare(string left, string right, CompareProgress? progress = null, SharedTree? sharedLeft = null,
+        CancellationToken ct = default)
     {
         var timer = System.Diagnostics.Stopwatch.StartNew();
         var timings = new List<(string, TimeSpan)>();
@@ -78,8 +81,8 @@ public sealed class DirectoryComparer
         Action<int>? listedR = progress is null ? null : n => progress.Listed(false, n);
         var leftFull = Path.GetFullPath(left);
         var reused = sharedLeft?.For(leftFull);
-        var leftWalk = reused is not null ? Task.FromResult(reused) : Task.Run(() => walker.WalkAll(left, listedL));
-        var rightWalk = Task.Run(() => walker.WalkAll(right, listedR));
+        var leftWalk = reused is not null ? Task.FromResult(reused) : Task.Run(() => walker.WalkAll(left, listedL, ct), ct);
+        var rightWalk = Task.Run(() => walker.WalkAll(right, listedR, ct), ct);
         var (lw, rw) = (leftWalk.GetAwaiter().GetResult(), rightWalk.GetAwaiter().GetResult());
         if (reused is not null) progress?.Listed(true, lw.Files.Count);
         else sharedLeft?.Begin(leftFull, lw);
@@ -103,107 +106,119 @@ public sealed class DirectoryComparer
         var added = new List<FileEntry>();
         var sameSize = new List<(FileEntry L, FileEntry R)>();
         var sizeChanged = new List<(FileEntry L, FileEntry R)>();
-        foreach (var path in paths)
+        try
         {
-            bool inLeft = leftMap.TryGetValue(path, out var le);
-            bool inRight = rightMap.TryGetValue(path, out var re);
-
-            if (inLeft && !inRight) { removed.Add(le); continue; } // held back — may resolve into a rename
-            if (!inLeft && inRight) { added.Add(re); continue; }
-
-            if (le.Length == re.Length)
-                sameSize.Add((le, re)); // size is the cheap filter; same size still needs the bytes
-            else
-                sizeChanged.Add((le, re)); // modified for sure; only the reason needs the bytes
-        }
-        if (progress is not null)
-        {
-            // Partial answers: adds and removes are known now (a rename may still pair some of them up).
-            progress.Paired(paths.Count, sameSize.Count, sameSize.Sum(p => p.L.Length));
-            foreach (var e in removed) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Removed, null, e.Length, 0), _options.DetectRenames);
-            foreach (var e in added) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Added, null, 0, e.Length), _options.DetectRenames);
-        }
-
-        // Classify the size-changed pairs concurrently: each is a couple of opens/reads, and over SMB those
-        // round-trips must overlap, not stack (serially, ~33 files cost ~10 s against a real share).
-        var classified = new FileChange[sizeChanged.Count];
-        Parallel.For(0, sizeChanged.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism }, i =>
-        {
-            classified[i] = Modified(classifier, sizeChanged[i].L, sizeChanged[i].R);
-            progress?.Add(classified[i]);
-        });
-        changes.AddRange(classified);
-
-        // Same-size pairs: the only place bytes cross the wire. Biggest first so a 1.5 GB header starts
-        // early instead of becoming the lone straggler at the end (top 2% of files ≈ 80% of the bytes).
-        Phase("pair+classify size-changed");
-        progress?.SetPhase(ComparePhase.Contents);
-        sameSize.Sort((a, b) => b.L.Length.CompareTo(a.L.Length));
-        var verdicts = new FileChange[sameSize.Count];
-        Parallel.ForEachAsync(
-            Enumerable.Range(0, sameSize.Count),
-            new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism },
-            async (i, ct) =>
+            foreach (var path in paths)
             {
-                var (le, re) = sameSize[i];
-                bool equal;
-                long read = 0;
-                long streamed = 0; // this pair's bytes already shown by progress as they were read
-                Action<int, int>? onChunk = progress is null ? null : (advance, bytes) => { streamed += advance; progress.Streamed(advance, bytes); };
-                ContentId cl = default;
-                bool shared = reused is not null && sharedLeft!.Ids.TryGetValue(le.RelativePath, out cl);
-                if (shared) Interlocked.Increment(ref reusedFiles);
-                bool hasL = shared || leftCache.TryGet(le, out cl);
-                bool hasR = rightCache.TryGet(re, out var cr);
-                ContentId? provenL = hasL ? cl : null; // the left id this run established, passed on via shareIds
-                bool? cached = hasL && hasR ? ContentId.Same(cl, cr) : null;
-                if (cached is { } same)
-                {
-                    equal = same; // both sides proven by trusted ledgers — no bytes cross the wire
-                }
-                else if (_options.Cache == CacheMode.Off)
-                {
-                    var r = await PairComparer.CompareAsync(le, re, hashes: false, ct, onChunk).ConfigureAwait(false);
-                    equal = r.Equal;
-                    read = 2 * le.Length; // upper bound (early exit on a difference)
-                }
-                else if (hasL != hasR)
-                {
-                    // One side cached: read only the other side, and compare hashes (SHA-256 when both have it).
-                    var (e, cache, known) = hasL ? (re, rightCache, cl) : (le, leftCache, cr);
-                    var h = await PairComparer.HashAsync(e, ct, onChunk).ConfigureAwait(false);
-                    cache.Record(e, h);
-                    equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
-                    if (!hasL && h.Stable) provenL = new ContentId(h.XxHash128, h.Sha256);
-                    read = e.Length;
-                }
-                else
-                {
-                    // Neither usable: read both at once, compare bytes, and keep both hashes for next time.
-                    var r = await PairComparer.CompareAsync(le, re, hashes: true, ct, onChunk).ConfigureAwait(false);
-                    leftCache.Record(le, r.Left!);
-                    rightCache.Record(re, r.Right!);
-                    equal = r.Equal;
-                    if (r.Left!.Stable) provenL = new ContentId(r.Left.XxHash128, r.Left.Sha256);
-                    read = 2 * le.Length;
-                }
-                if (shareIds is not null && provenL is { } id) shareIds[le.RelativePath] = id;
-                Interlocked.Add(ref bytesRead, read);
-                verdicts[i] = equal
-                    ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
-                    : Modified(classifier, le, re);
-                if (progress is not null)
-                {
-                    if (!equal) progress.Add(verdicts[i]);
-                    progress.PairChecked(le.Length - streamed, 0, (hasL ? 1 : 0) + (hasR ? 1 : 0));
-                }
-            }).GetAwaiter().GetResult();
-        changes.AddRange(verdicts);
+                bool inLeft = leftMap.TryGetValue(path, out var le);
+                bool inRight = rightMap.TryGetValue(path, out var re);
 
-        Phase("same-size content");
-        progress?.SetPhase(ComparePhase.Renames);
-        AddResolvedAddsRemovesAndRenames(changes, removed, added);
-        Phase("renames");
+                if (inLeft && !inRight) { removed.Add(le); continue; } // held back — may resolve into a rename
+                if (!inLeft && inRight) { added.Add(re); continue; }
+
+                if (le.Length == re.Length)
+                    sameSize.Add((le, re)); // size is the cheap filter; same size still needs the bytes
+                else
+                    sizeChanged.Add((le, re)); // modified for sure; only the reason needs the bytes
+            }
+            if (progress is not null)
+            {
+                // Partial answers: adds and removes are known now (a rename may still pair some of them up).
+                progress.Paired(paths.Count, sameSize.Count, sameSize.Sum(p => p.L.Length));
+                foreach (var e in removed) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Removed, null, e.Length, 0), _options.DetectRenames);
+                foreach (var e in added) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Added, null, 0, e.Length), _options.DetectRenames);
+            }
+
+            // Classify the size-changed pairs concurrently: each is a couple of opens/reads, and over SMB those
+            // round-trips must overlap, not stack (serially, ~33 files cost ~10 s against a real share).
+            var classified = new FileChange[sizeChanged.Count];
+            Parallel.For(0, sizeChanged.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism, CancellationToken = ct }, i =>
+            {
+                classified[i] = Modified(classifier, sizeChanged[i].L, sizeChanged[i].R);
+                progress?.Add(classified[i]);
+            });
+            changes.AddRange(classified);
+
+            // Same-size pairs: the only place bytes cross the wire. Biggest first so a 1.5 GB header starts
+            // early instead of becoming the lone straggler at the end (top 2% of files ≈ 80% of the bytes).
+            Phase("pair+classify size-changed");
+            progress?.SetPhase(ComparePhase.Contents);
+            sameSize.Sort((a, b) => b.L.Length.CompareTo(a.L.Length));
+            var verdicts = new FileChange[sameSize.Count];
+            Parallel.ForEachAsync(
+                Enumerable.Range(0, sameSize.Count),
+                new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism, CancellationToken = ct },
+                async (i, ct) =>
+                {
+                    var (le, re) = sameSize[i];
+                    bool equal;
+                    long read = 0;
+                    long streamed = 0; // this pair's bytes already shown by progress as they were read
+                    Action<int, int>? onChunk = progress is null ? null : (advance, bytes) => { streamed += advance; progress.Streamed(advance, bytes); };
+                    ContentId cl = default;
+                    bool shared = reused is not null && sharedLeft!.Ids.TryGetValue(le.RelativePath, out cl);
+                    if (shared) Interlocked.Increment(ref reusedFiles);
+                    bool hasL = shared || leftCache.TryGet(le, out cl);
+                    bool hasR = rightCache.TryGet(re, out var cr);
+                    ContentId? provenL = hasL ? cl : null; // the left id this run established, passed on via shareIds
+                    bool? cached = hasL && hasR ? ContentId.Same(cl, cr) : null;
+                    if (cached is { } same)
+                    {
+                        equal = same; // both sides proven by trusted ledgers — no bytes cross the wire
+                    }
+                    else if (_options.Cache == CacheMode.Off)
+                    {
+                        var r = await PairComparer.CompareAsync(le, re, hashes: false, ct, onChunk).ConfigureAwait(false);
+                        equal = r.Equal;
+                        read = 2 * le.Length; // upper bound (early exit on a difference)
+                    }
+                    else if (hasL != hasR)
+                    {
+                        // One side cached: read only the other side, and compare hashes (SHA-256 when both have it).
+                        var (e, cache, known) = hasL ? (re, rightCache, cl) : (le, leftCache, cr);
+                        var h = await PairComparer.HashAsync(e, ct, onChunk).ConfigureAwait(false);
+                        cache.Record(e, h);
+                        equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
+                        if (!hasL && h.Stable) provenL = new ContentId(h.XxHash128, h.Sha256);
+                        read = e.Length;
+                    }
+                    else
+                    {
+                        // Neither usable: read both at once, compare bytes, and keep both hashes for next time.
+                        var r = await PairComparer.CompareAsync(le, re, hashes: true, ct, onChunk).ConfigureAwait(false);
+                        leftCache.Record(le, r.Left!);
+                        rightCache.Record(re, r.Right!);
+                        equal = r.Equal;
+                        if (r.Left!.Stable) provenL = new ContentId(r.Left.XxHash128, r.Left.Sha256);
+                        read = 2 * le.Length;
+                    }
+                    if (shareIds is not null && provenL is { } id) shareIds[le.RelativePath] = id;
+                    Interlocked.Add(ref bytesRead, read);
+                    verdicts[i] = equal
+                        ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
+                        : Modified(classifier, le, re);
+                    if (progress is not null)
+                    {
+                        if (!equal) progress.Add(verdicts[i]);
+                        progress.PairChecked(le.Length - streamed, 0, (hasL ? 1 : 0) + (hasR ? 1 : 0));
+                    }
+                }).GetAwaiter().GetResult();
+            changes.AddRange(verdicts);
+
+            Phase("same-size content");
+            ct.ThrowIfCancellationRequested();
+            progress?.SetPhase(ComparePhase.Renames);
+            AddResolvedAddsRemovesAndRenames(changes, removed, added);
+            Phase("renames");
+        }
+        catch (OperationCanceledException)
+        {
+            // Keep what was read: every hash recorded so far goes into the ledgers, so re-running a cancelled
+            // cold compare only reads what this one didn't get to.
+            try { leftCache.Save(lw.Files); rightCache.Save(rw.Files); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
 
         changes.Sort((a, b) => string.CompareOrdinal(a.RelativePath, b.RelativePath));
         progress?.SetPhase(ComparePhase.Saving);

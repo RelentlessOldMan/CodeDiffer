@@ -252,6 +252,7 @@ public static class ThreeWayViews
 
     private static string? Pending(Session s)
     {
+        if (s.Cancelled) return AgentViews.CancelledText(s);
         if (s.Error is { } e) return $"FAILED after {Clock(s.Elapsed)}: {e}\n";
         if (!s.IsDone) return $"running · {Clock(s.Elapsed)} elapsed — get_summary shows progress and what is found so far; get_summary(wait_seconds=…) waits for it\n";
         return null;

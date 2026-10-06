@@ -31,7 +31,8 @@ public sealed class TreeWalker
     public IEnumerable<FileEntry> Walk(string root) => WalkAll(root).Files;
 
     /// <param name="listed">Called after each directory is listed with the number of files in it (progress).</param>
-    public WalkResult WalkAll(string root, Action<int>? listed = null)
+    /// <param name="ct">Cancels the walk (throws <see cref="OperationCanceledException"/>).</param>
+    public WalkResult WalkAll(string root, Action<int>? listed = null, CancellationToken ct = default)
     {
         var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
@@ -41,7 +42,7 @@ public sealed class TreeWalker
         while (frontier.Count > 0)
         {
             var next = new ConcurrentBag<string>();
-            Parallel.ForEach(frontier, new ParallelOptions { MaxDegreeOfParallelism = _parallelism }, dir =>
+            Parallel.ForEach(frontier, new ParallelOptions { MaxDegreeOfParallelism = _parallelism, CancellationToken = ct }, dir =>
             {
                 var rows = ListWithRetry(dir, dir == rootFull);
                 if (rows is null)
