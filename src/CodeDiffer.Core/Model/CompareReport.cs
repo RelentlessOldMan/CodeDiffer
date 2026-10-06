@@ -35,6 +35,8 @@ public sealed class CompareReport
     public int CodeCompassHits { get; init; }
     /// <summary>Files whose metadata moved WHILE being read (a live writer): compared as read, never cached.</summary>
     public int UnstableFiles { get; init; }
+    /// <summary>Files hashed this run but modified too recently to trust yet: cached as pending, re-read next run.</summary>
+    public int PendingFiles { get; init; }
     /// <summary>Content bytes read to reach the verdicts (an upper bound when early exit applies).</summary>
     public long BytesRead { get; init; }
     /// <summary>Wall time per compare phase, in order (for --timings).</summary>

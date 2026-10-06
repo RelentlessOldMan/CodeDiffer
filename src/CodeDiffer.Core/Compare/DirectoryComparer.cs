@@ -38,6 +38,9 @@ public sealed class CompareOptions
 
     /// <summary>Override for where CodeCompass ledgers are looked up (tests); default its own base dir.</summary>
     public string? CodeCompassBaseDir { get; init; }
+
+    /// <summary>Override for the ledger's trust margins (tests); default 3 s local / 1 h share, 3 s settle.</summary>
+    internal TrustTiming? Timing { get; init; }
 }
 
 /// <summary>
@@ -73,8 +76,8 @@ public sealed class DirectoryComparer
         var leftMap = lw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
         var rightMap = rw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
         var classifier = new ReasonClassifier(_options.MaxClassifyBytes);
-        var leftCache = HashCache.Open(left, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir);
-        var rightCache = HashCache.Open(right, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir);
+        var leftCache = HashCache.Open(left, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing);
+        var rightCache = HashCache.Open(right, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing);
         long bytesRead = 0;
 
         var paths = new SortedSet<string>(StringComparer.Ordinal);
@@ -170,6 +173,7 @@ public sealed class DirectoryComparer
             CacheHits = leftCache.Hits + rightCache.Hits,
             CodeCompassHits = leftCache.CodeCompassHits + rightCache.CodeCompassHits,
             UnstableFiles = leftCache.Unstable + rightCache.Unstable,
+            PendingFiles = leftCache.Pending + rightCache.Pending,
             ComparedPairs = sameSize.Count,
             BytesRead = bytesRead,
             Timings = timings,

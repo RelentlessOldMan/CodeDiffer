@@ -9,7 +9,7 @@ namespace CodeDiffer.Tests;
 
 /// <summary>
 /// The patch output is judged by the strictest available oracle: real <c>git apply</c>. A patch generated
-/// for Lâ†’R, applied to a copy of L, must reproduce R byte for byte â€” every edge case included (edits at
+/// for L→R, applied to a copy of L, must reproduce R byte for byte — every edge case included (edits at
 /// both ends, newline-at-EOF gained/lost, CRLF, unicode, add/remove/empty/rename). Plus rendering details.
 /// </summary>
 public class PatchTests : IDisposable
@@ -79,7 +79,7 @@ public class PatchTests : IDisposable
         var w = new StringWriter { NewLine = "\n" };
         UnifiedDiff.Write(w, "f", "f", Lines(1, 30), Lines(1, 9) + "X\n" + Lines(11, 14) + "Y\n" + Lines(16, 30), context: 3);
         var text = w.ToString();
-        // Edits at 10 and 15 are 4 lines apart (â‰¤ 2Ã—context) â‡’ ONE hunk covering 7..18.
+        // Edits at 10 and 15 are 4 lines apart (≤ 2×context) ⇒ ONE hunk covering 7..18.
         Assert.Single(text.Split('\n').Where(l => l.StartsWith("@@")));
         Assert.Contains("@@ -7,12 +7,12 @@", text);
     }

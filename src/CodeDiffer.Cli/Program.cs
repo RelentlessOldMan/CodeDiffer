@@ -96,7 +96,8 @@ static int Compare(string[] args)
     info.WriteLine($"  elapsed    {sw.Elapsed.ToString(@"hh\:mm\:ss")}  (threads {options.Parallelism}, cache {cache.ToString().ToLowerInvariant()})");
     info.WriteLine($"  content    {report.ComparedPairs} same-size pair(s) · {report.CacheHits} side(s) from hash cache" +
         (report.CodeCompassHits > 0 ? $" ({report.CodeCompassHits} via CodeCompass)" : "") +
-        $" · {report.BytesRead / (1024.0 * 1024 * 1024):F1} GB read");
+        $" · {report.BytesRead / (1024.0 * 1024 * 1024):F1} GB read" +
+        (report.PendingFiles > 0 ? $" · {report.PendingFiles} too recently modified to cache yet" : ""));
     if (report.UnstableFiles > 0)
         Console.Error.WriteLine($"note: {report.UnstableFiles} file(s) changed while being read (live writer) — compared as read, not cached.");
     if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)

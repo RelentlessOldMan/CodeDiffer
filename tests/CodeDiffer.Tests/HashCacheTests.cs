@@ -9,8 +9,9 @@ namespace CodeDiffer.Tests;
 
 /// <summary>
 /// The hash ledger: v2 format round trip + v1 compatibility, warm-run cache hits (no bytes read), the hardened
-/// trust rule (ChangeTime catches a restored-mtime edit; racy-clean only for coarse timestamps; unstable
-/// reads never cached), --no-cache / --rehash, and CodeCompass ledgers (v2 used read-only, v1 ignored).
+/// trust rule (ChangeTime catches a restored-mtime edit; record-time first look + pending settle; legacy ledgers
+/// re-judged; unstable reads never cached), --no-cache / --rehash, and CodeCompass ledgers (v2 used read-only,
+/// v1 ignored).
 /// </summary>
 public class HashCacheTests : IDisposable
 {
@@ -33,9 +34,15 @@ public class HashCacheTests : IDisposable
         return p;
     }
 
-    private CompareReport Run(CacheMode mode = CacheMode.On, bool strict = true) =>
-        new DirectoryComparer(new CompareOptions { Cache = mode, StrictStat = strict, CacheBaseDir = CacheBase, CodeCompassBaseDir = CompassBase })
+    // Files here were just written (ChangeTime = now), so the real 3 s margins would make every first run
+    // pending; most tests use zero margins and the trust-timing tests below use real/explicit ones.
+    private static readonly TrustTiming Instant = new(0, 0);
+
+    private CompareReport Run(CacheMode mode = CacheMode.On, bool strict = true, TrustTiming? timing = null) =>
+        new DirectoryComparer(new CompareOptions { Cache = mode, StrictStat = strict, CacheBaseDir = CacheBase, CodeCompassBaseDir = CompassBase, Timing = timing ?? Instant })
             .Compare(Path.Combine(_dir, "L"), Path.Combine(_dir, "R"));
+
+    private LedgerSnapshot OwnLedger(string tree) => LedgerFormat.TryRead(Path.Combine(CacheBase, LedgerFormat.RootKey(Path.Combine(_dir, tree))))!;
 
     private void MakeTrees()
     {
@@ -137,16 +144,97 @@ public class HashCacheTests : IDisposable
     }
 
     [Fact]
-    public void RacyClean_OnlyAppliesToCoarseTimestamps()
+    public void FreshFile_IsPending_ThenTrustedAfterASettledReRead()
     {
-        var hashedAt = new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc).Ticks;
-        var fine = hashedAt - 10; // sub-second, a hair before the hash
-        Assert.True(HashCache.RacyClean(new LedgerEntry(1, fine, "X", fine, 0, hashedAt)));
-        long coarseRecent = hashedAt - TimeSpan.FromMinutes(5).Ticks; // whole seconds, within the hour
-        Assert.False(HashCache.RacyClean(new LedgerEntry(1, coarseRecent, "X", coarseRecent, 0, hashedAt)));
-        long coarseOld = hashedAt - TimeSpan.FromHours(2).Ticks;
-        Assert.True(HashCache.RacyClean(new LedgerEntry(1, coarseOld, "X", coarseOld, 0, hashedAt)));
-        Assert.False(HashCache.RacyClean(new LedgerEntry(1, coarseOld, "X", coarseOld, 0, 0))); // unknown hashedAt
+        // Just written: ChangeTime is inside the first-look margin, so the cold run caches nothing trusted.
+        MakeTrees();
+        var slow = new TrustTiming(TimeSpan.FromHours(1).Ticks, 0); // settle 0: the next read may confirm
+        var cold = Run(timing: slow);
+        Assert.Equal(20, cold.PendingFiles);
+        Assert.All(OwnLedger("L").Entries.Values, e => Assert.True(e.MTimeTicks < 0)); // stored pending (negated)
+
+        var second = Run(timing: slow);
+        Assert.Equal(0, second.CacheHits);     // a pending entry is never a hit: re-read...
+        Assert.Equal(0, second.PendingFiles);  // ...and that settled read is trusted
+        Assert.All(OwnLedger("L").Entries.Values, e => Assert.True(e.MTimeTicks > 0));
+
+        var third = Run(timing: slow);
+        Assert.Equal(20, third.CacheHits);
+        Assert.Equal(0, third.BytesRead);
+    }
+
+    [Fact]
+    public void PendingEntry_NeedsTheReReadToBeginSettleAfterItWasRecorded()
+    {
+        var t = new TrustTiming(TimeSpan.FromHours(1).Ticks, TimeSpan.FromSeconds(3).Ticks);
+        long now = DateTime.UtcNow.Ticks, sec = TimeSpan.TicksPerSecond;
+        var e = new FileEntry("x.txt", Put("L/x.txt", "x"), 1, Old, now - sec, 1); // ChangeTime 1 s before the read
+        FileHashes H(long readStart) => new(new string('A', 32), new string('B', 64), Stable: true, readStart);
+
+        HashCache Open() => HashCache.Open(Path.Combine(_dir, "L"), CacheMode.On, false, CacheBase, CompassBase, t);
+        var c1 = Open();
+        c1.Record(e, H(now), recordedAtTicks: now + sec);
+        Assert.Equal(1, c1.Pending);
+        c1.Save([e]);
+        Assert.Equal(-Old.Ticks, OwnLedger("L").Entries["x.txt"].MTimeTicks);
+        Assert.False(Open().TryGet(e, out _));
+
+        var c2 = Open();
+        c2.Record(e, H(now + 3 * sec), recordedAtTicks: now + 4 * sec); // began 2 s after recording: too soon
+        Assert.Equal(1, c2.Pending);
+        c2.Save([e]);
+
+        var c3 = Open();
+        c3.Record(e, H(now + 8 * sec), recordedAtTicks: now + 9 * sec); // 4 s after the latest pending record
+        Assert.Equal(0, c3.Pending);
+        c3.Save([e]);
+        Assert.True(Open().TryGet(e, out var id));
+        Assert.Equal(new string('B', 64), id.Sha256);
+
+        // A same-size edit with the stamps put back is the case the margin exists for; a changed stamp is a miss.
+        Assert.False(Open().TryGet(e with { ChangeTimeUtcTicks = now }, out _));
+    }
+
+    [Fact]
+    public void LegacyOwnLedger_IsRejudged_FreshEntriesBecomePending()
+    {
+        long hashedAt = DateTime.UtcNow.Ticks, sec = TimeSpan.TicksPerSecond;
+        var oldFile = new FileEntry("old.txt", Put("L/old.txt", "o"), 1, Old, Old.Ticks, 1);
+        var freshFile = new FileEntry("fresh.txt", Put("L/fresh.txt", "f"), 1, Old, hashedAt - sec, 2);
+        var dir = Path.Combine(CacheBase, LedgerFormat.RootKey(Path.Combine(_dir, "L")));
+        LedgerFormat.Write(dir, [ // written under the old rule: no trust.rule marker
+            new("old.txt", new LedgerEntry(1, Old.Ticks, new string('A', 32), Old.Ticks, 1, hashedAt, "")),
+            new("fresh.txt", new LedgerEntry(1, Old.Ticks, new string('B', 32), hashedAt - sec, 2, hashedAt, "")),
+        ]);
+
+        var cache = HashCache.Open(Path.Combine(_dir, "L"), CacheMode.On, false, CacheBase, CompassBase, TrustTiming.Local);
+        Assert.True(cache.TryGet(oldFile, out _));    // well past the margin: still trusted
+        Assert.False(cache.TryGet(freshFile, out _)); // within it: demoted to pending
+        cache.Save([oldFile, freshFile]);
+        Assert.True(File.Exists(Path.Combine(dir, HashCache.RuleMarkerName)));
+        Assert.Equal(-Old.Ticks, OwnLedger("L").Entries["fresh.txt"].MTimeTicks);
+    }
+
+    [Fact]
+    public void FirstLook_UsesTheLaterOfMtimeAndChangeTime()
+    {
+        long start = DateTime.UtcNow.Ticks, sec = TimeSpan.TicksPerSecond;
+        Assert.True(HashCache.FirstLook(start - 10 * sec, start - 5 * sec, start, TrustTiming.Local));
+        Assert.False(HashCache.FirstLook(start - 10 * sec, start - 1 * sec, start, TrustTiming.Local)); // ChangeTime fresh
+        Assert.False(HashCache.FirstLook(start - 10 * sec, start - 10 * sec, start, TrustTiming.Network)); // share: 1 h
+        Assert.False(HashCache.FirstLook(start + sec, start + sec, start, TrustTiming.Local)); // future-dated
+    }
+
+    [Fact]
+    public void NetworkRoots_GetTheLongMargin()
+    {
+        Assert.False(TrustTiming.IsNetwork(Path.TrimEndingDirectorySeparator(Path.GetFullPath(_dir))));
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.True(TrustTiming.IsNetwork(@"\\server\share\tree"));
+            Assert.True(TrustTiming.IsNetwork(@"\\?\UNC\server\share\tree"));
+            Assert.False(TrustTiming.IsNetwork(@"\\?\" + Path.GetFullPath(_dir)));
+        }
     }
 
     [Fact]
