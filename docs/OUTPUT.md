@@ -85,6 +85,14 @@ others are replaced atomically. Binary / EOL- or encoding-only / >16 MB / non-ro
 only when C equals the base byte for byte. Compares live in the server process (most recent 8), not yet an
 on-disk store.
 
+`start_compare3(base, v1, v2)` (CLI `compare3`): base→v1 then base→v2 (sequential, so the second reuses
+the base hashes the first cached instead of re-reading the base over SMB), then every touched path is
+v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content, modify/delete,
+add/add, rename/rename, path collision, binary, large. Renames are followed (renamed on one side, edited
+on the other ⇒ merged at the new name). The same `get_summary` / `list_files` / `get_file_diff` / `get_stats`
+serve it; `get_file_diff` shows the merged file with diff3 markers (`<<<<<<< v1 / ||||||| base / ======= /
+>>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested).
+
 ## 5. The human HTML report
 
 Self-contained shell + a sidecar data dir in the result store. Summary tiles; a tree view with folder

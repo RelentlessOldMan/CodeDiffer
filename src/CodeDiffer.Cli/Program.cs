@@ -5,6 +5,7 @@ using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Port;
 using CodeDiffer.Core.Sessions;
+using CodeDiffer.Core.ThreeWay;
 using CodeDiffer.Core.Verify;
 
 return Run(args);
@@ -26,6 +27,8 @@ static int Run(string[] args)
             return DiffFiles(args);
         case "apply":
             return Apply(args);
+        case "compare3":
+            return Compare3(args);
         case "verify":
             return Verify(args);
         case "help" or "--help" or "-h":
@@ -398,6 +401,46 @@ static int Apply(string[] args)
     }
     Console.Write(AgentViews.PortText(result, $"{args[1]} -> {args[2]}", null, maxFiles: int.MaxValue));
     return result.Count(PortStatus.Conflict) > 0 ? 1 : 0;
+}
+
+/// <summary>compare3: base vs v1 vs v2. Exit 1 when anything conflicts, 3 on an incomplete walk.</summary>
+static int Compare3(string[] args)
+{
+    if (args.Length < 4)
+    {
+        Console.Error.WriteLine("usage: codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache]");
+        return 64;
+    }
+    int threads = new CompareOptions().Parallelism;
+    if (FlagValue(args, "--threads") is { } t && (!int.TryParse(t, out threads) || threads < 1))
+    {
+        Console.Error.WriteLine("error: --threads needs a positive integer");
+        return 64;
+    }
+    var options = new CompareOptions { Parallelism = threads, Cache = args.Contains("--no-cache") ? CacheMode.Off : CacheMode.On };
+    var store = new SessionStore();
+    Compare3Session s;
+    try { s = store.Start3(args[1], args[2], args[3], options); }
+    catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 2;
+    }
+    s.Wait(Timeout.InfiniteTimeSpan);
+    if (s.Error is { } err)
+    {
+        Console.Error.WriteLine($"error: {err}");
+        return 2;
+    }
+    // The paths both sides touched (or every touched path with --all), then the summary.
+    var r = s.Report!;
+    bool all = args.Contains("--all");
+    foreach (var e in r.Entries)
+        if (all || e.Outcome is not (Merge3Outcome.V1Only or Merge3Outcome.V2Only))
+            Console.WriteLine("  " + ThreeWayViews.Line(e));
+    Console.Write(ThreeWayViews.Stats(s));
+    if (r.DroppedDirectories > 0) return 3;
+    return r.Count(Merge3Outcome.Conflict) > 0 ? 1 : 0;
 }
 
 static void PrintUsage()

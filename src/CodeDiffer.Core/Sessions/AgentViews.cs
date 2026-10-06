@@ -18,7 +18,7 @@ public static class AgentViews
     public const int DefaultMaxLines = 2000;
 
     /// <summary>Where capped diffs and exported changesets go (override: CODEDIFFER_OUT_DIR).</summary>
-    public static string OutDir(CompareSession s) => Path.Combine(
+    public static string OutDir(Session s) => Path.Combine(
         Environment.GetEnvironmentVariable("CODEDIFFER_OUT_DIR") is { Length: > 0 } d ? d : Path.Combine(Path.GetTempPath(), "codediffer"),
         s.Id);
 

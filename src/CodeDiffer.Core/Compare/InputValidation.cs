@@ -13,7 +13,7 @@ public static class InputValidation
         RequireExistingDirectory(right, "right");
     }
 
-    private static void RequireExistingDirectory(string path, string which)
+    public static void RequireExistingDirectory(string path, string which)
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException($"compare root ({which}) is empty");
