@@ -3,6 +3,8 @@ using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Giant;
 using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Model;
+using CodeDiffer.Core.Port;
+using CodeDiffer.Core.Sessions;
 using CodeDiffer.Core.Verify;
 
 return Run(args);
@@ -22,6 +24,8 @@ static int Run(string[] args)
             return BlockDiff(args);
         case "diff":
             return DiffFiles(args);
+        case "apply":
+            return Apply(args);
         case "verify":
             return Verify(args);
         case "help" or "--help" or "-h":
@@ -361,6 +365,41 @@ static string Version()
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
        ?? "0.0.0";
 
+/// <summary>apply: port left->right onto a third tree (dry run unless --write). Exit 1 when anything conflicts.</summary>
+static int Apply(string[] args)
+{
+    if (args.Length < 4)
+    {
+        Console.Error.WriteLine("usage: codediffer apply <left> <right> <target> [--write] [--threads N] [--no-cache]");
+        return 64;
+    }
+    int threads = new CompareOptions().Parallelism;
+    if (FlagValue(args, "--threads") is { } t && (!int.TryParse(t, out threads) || threads < 1))
+    {
+        Console.Error.WriteLine("error: --threads needs a positive integer");
+        return 64;
+    }
+    var options = new CompareOptions { Parallelism = threads, Cache = args.Contains("--no-cache") ? CacheMode.Off : CacheMode.On };
+    PortResult result;
+    try
+    {
+        var report = new DirectoryComparer(options).Compare(args[1], args[2]);
+        if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
+        {
+            Console.Error.WriteLine("error: incomplete walk (unlistable directories) — refusing to port a partial change set");
+            return 3;
+        }
+        result = ChangePorter.Run(report, args[1], args[2], args[3], args.Contains("--write"), parallelism: threads);
+    }
+    catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 2;
+    }
+    Console.Write(AgentViews.PortText(result, $"{args[1]} -> {args[2]}", null, maxFiles: int.MaxValue));
+    return result.Count(PortStatus.Conflict) > 0 ? 1 : 0;
+}
+
 static void PrintUsage()
 {
     Console.WriteLine(
@@ -381,6 +420,10 @@ static void PrintUsage()
                                        (git apply-able; summary goes to stderr).
           codediffer diff <a> <b> [-U N] [--literal]
                                        unified diff of two files
+          codediffer apply <left> <right> <target> [--write]
+                                       port the left->right changes onto target by 3-way
+                                       merge; per hunk applied|fuzzy|already|conflict.
+                                       Dry run unless --write (conflicted files untouched).
           codediffer blockdiff <a> <b>         content-defined block diff of two large files
                                                (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]

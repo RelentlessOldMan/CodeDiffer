@@ -78,7 +78,12 @@ Change-porting tools: `export_changeset(A→B)` and `apply_changeset(onto=C)` dr
 returns an id, optional wait), `get_summary`, `list_files` (`status`/`path_glob`/`reason`/page, `lines=true`
 renders ±lines for just that page), `get_file_diff` (cap `max_lines`, page with `start_line`; overflow written
 whole to a `.patch`), `get_stats`, `export_changeset` (to a file, `literal` for a byte-exact `git apply`).
-Compares live in the server process (most recent 8), not yet an on-disk store. `apply_changeset` is next.
+`apply_changeset(target, write=false)`: diff3 with base = left, change side = right, target = C, on the same
+merger the 3-way contract verifies. Per region applied | fuzzy (shifted line) | already | conflict (diff3 is
+strict: a change touching a target edit conflicts, like git). A file with any conflict is never written;
+others are replaced atomically. Binary / EOL- or encoding-only / >16 MB / non-round-trippable files apply
+only when C equals the base byte for byte. Compares live in the server process (most recent 8), not yet an
+on-disk store.
 
 ## 5. The human HTML report
 

@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Model;
+using CodeDiffer.Core.Port;
 
 namespace CodeDiffer.Core.Sessions;
 
@@ -213,6 +214,66 @@ public static class AgentViews
                (literal ? "  literal: every changed byte is in the patch; `git apply` reproduces the right tree's text files exactly\n"
                         : "  eol/encoding-only files are notes, not hunks; pass literal=true for a fully applicable patch\n") +
                (ps.BinaryFiles + ps.GiantFiles > 0 ? "  binary and large files are described, not carried — copy those separately\n" : "");
+    }
+
+    /// <summary>
+    /// Port the compare's left→right changes onto <paramref name="target"/> (dry run unless
+    /// <paramref name="write"/>): totals, then the conflicted and fuzzy files (bounded), with the full
+    /// per-hunk report written to a file.
+    /// </summary>
+    public static string Apply(CompareSession s, string target, bool write, int maxFiles = 50)
+    {
+        if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
+        var r = ChangePorter.Run(s.Report!, s.Left, s.Right, target, write, parallelism: s.Options.Parallelism);
+        return PortText(r, $"compare {s.Id}", Path.Combine(OutDir(s), $"apply-{(write ? "written" : "dryrun")}-{DateTime.Now:HHmmss}.txt"), maxFiles);
+    }
+
+    /// <summary>The bounded port report (also used by the CLI); the full detail goes to <paramref name="reportFile"/>.</summary>
+    public static string PortText(PortResult r, string label, string? reportFile, int maxFiles = 50)
+    {
+        var o = new StringBuilder();
+        o.Append($"{(r.Written ? "APPLIED" : "dry run")} · {label} onto {r.Target}\n");
+        o.Append($"files: {r.Count(PortStatus.Clean):N0} {(r.Written ? "written" : "would apply")} · {r.Count(PortStatus.Already):N0} already there · " +
+                 $"{r.Count(PortStatus.Conflict):N0} conflict{(r.Written ? " (left untouched)" : "")}\n");
+        o.Append($"hunks: {r.Count(HunkOutcome.Applied):N0} applied · {r.Count(HunkOutcome.Fuzzy):N0} fuzzy (shifted) · " +
+                 $"{r.Count(HunkOutcome.Already):N0} already · {r.Count(HunkOutcome.Conflict):N0} conflict\n");
+
+        var conflicts = r.Files.Where(f => f.Status == PortStatus.Conflict).ToList();
+        var fuzzy = r.Files.Where(f => f.Status == PortStatus.Clean && f.Hunks.Any(h => h.Outcome == HunkOutcome.Fuzzy)).ToList();
+        if (conflicts.Count > 0) o.Append("conflicts:\n");
+        foreach (var f in conflicts.Take(maxFiles)) o.Append("  ").Append(FileLine(f)).Append('\n');
+        if (conflicts.Count > maxFiles) o.Append($"  ... {conflicts.Count - maxFiles:N0} more\n");
+        if (fuzzy.Count > 0) o.Append("fuzzy (applied at a shifted line):\n");
+        foreach (var f in fuzzy.Take(Math.Max(5, maxFiles / 2))) o.Append("  ").Append(FileLine(f)).Append('\n');
+        if (fuzzy.Count > Math.Max(5, maxFiles / 2)) o.Append($"  ... {fuzzy.Count - Math.Max(5, maxFiles / 2):N0} more\n");
+
+        if (reportFile is not null)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(reportFile)!);
+            var full = new StringBuilder(o.ToString()).Append("\nall files:\n");
+            foreach (var f in r.Files)
+            {
+                full.Append(FileLine(f)).Append('\n');
+                foreach (var h in f.Hunks.Where(h => h.BaseLine > 0 || h.TargetLine > 0))
+                    full.Append($"    {h.Outcome.ToString().ToLowerInvariant(),-8} base {h.BaseLine},{h.BaseLines} -> target {h.TargetLine},{h.TargetLines}" +
+                                (h.Offset != 0 ? $" (offset {h.Offset:+0;-0})" : "") + "\n");
+            }
+            File.WriteAllText(reportFile, full.ToString(), new UTF8Encoding(false));
+            o.Append($"full report: {reportFile}\n");
+        }
+        if (!r.Written && r.Count(PortStatus.Clean) > 0) o.Append("nothing was written — call again with write=true to apply the clean files\n");
+        return o.ToString();
+    }
+
+    private static string FileLine(PortFile f)
+    {
+        var name = f.From is { } from && from != f.Path ? $"{from} -> {f.Path}" : f.Path;
+        var hs = f.Hunks.Where(h => h.BaseLine > 0 || h.TargetLine > 0).ToList();
+        var detail = hs.Count == 0 ? "" : " · " + string.Join(", ",
+            hs.GroupBy(h => h.Outcome).Select(g => $"{g.Count()} {g.Key.ToString().ToLowerInvariant()}"));
+        var where = f.Status == PortStatus.Conflict && hs.FirstOrDefault(h => h.Outcome == HunkOutcome.Conflict) is { BaseLine: > 0 } c
+            ? $" (first at base line {c.BaseLine}, target line {c.TargetLine})" : "";
+        return $"{f.Status.ToString().ToLowerInvariant(),-8} {f.Action,-7} {name}{detail}{where}{(f.Note is null ? "" : " — " + f.Note)}";
     }
 
     // ---- rendering ----

@@ -114,6 +114,24 @@ public static class CodeDifferTools
         return Safe(() => AgentViews.Export(s!, out_path, context, literal));
     }
 
+    [McpServerTool(Name = "apply_changeset")]
+    [Description("Port a compare's left->right changes onto a third tree (target) by 3-way merge: per hunk applied, " +
+                 "fuzzy (applied at a shifted line), already (target has it) or conflict. DRY RUN unless write=true; " +
+                 "with write=true only conflict-free files are written (atomically), conflicted files are left untouched.")]
+    public static string ApplyChangeset(
+        [Description("Directory to apply the changes onto.")] string target,
+        [Description("Compare id (default: the most recent).")] string? compare_id = null,
+        [Description("Actually modify the target (default false = dry run).")] bool write = false,
+        [Description("Most conflicted files listed inline (default 50); the full per-hunk report goes to a file.")] int max_files = 50)
+    {
+        if (Find(compare_id, out var s) is { } err) return err;
+        try { return AgentViews.Apply(s!, target, write, Math.Clamp(max_files, 1, 500)); }
+        catch (Exception ex) when (ex is DirectoryNotFoundException or IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return $"error: {ex.Message}";
+        }
+    }
+
     private static string? Find(string? id, out CompareSession? s)
     {
         s = Sessions.Get(id);

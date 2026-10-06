@@ -50,11 +50,12 @@ CodeDiffer is one of a family of local, large-repo tools (shared author, stack, 
 Two exes over one engine (the CodeCompass model):
 
 - **`CodeDiffer.Cli.exe`** — `compare <left> <right>` (status + reason per file; `--patch` for a
-  `git apply`-able patch), `diff <a> <b>`, `blockdiff`, `verify`. `help` lists the flags.
+  `git apply`-able patch), `apply <left> <right> <target> [--write]`, `diff <a> <b>`, `blockdiff`, `verify`. `help` lists the flags.
 - **`CodeDiffer.Mcp.exe`** — the stdio MCP server for agents. Register it with
   `claude mcp add codediffer -- <path>\CodeDiffer.Mcp.exe`. Tools: `start_compare` (background, returns
   an id), `get_summary` (constant size), `list_files` (paged/filtered), `get_file_diff` (one file, capped;
-  the overflow goes to a `.patch` file), `get_stats`, `export_changeset` (whole patch to a file). Compares
+  the overflow goes to a `.patch` file), `get_stats`, `export_changeset` (whole patch to a file), `apply_changeset` (port the changes onto a third
+  tree by 3-way merge; dry run unless `write=true`). Compares
   live in the server's memory for its session (the most recent 8).
 
 ## Build & test

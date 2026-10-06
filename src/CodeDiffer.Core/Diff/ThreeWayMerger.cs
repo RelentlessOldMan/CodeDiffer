@@ -2,6 +2,12 @@ using CodeDiffer.Core.Model;
 
 namespace CodeDiffer.Core.Diff;
 
+/// <summary>How a diff3 region was changed: by one side only, by both identically, or by both differently.</summary>
+public enum RegionKind { V1Only, V2Only, Agreed, Conflict }
+
+/// <summary>One diff3 region: 0-based start + length of its span in base, V1 and V2.</summary>
+public readonly record struct MergeRegion(RegionKind Kind, int BaseStart0, int BaseLines, int V1Start0, int V1Lines, int V2Start0, int V2Lines);
+
 /// <summary>One file's 3-way decomposition: the conflict regions and the cleanly-merged regions.</summary>
 public sealed record FileMergeResult(string Path, IReadOnlyList<Conflict> Conflicts, IReadOnlyList<CleanMerge> CleanMerges);
 
@@ -31,6 +37,40 @@ public static class ThreeWayMerger
     public static FileMergeResult Merge(
         string path, IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines, IReadOnlyList<string> v2Lines)
     {
+        var conflicts = new List<Conflict>();
+        var clean = new List<CleanMerge>();
+        foreach (var r in Regions(baseLines, v1Lines, v2Lines))
+        {
+            int baseLen = r.BaseLines, len1 = r.V1Lines, len2 = r.V2Lines;
+            // baseStart: an insert region (baseLen 0) anchors on the line after which it goes (= BaseStart0);
+            // a replace/delete region on its first affected line (= BaseStart0+1).
+            int baseStart = baseLen == 0 ? r.BaseStart0 : r.BaseStart0 + 1;
+            switch (r.Kind)
+            {
+                case RegionKind.Conflict:
+                    conflicts.Add(new Conflict(
+                        path, baseStart, baseLen,
+                        Op(baseLen, len1), r.V1Start0 + 1, len1,
+                        Op(baseLen, len2), r.V2Start0 + 1, len2));
+                    break;
+                case RegionKind.V2Only:
+                    clean.Add(new CleanMerge(path, "v2", Op(baseLen, len2), baseStart, baseLen, r.V2Start0 + 1, len2));
+                    break;
+                default: // V1Only, or both changed identically ⇒ agreed edit, canonical side "v1"
+                    clean.Add(new CleanMerge(path, "v1", Op(baseLen, len1), baseStart, baseLen, r.V1Start0 + 1, len1));
+                    break;
+            }
+        }
+        return new FileMergeResult(path, conflicts, clean);
+    }
+
+    /// <summary>
+    /// The diff3 regions, in base order: each a maximal coalesced span of change from either side, with
+    /// its 0-based half-open spans in base, V1 and V2. Lines between regions are identical in all three.
+    /// </summary>
+    public static List<MergeRegion> Regions(
+        IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines, IReadOnlyList<string> v2Lines)
+    {
         int n = baseLines.Count;
         var h1 = LineDiffer.Diff(baseLines, v1Lines);
         var h2 = LineDiffer.Diff(baseLines, v2Lines);
@@ -42,22 +82,20 @@ public static class ThreeWayMerger
         // All change hunks from both sides, as half-open base ranges [oStart,oEnd), sorted; v1 before v2.
         // An insert (OldLines 0) sits in the gap AFTER base line OldStart, so its base position is OldStart;
         // replace/delete start at OldStart-1 (0-based first affected line).
-        var regions = new List<(int oStart, int oEnd, int side)>(h1.Count + h2.Count);
-        foreach (var h in h1) { int s = BaseStart0(h); regions.Add((s, s + h.OldLines, 0)); }
-        foreach (var h in h2) { int s = BaseStart0(h); regions.Add((s, s + h.OldLines, 1)); }
-        regions.Sort((x, y) => x.oStart != y.oStart ? x.oStart.CompareTo(y.oStart) : x.side.CompareTo(y.side));
+        var spans = new List<(int oStart, int oEnd, int side)>(h1.Count + h2.Count);
+        foreach (var h in h1) { int s = BaseStart0(h); spans.Add((s, s + h.OldLines, 0)); }
+        foreach (var h in h2) { int s = BaseStart0(h); spans.Add((s, s + h.OldLines, 1)); }
+        spans.Sort((x, y) => x.oStart != y.oStart ? x.oStart.CompareTo(y.oStart) : x.side.CompareTo(y.side));
 
-        var conflicts = new List<Conflict>();
-        var clean = new List<CleanMerge>();
-
+        var regions = new List<MergeRegion>();
         int i = 0;
-        while (i < regions.Count)
+        while (i < spans.Count)
         {
-            int rStart = regions[i].oStart, rEnd = regions[i].oEnd;
+            int rStart = spans[i].oStart, rEnd = spans[i].oEnd;
             i++;
-            while (i < regions.Count && regions[i].oStart <= rEnd) // overlap OR abut ⇒ coalesce
+            while (i < spans.Count && spans[i].oStart <= rEnd) // overlap OR abut ⇒ coalesce
             {
-                rEnd = Math.Max(rEnd, regions[i].oEnd);
+                rEnd = Math.Max(rEnd, spans[i].oEnd);
                 i++;
             }
 
@@ -68,35 +106,16 @@ public static class ThreeWayMerger
             int v2e = rEnd == n ? v2Lines.Count : m2[rEnd];
 
             int baseLen = rEnd - rStart, len1 = v1e - v1s, len2 = v2e - v2s;
-            // baseStart: an insert region (baseLen 0) anchors on the line after which it goes (= rStart);
-            // a replace/delete region on its first affected line (= rStart+1).
-            int baseStart = baseLen == 0 ? rStart : rStart + 1;
-
             bool v1Changed = !SeqEqual(v1Lines, v1s, len1, baseLines, rStart, baseLen);
             bool v2Changed = !SeqEqual(v2Lines, v2s, len2, baseLines, rStart, baseLen);
-
-            if (v1Changed && v2Changed && !SeqEqual(v1Lines, v1s, len1, v2Lines, v2s, len2))
-            {
-                conflicts.Add(new Conflict(
-                    path, baseStart, baseLen,
-                    Op(baseLen, len1), v1s + 1, len1,
-                    Op(baseLen, len2), v2s + 1, len2));
-            }
-            else if (v1Changed && !v2Changed)
-            {
-                clean.Add(new CleanMerge(path, "v1", Op(baseLen, len1), baseStart, baseLen, v1s + 1, len1));
-            }
-            else if (v2Changed && !v1Changed)
-            {
-                clean.Add(new CleanMerge(path, "v2", Op(baseLen, len2), baseStart, baseLen, v2s + 1, len2));
-            }
-            else // both changed identically ⇒ agreed edit, canonical side "v1"
-            {
-                clean.Add(new CleanMerge(path, "v1", Op(baseLen, len1), baseStart, baseLen, v1s + 1, len1));
-            }
+            var kind = v1Changed && v2Changed
+                ? SeqEqual(v1Lines, v1s, len1, v2Lines, v2s, len2) ? RegionKind.Agreed : RegionKind.Conflict
+                : v1Changed ? RegionKind.V1Only
+                : v2Changed ? RegionKind.V2Only
+                : RegionKind.Agreed; // neither differs from base (cannot arise from real hunks); harmless
+            regions.Add(new MergeRegion(kind, rStart, baseLen, v1s, len1, v2s, len2));
         }
-
-        return new FileMergeResult(path, conflicts, clean);
+        return regions;
     }
 
     /// <summary>Map each base line to its 0-based variant line, or −1 if the side changed it away.</summary>
