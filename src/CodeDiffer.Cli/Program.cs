@@ -1,9 +1,10 @@
-﻿using System.Reflection;
+using System.Reflection;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Giant;
 using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Port;
+using CodeDiffer.Core.Report;
 using CodeDiffer.Core.Sessions;
 using CodeDiffer.Core.ThreeWay;
 using CodeDiffer.Core.Verify;
@@ -31,6 +32,10 @@ static int Run(string[] args)
             return Compare3(args);
         case "verify":
             return Verify(args);
+        case "report":
+            return Report(args);
+        case "results":
+            return Results(args);
         case "help" or "--help" or "-h":
             PrintUsage();
             return 0;
@@ -59,6 +64,7 @@ static int Compare(string[] args)
     var options = new CompareOptions { Parallelism = threads, Cache = cache, StrictStat = !args.Contains("--fast-stat") };
 
     CompareReport report;
+    var started = DateTime.UtcNow;
     var sw = System.Diagnostics.Stopwatch.StartNew();
     try
     {
@@ -70,6 +76,7 @@ static int Compare(string[] args)
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
     }
+    var compareTime = sw.Elapsed;
 
     if (args.Contains("--timings"))
         foreach (var (phase, elapsed) in report.Timings)
@@ -100,12 +107,114 @@ static int Compare(string[] args)
         (report.PendingFiles > 0 ? $" · {report.PendingFiles} too recently modified to cache yet" : ""));
     if (report.UnstableFiles > 0)
         Console.Error.WriteLine($"note: {report.UnstableFiles} file(s) changed while being read (live writer) — compared as read, not cached.");
+
+    if (!args.Contains("--no-save"))
+    {
+        try
+        {
+            var session = new SessionStore().Adopt(args[1], args[2], options, report, started, compareTime);
+            info.WriteLine(session.SaveError is { } se ? $"  saved      NOT saved: {se}" : $"  saved      {session.ResultDir}  (id {session.Id})");
+            if (args.Contains("--html") && session.SaveError is null && WriteHtml(session, args, info) is { } bad) return bad;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"note: result not saved: {ex.Message}");
+        }
+    }
+    else if (args.Contains("--html"))
+        Console.Error.WriteLine("note: --html needs a saved result; drop --no-save");
+
     if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
     {
         Console.Error.WriteLine(
             $"WARNING: incomplete walk — {report.LeftDroppedDirectories} left / {report.RightDroppedDirectories} right " +
             "director(ies) could not be listed; adds/removes under them may be listing failures.");
         return 3;
+    }
+    return 0;
+}
+
+/// <summary>Write the HTML report for a finished session; prints its path. Returns an exit code on failure, else null.</summary>
+static int? WriteHtml(Session s, string[] args, TextWriter info)
+{
+    int maxDiffs = new HtmlReportOptions().MaxDiffs;
+    if (FlagValue(args, "--max-diffs") is { } md && (!int.TryParse(md, out maxDiffs) || maxDiffs < 0))
+    {
+        Console.Error.WriteLine("error: --max-diffs needs a non-negative integer");
+        return 64;
+    }
+    var opt = new HtmlReportOptions
+    {
+        IncludeLarge = args.Contains("--large"),
+        IncludeIdentical = args.Contains("--include-identical"),
+        MaxDiffs = maxDiffs,
+        OutDir = FlagValue(args, "--out"),
+    };
+    try
+    {
+        int last = -1;
+        var r = HtmlReport.Write(s, opt, (done, total) =>
+        {
+            int pct = total == 0 ? 100 : done * 100 / total;
+            if (pct / 10 != last / 10) { last = pct; Console.Error.Write($"\r  report     rendering diffs {done}/{total}"); }
+        });
+        Console.Error.WriteLine();
+        info.WriteLine($"  report     {r.IndexPath}");
+        info.WriteLine($"             {r.Files:N0} file(s) · {r.Rendered:N0} diff(s) rendered" +
+            (r.Capped > 0 ? $" · {r.Capped:N0} cut (whole diff linked)" : "") +
+            (r.Large > 0 ? $" · {r.Large:N0} large not block-diffed (--large)" : "") +
+            (r.NotRendered > 0 ? $" · {r.NotRendered:N0} past --max-diffs" : "") +
+            (r.Unreadable > 0 ? $" · {r.Unreadable:N0} unreadable" : ""));
+        return null;
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+    {
+        Console.Error.WriteLine($"error: report: {ex.Message}");
+        return 2;
+    }
+}
+
+/// <summary>report: the HTML report for a saved compare (by id or result directory).</summary>
+static int Report(string[] args)
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("usage: codediffer report <id|result-dir> [--large] [--include-identical] [--max-diffs N] [--out DIR]");
+        return 64;
+    }
+    Session? s;
+    try { s = new SessionStore().Get(args[1]); }
+    catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 2;
+    }
+    if (s is null)
+    {
+        Console.Error.WriteLine($"error: no saved compare '{args[1]}' in {ResultStore.DefaultRoot} (codediffer results lists them)");
+        return 2;
+    }
+    Console.WriteLine($"{(s is Compare3Session ? "compare3" : "compare")} {s.Id} · {s.Title}");
+    return WriteHtml(s, args, Console.Out) ?? 0;
+}
+
+/// <summary>results: list saved compares, newest first.</summary>
+static int Results(string[] args)
+{
+    int max = 20;
+    if (FlagValue(args, "--max", from: 1) is { } m && (!int.TryParse(m, out max) || max < 1))
+    {
+        Console.Error.WriteLine("error: --max needs a positive integer");
+        return 64;
+    }
+    var root = ResultStore.DefaultRoot;
+    var saved = ResultStore.List(root, max);
+    Console.WriteLine($"{saved.Count} saved compare(s) in {root}");
+    foreach (var c in saved)
+    {
+        var counts = c.Counts.Where(x => x.Count > 0 && x.Name != "identical").Select(x => $"{x.Name} {x.Count:N0}");
+        Console.WriteLine($"  {c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.State,-7} {string.Join("  ", c.Roots.Select(r => r.Path))}");
+        Console.WriteLine($"        {string.Join(", ", counts)}{(c.Error is { } e ? $"  error: {e}" : "")}");
     }
     return 0;
 }
@@ -279,9 +388,9 @@ static string DeltaKind(string path)
         : "diff";
 }
 
-static string? FlagValue(string[] args, string flag)
+static string? FlagValue(string[] args, string flag, int from = 2)
 {
-    for (int i = 2; i < args.Length - 1; i++)
+    for (int i = from; i < args.Length - 1; i++)
         if (args[i] == flag)
             return args[i + 1];
     return null;
@@ -419,10 +528,10 @@ static int Compare3(string[] args)
         return 64;
     }
     var options = new CompareOptions { Parallelism = threads, Cache = args.Contains("--no-cache") ? CacheMode.Off : CacheMode.On };
-    var store = new SessionStore();
+    var store = new SessionStore(save: !args.Contains("--no-save"));
     Compare3Session s;
     try { s = store.Start3(args[1], args[2], args[3], options); }
-    catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
+    catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException or IOException or UnauthorizedAccessException)
     {
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
@@ -440,6 +549,11 @@ static int Compare3(string[] args)
         if (all || e.Outcome is not (Merge3Outcome.V1Only or Merge3Outcome.V2Only))
             Console.WriteLine("  " + ThreeWayViews.Line(e));
     Console.Write(ThreeWayViews.Stats(s));
+    if (args.Contains("--html"))
+    {
+        if (s.ResultDir is null || s.SaveError is not null) Console.Error.WriteLine("note: --html needs a saved result; drop --no-save");
+        else if (WriteHtml(s, args, Console.Out) is { } bad) return bad;
+    }
     if (r.DroppedDirectories > 0) return 3;
     return r.Count(Merge3Outcome.Conflict) > 0 ? 1 : 0;
 }
@@ -462,6 +576,15 @@ static void PrintUsage()
                                        --fast-stat trusts the directory listing alone.
                                        --patch writes a git-style unified diff to stdout
                                        (git apply-able; summary goes to stderr).
+                                       The result is saved (see `results`; --no-save skips);
+                                       --html also writes the HTML report (report flags below).
+          codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache] [--no-save] [--html]
+                                       3-way: v1 only | v2 only | agreed | merged | conflict
+          codediffer report <id|result-dir> [--large] [--include-identical] [--max-diffs N] [--out DIR]
+                                       HTML report of a saved compare: folder tree, filters,
+                                       each file's diff loaded on expand; opens from disk.
+                                       --large also block-diffs files over 16 MB.
+          codediffer results [--max N]   saved compares, newest first
           codediffer diff <a> <b> [-U N] [--literal]
                                        unified diff of two files
           codediffer apply <left> <right> <target> [--write]

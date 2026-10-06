@@ -17,10 +17,53 @@ public static class AgentViews
     public const int MaxPageSize = 500;
     public const int DefaultMaxLines = 2000;
 
-    /// <summary>Where capped diffs and exported changesets go (override: CODEDIFFER_OUT_DIR).</summary>
-    public static string OutDir(Session s) => Path.Combine(
+    /// <summary>Where capped diffs, exported changesets and apply reports go: the compare's result directory, or
+    /// (for an unsaved compare) %TEMP%\codediffer\&lt;id&gt; — CODEDIFFER_OUT_DIR overrides the temp base.</summary>
+    public static string OutDir(Session s) => s.ResultDir ?? Path.Combine(
         Environment.GetEnvironmentVariable("CODEDIFFER_OUT_DIR") is { Length: > 0 } d ? d : Path.Combine(Path.GetTempPath(), "codediffer"),
         s.Id);
+
+    /// <summary>
+    /// A warning when a file's size on disk no longer matches what the compare recorded — the diff is rendered
+    /// from the live trees, so it would show today's file, not the compared one. Null when sizes still match
+    /// (a same-size edit can't be detected without re-hashing; reopened compares say so in their header).
+    /// </summary>
+    internal static string? StaleSide(string full, long size, string name)
+    {
+        try
+        {
+            var fi = new FileInfo(full);
+            if (!fi.Exists) return $"the {name} file is gone";
+            return fi.Length == size ? null : $"the {name} file is now {Bytes(fi.Length)} (was {Bytes(size)})";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return $"the {name} file is unreadable ({ex.Message})"; }
+    }
+
+    internal static string? StaleNote(params string?[] parts)
+    {
+        var found = parts.Where(p => p is not null).ToList();
+        return found.Count == 0 ? null : "WARNING: changed since the compare — " + string.Join("; ", found) + ". Shown as the files are now.";
+    }
+
+    internal static string? Stale(CompareSession s, FileChange c)
+    {
+        string? L(string rel) => StaleSide(Full(s.Left, rel), c.LeftSize, "left");
+        string? R(string rel) => StaleSide(Full(s.Right, rel), c.RightSize, "right");
+        return c.Status switch
+        {
+            ChangeStatus.Added => StaleNote(R(c.RelativePath)),
+            ChangeStatus.Removed => StaleNote(L(c.RelativePath)),
+            ChangeStatus.Renamed => StaleNote(L(c.RenamedFrom!), R(c.RelativePath)),
+            _ => StaleNote(L(c.RelativePath), R(c.RelativePath)),
+        };
+    }
+
+    internal static string Full(string root, string rel) => Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));
+
+    /// <summary>One line for a reopened compare: when it ran, and that diffs come from the trees as they are now.</summary>
+    internal static string? ReopenedNote(Session s) => s.Reopened
+        ? $"saved compare from {s.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm} ({s.ResultDir}); verdicts are as of then, diffs are rendered from the trees now\n"
+        : null;
 
     /// <summary>The compare's state; when finished, the constant-size summary.</summary>
     public static string Summary(CompareSession s)
@@ -31,6 +74,7 @@ public static class AgentViews
         var r = s.Report!;
 
         o.Append($"{r.Total:N0} files   (finished in {Clock(s.Elapsed)})\n");
+        o.Append(ReopenedNote(s));
         o.Append($"  identical {r.Count(ChangeStatus.Identical),8:N0}    (hidden by default)\n");
         o.Append($"  modified  {r.Count(ChangeStatus.Modified),8:N0}    {Reasons(r)}\n");
         o.Append($"  added     {r.Count(ChangeStatus.Added),8:N0}\n");
@@ -45,8 +89,9 @@ public static class AgentViews
         if (movers.Count > 0)
             o.Append("largest size changes: ").Append(string.Join(", ", movers.Select(c => $"{c.RelativePath} ({Delta(c.RightSize - c.LeftSize)})"))).Append('\n');
         Warnings(o, r);
+        Saved(o, s);
         if (changed.Count > 0)
-            o.Append($"next: list_files (paged) · get_file_diff(path) · export_changeset for the whole patch\n");
+            o.Append($"next: list_files (paged) · get_file_diff(path) · export_changeset for the whole patch · write_report for a browsable HTML report\n");
         return o.ToString();
     }
 
@@ -176,6 +221,7 @@ public static class AgentViews
         o.Append($"{Tag(c)} {Name(c)}{(c.Reason is { } rr ? $"  [{CanonicalTokens.Token(rr)}]" : "")}  ");
         o.Append(info.Kind == "text" ? $"+{info.AddedLines:N0} -{info.RemovedLines:N0} in {info.Hunks:N0} hunk(s)" : info.Kind);
         o.Append($" · {total:N0} patch line(s)\n");
+        if (Stale(s, c) is { } stale) o.Append(stale).Append('\n');
 
         if (total <= maxLines && startLine == 1)
             return o.Append(section).ToString();
@@ -324,6 +370,14 @@ public static class AgentViews
         if (s.Error is { } e) return $"FAILED after {Clock(s.Elapsed)}: {e}\n";
         if (!s.IsDone) return $"running · {Clock(s.Elapsed)} elapsed — call get_summary(wait_seconds=…) to wait for it\n";
         return null;
+    }
+
+    /// <summary>Where the compare was saved (or why it wasn't) — only for a compare run in this process.</summary>
+    internal static void Saved(StringBuilder o, Session s)
+    {
+        if (s.Reopened) return;
+        if (s.SaveError is { } err) o.Append($"note: the result could not be saved ({err}); it lives only in this process\n");
+        else if (s.ResultDir is { } dir) o.Append($"saved: {dir}  (reopen later by id {s.Id})\n");
     }
 
     private static void Warnings(StringBuilder o, CompareReport r)

@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Ledger;
+using CodeDiffer.Core.Report;
 using CodeDiffer.Core.Sessions;
 using ModelContextProtocol.Server;
 
@@ -10,7 +11,8 @@ namespace CodeDiffer.Mcp;
 /// The tools exposed to the agent. A compare (2-way or 3-way) runs in the background and is queried by id;
 /// every answer is bounded (constant-size summary, paged lists, capped per-file views with a file for the
 /// rest), so a 90 GB tree never floods the context. Deliberately a small surface to keep the standing
-/// token cost low. compare_id may be omitted everywhere: it then means the most recent compare.
+/// token cost low. compare_id may be omitted everywhere: it then means the most recent compare. Finished
+/// compares are saved (ResultStore), so an id from an earlier session reopens without re-comparing.
 /// </summary>
 [McpServerToolType]
 public static class CodeDifferTools
@@ -170,6 +172,57 @@ public static class CodeDifferTools
         }
     }
 
+    [McpServerTool(Name = "list_compares")]
+    [Description("Saved compares, newest first (every finished compare is saved; reopen any of them by passing its id as " +
+                 "compare_id to the other tools — no re-compare). Shows id, when, kind, roots and headline counts.")]
+    public static string ListCompares([Description("Most to list (default 20).")] int max = 20)
+    {
+        if (Sessions.ResultsRoot is not { } root) return "compares are not being saved in this server";
+        var saved = ResultStore.List(root, Math.Clamp(max, 1, 200));
+        if (saved.Count == 0) return $"no saved compares in {root}";
+        var o = new System.Text.StringBuilder($"{saved.Count} saved compare(s) in {root} (newest first):\n");
+        foreach (var c in saved)
+        {
+            o.Append($"{c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.State,-7} ");
+            o.Append(string.Join("  ", c.Roots.Select(r => $"{r.Name}={r.Path}")));
+            var counts = c.Counts.Where(x => x.Count > 0 && x.Name != "identical").Select(x => $"{x.Name} {x.Count:N0}").ToList();
+            if (counts.Count > 0) o.Append("  · ").Append(string.Join(", ", counts));
+            if (c.Error is { } e) o.Append($"  · error: {e}");
+            o.Append('\n');
+        }
+        return o.ToString();
+    }
+
+    [McpServerTool(Name = "write_report")]
+    [Description("Write a browsable HTML report of a compare (2- or 3-way) into its result directory and return the path to " +
+                 "open — for a human. A folder tree with filters; each file's diff loads when expanded (inline or side by side; " +
+                 "3-way shows merges with conflict markers). Reads the changed files to render their diffs.")]
+    public static string WriteReport(
+        [Description("Compare id (default: the most recent).")] string? compare_id = null,
+        [Description("Also block-diff large files (over 16 MB; reads them whole).")] bool include_large = false,
+        [Description("List identical files too (2-way).")] bool include_identical = false,
+        [Description("Most file diffs to render (default 5000).")] int max_diffs = 5000)
+    {
+        if (Find(compare_id, out var s) is { } err) return err;
+        if (!s!.IsDone) return $"compare {s.Id} is still running — wait for it (get_summary wait_seconds) first";
+        if (s.Error is { } failed) return $"compare {s.Id} failed: {failed}";
+        try
+        {
+            var r = HtmlReport.Write(s, new HtmlReportOptions { IncludeLarge = include_large, IncludeIdentical = include_identical, MaxDiffs = Math.Max(0, max_diffs) });
+            return $"report: {r.IndexPath}\n" +
+                   $"  {r.Files:N0} file(s) listed · {r.Rendered:N0} diff(s) rendered" +
+                   (r.Capped > 0 ? $" · {r.Capped:N0} cut (whole diff linked)" : "") +
+                   (r.Large > 0 ? $" · {r.Large:N0} large not block-diffed (include_large=true)" : "") +
+                   (r.NotRendered > 0 ? $" · {r.NotRendered:N0} past max_diffs" : "") +
+                   (r.Unreadable > 0 ? $" · {r.Unreadable:N0} unreadable" : "") + "\n" +
+                   "  open index.html in a browser (works from disk, no server)\n";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return $"error: {ex.Message}";
+        }
+    }
+
     private static string? Options(string? cache, int threads, out CompareOptions options)
     {
         options = new CompareOptions();
@@ -192,12 +245,17 @@ public static class CodeDifferTools
 
     private static string? Find(string? id, out Session? s)
     {
-        s = Sessions.Get(id);
+        try { s = Sessions.Get(id); }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            s = null;
+            return $"error: {ex.Message}";
+        }
         if (s is not null) return null;
         var known = Sessions.All();
-        return known.Count == 0
-            ? "no compare yet — call start_compare(left, right) or start_compare3(base, v1, v2)"
-            : $"unknown compare_id '{id}' (known: {string.Join(", ", known.Select(k => k.Id))})";
+        return known.Count == 0 && string.IsNullOrWhiteSpace(id)
+            ? "no compare in this session yet — call start_compare(left, right) or start_compare3(base, v1, v2), or list_compares for saved ones"
+            : $"unknown compare_id '{id}' (this session: {(known.Count == 0 ? "none" : string.Join(", ", known.Select(k => k.Id)))}; list_compares shows saved ones)";
     }
 
     private static async Task WaitAsync(Session s, int seconds)

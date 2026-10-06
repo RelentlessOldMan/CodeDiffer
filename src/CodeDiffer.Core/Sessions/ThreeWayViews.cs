@@ -20,6 +20,7 @@ public static class ThreeWayViews
         var r = s.Report!;
         int baseFiles = r.V1Report.Changes.Count(c => c.Status != ChangeStatus.Added);
         o.Append($"{baseFiles:N0} base files · {r.Entries.Count:N0} touched by either side   (finished in {Clock(s.Elapsed)})\n");
+        o.Append(AgentViews.ReopenedNote(s));
         o.Append($"  v1 only   {r.Count(Merge3Outcome.V1Only),8:N0}    take v1\n");
         o.Append($"  v2 only   {r.Count(Merge3Outcome.V2Only),8:N0}    take v2\n");
         o.Append($"  agreed    {r.Count(Merge3Outcome.Agreed),8:N0}    both made the identical change\n");
@@ -34,8 +35,9 @@ public static class ThreeWayViews
         o.Append($"per side: v1 {SideCounts(r.V1Report)} · v2 {SideCounts(r.V2Report)}\n");
         if (r.DroppedDirectories > 0)
             o.Append($"WARNING: incomplete walk — {r.DroppedDirectories} director(ies) could not be listed; the verdicts under them may be wrong.\n");
+        AgentViews.Saved(o, s);
         if (r.Entries.Count > 0)
-            o.Append("next: list_files(status=conflict) · get_file_diff(path) shows the merge with conflict markers\n");
+            o.Append("next: list_files(status=conflict) · get_file_diff(path) shows the merge with conflict markers · write_report for HTML\n");
         return o.ToString();
     }
 
@@ -90,34 +92,11 @@ public static class ThreeWayViews
              ?? r.Entries.FirstOrDefault(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase));
         if (e is null) return $"not touched by either side in compare3 {s.Id}: {path}\n";
 
-        string body, kind;
-        if (TreeMerger.MergedText(e, s.Base, s.V1, s.V2) is { } merged)
-        {
-            body = merged;
-            kind = e.Outcome == Merge3Outcome.Conflict ? $"merged with {e.ConflictRegions} conflict marker block(s)" : "clean merge result";
-        }
-        else if (e.Outcome is Merge3Outcome.V1Only or Merge3Outcome.Agreed or Merge3Outcome.V2Only)
-        {
-            bool v2 = e.Outcome == Merge3Outcome.V2Only;
-            var w = new StringWriter { NewLine = "\n" };
-            PatchWriter.WriteChange(w, (v2 ? e.V2 : e.V1)!, s.Base, v2 ? s.V2 : s.V1, new PatchOptions(), new PatchStats());
-            body = w.ToString();
-            kind = e.Outcome == Merge3Outcome.Agreed ? "patch (identical on both sides)" : $"patch base->{(v2 ? "v2" : "v1")}";
-        }
-        else
-        {
-            var both = new StringWriter { NewLine = "\n" };
-            both.Write("--- v1's change ---\n");
-            PatchWriter.WriteChange(both, e.V1!, s.Base, s.V1, new PatchOptions(), new PatchStats());
-            both.Write("--- v2's change ---\n");
-            PatchWriter.WriteChange(both, e.V2!, s.Base, s.V2, new PatchOptions(), new PatchStats());
-            body = both.ToString();
-            kind = "both sides' patches (no line-level merge for this conflict)";
-        }
-
+        var body = Body(s, e, out var kind, out _);
         var lines = body.Split('\n');
         int total = lines.Length - (body.EndsWith('\n') ? 1 : 0);
         var o = new StringBuilder(Line(e)).Append($"\n{kind} · {total:N0} line(s)\n");
+        if (Stale(s, e) is { } stale) o.Append(stale).Append('\n');
         maxLines = Math.Max(1, maxLines);
         startLine = Math.Clamp(startLine, 1, Math.Max(1, total));
         if (total <= maxLines && startLine == 1) return o.Append(body).ToString();
@@ -138,6 +117,48 @@ public static class ThreeWayViews
         for (int i = startLine - 1; i < end; i++) o.Append(lines[i]).Append('\n');
         if (end < total) o.Append($"next: startLine={end + 1}\n");
         return o.ToString();
+    }
+
+    /// <summary>
+    /// The full text shown for one entry: for a both-sides text change the merged file with diff3 markers
+    /// (<paramref name="merge"/> = true); for a one-sided or agreed change that side's patch; otherwise both
+    /// sides' patches. <paramref name="kind"/> describes which.
+    /// </summary>
+    public static string Body(Compare3Session s, Merge3Entry e, out string kind, out bool merge, PatchOptions? options = null)
+    {
+        var opt = options ?? new PatchOptions();
+        merge = false;
+        if (TreeMerger.MergedText(e, s.Base, s.V1, s.V2) is { } merged)
+        {
+            merge = true;
+            kind = e.Outcome == Merge3Outcome.Conflict ? $"merged with {e.ConflictRegions} conflict marker block(s)" : "clean merge result";
+            return merged;
+        }
+        if (e.Outcome is Merge3Outcome.V1Only or Merge3Outcome.Agreed or Merge3Outcome.V2Only)
+        {
+            bool v2 = e.Outcome == Merge3Outcome.V2Only;
+            var w = new StringWriter { NewLine = "\n" };
+            PatchWriter.WriteChange(w, (v2 ? e.V2 : e.V1)!, s.Base, v2 ? s.V2 : s.V1, opt, new PatchStats());
+            kind = e.Outcome == Merge3Outcome.Agreed ? "patch (identical on both sides)" : $"patch base->{(v2 ? "v2" : "v1")}";
+            return w.ToString();
+        }
+        var both = new StringWriter { NewLine = "\n" };
+        both.Write("--- v1's change ---\n");
+        PatchWriter.WriteChange(both, e.V1!, s.Base, s.V1, opt, new PatchStats());
+        both.Write("--- v2's change ---\n");
+        PatchWriter.WriteChange(both, e.V2!, s.Base, s.V2, opt, new PatchStats());
+        kind = "both sides' patches (no line-level merge for this conflict)";
+        return both.ToString();
+    }
+
+    /// <summary>A warning when any of the entry's files no longer has the size the compare recorded.</summary>
+    internal static string? Stale(Compare3Session s, Merge3Entry e)
+    {
+        string? Side(FileChange? c, string root, string name)
+            => c is null || c.Status == ChangeStatus.Removed ? null : AgentViews.StaleSide(AgentViews.Full(root, c.RelativePath), c.RightSize, name);
+        var b = e.V1 ?? e.V2;
+        var baseSide = b is { Status: not ChangeStatus.Added } ? AgentViews.StaleSide(AgentViews.Full(s.Base, e.Path), b.LeftSize, "base") : null;
+        return AgentViews.StaleNote(baseSide, Side(e.V1, s.V1, "v1"), Side(e.V2, s.V2, "v2"));
     }
 
     /// <summary>One entry as a single line: outcome tag, base path, what each side did, conflict kind.</summary>

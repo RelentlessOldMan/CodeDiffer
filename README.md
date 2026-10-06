@@ -51,7 +51,8 @@ Two exes over one engine (the CodeCompass model):
 - **`CodeDiffer.Cli.exe`** — `compare <left> <right>` (status + reason per file; `--patch` for a
   `git apply`-able patch), `compare3 <base> <v1> <v2>` (3-way: v1 only · v2 only · agreed · merged ·
   conflict), `apply <left> <right> <target> [--write]` (port a change set onto a third tree), `diff <a> <b>`,
-  `blockdiff`, `verify`. `help` lists the flags.
+  `blockdiff`, `verify`, `report <id>` (HTML report of a saved compare; or `--html` on `compare`/`compare3`),
+  `results` (saved compares). `help` lists the flags.
 - **`CodeDiffer.Mcp.exe`** — the stdio MCP server for agents. Publish it outside the build tree (a running
   server locks its exe) and register it:
 
@@ -64,8 +65,15 @@ Two exes over one engine (the CodeCompass model):
   (background, return an id), `get_summary` (constant size), `list_files` (paged/filtered), `get_file_diff`
   (one file, capped — a 2-way patch, or a 3-way merge with diff3 conflict markers; the overflow goes to a
   file), `get_stats`, `export_changeset` (whole patch to a file), `apply_changeset` (port the changes onto a
-  third tree by 3-way merge; dry run unless `write=true`). Compares live in the server's memory for its
-  session (the most recent 8).
+  third tree by 3-way merge; dry run unless `write=true`), `write_report` (the HTML report, for a human),
+  `list_compares` (saved compares; any id reopens without re-comparing).
+
+Every finished compare is saved to a fresh `yyyyMMdd-HHmmss-<id>` directory under
+`%LOCALAPPDATA%\CodeDiffer\results` (override `CODEDIFFER_RESULTS_DIR`; never inside a compared tree): the
+verdicts as JSON lines, plus whatever is derived later (capped patches, apply reports, `report\index.html`).
+The HTML report is a small static page that opens straight from disk: a folder tree with status/reason/path
+filters, identical files hidden, and each file's diff (inline or side by side, intra-line marks; 3-way merges
+with colored conflict sections) loaded only when expanded.
 
 ## Build & test
 

@@ -157,7 +157,7 @@ public class TreeMergerTests : IDisposable
         var t = Lines(1, 30);
         Put("B/c.c", t); Put("V1/c.c", Edit(t, 5, "ONE")); Put("V2/c.c", Edit(t, 5, "TWO"));
         Put("B/o.c", t); Put("V1/o.c", Edit(t, 9, "solo")); Put("V2/o.c", t);
-        var s = new SessionStore().Start3(B, V1, V2, new CompareOptions { Cache = CacheMode.Off });
+        var s = new SessionStore(save: false).Start3(B, V1, V2, new CompareOptions { Cache = CacheMode.Off });
         Assert.True(s.Wait(TimeSpan.FromSeconds(60)));
         Assert.Null(s.Error);
 
@@ -170,6 +170,6 @@ public class TreeMergerTests : IDisposable
         Assert.Contains("<<<<<<< v1", ThreeWayViews.FileDiff(s, "c.c"));
         Assert.Contains("+solo", ThreeWayViews.FileDiff(s, "o.c"));
         Assert.StartsWith("error:", ThreeWayViews.ListFiles(s, status: "nope"));
-        Assert.Throws<DirectoryNotFoundException>(() => new SessionStore().Start3(B, Path.Combine(_dir, "missing"), V2));
+        Assert.Throws<DirectoryNotFoundException>(() => new SessionStore(save: false).Start3(B, Path.Combine(_dir, "missing"), V2));
     }
 }

@@ -20,4 +20,9 @@
     <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
   </ItemGroup>
 
+  <!-- The HTML report shell (static page; the data is written beside it). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Report\report.html" LogicalName="CodeDiffer.Core.Report.report.html" />
+  </ItemGroup>
+
 </Project>

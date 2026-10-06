@@ -176,7 +176,7 @@ public class ChangePorterTests : IDisposable
         Environment.SetEnvironmentVariable("CODEDIFFER_OUT_DIR", Path.Combine(_dir, "out"));
         try
         {
-            var store = new SessionStore();
+            var store = new SessionStore(save: false);
             var s = store.Start(L, R, new CompareOptions { Cache = CacheMode.Off });
             Assert.True(s.Wait(TimeSpan.FromSeconds(30)));
             var text = AgentViews.Apply(s, C, write: false);

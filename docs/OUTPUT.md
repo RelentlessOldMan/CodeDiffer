@@ -82,8 +82,17 @@ whole to a `.patch`), `get_stats`, `export_changeset` (to a file, `literal` for 
 merger the 3-way contract verifies. Per region applied | fuzzy (shifted line) | already | conflict (diff3 is
 strict: a change touching a target edit conflicts, like git). A file with any conflict is never written;
 others are replaced atomically. Binary / EOL- or encoding-only / >16 MB / non-round-trippable files apply
-only when C equals the base byte for byte. Compares live in the server process (most recent 8), not yet an
-on-disk store.
+only when C equals the base byte for byte.
+
+**Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
+`<results>\yyyyMMdd-HHmmss-<id>\` (default `%LOCALAPPDATA%\CodeDiffer\results`, `CODEDIFFER_RESULTS_DIR`
+overrides; refused if it would land inside a compared tree). `compare.json` (format/version, kind, state
+running → done | failed, roots, options, read cost, timings, counts) is written first as "running", so a
+crashed compare leaves an honest trace; `changes.jsonl` (2-way, every path) or `v1.jsonl`/`v2.jsonl`/
+`entries.jsonl` (3-way) hold the verdicts. Only verdicts are stored, not file contents: any compare_id (or
+the directory) reopens without re-comparing (`list_compares`, CLI `results`), and a diff rendered later
+from the live trees warns when a file's size no longer matches what was compared. Capped patches, apply
+reports and the HTML report go into the same directory.
 
 `start_compare3(base, v1, v2)` (CLI `compare3`): base→v1 then base→v2 (sequential, so the second reuses
 the base hashes the first cached instead of re-reading the base over SMB), then every touched path is
@@ -108,6 +117,16 @@ diff is **loaded on expand** from the store (not embedded), so a 90 GB compare i
 loaded on demand. Side-by-side and inline modes; intra-line + syntax highlighting; huge per-file diffs
 virtualize or link to the `.patch`. **Everything is escaped** (the prototype's injection bug). Written
 incrementally to a unique/timestamped dir outside the compared trees.
+
+**Built:** `write_report` / CLI `report <id>` (or `--html` on `compare`/`compare3`) writes `report\` into the
+result directory: `index.html` (static shell, no external resources, light/dark), `data/index.js` (the file
+list + summary) and one `data/d/N.js` per file diff, loaded by script tag on expand — so it opens from disk
+with no server. Tiles double as status filters; path filter (text or glob) and reason filter; a folder tree
+(single-child chains compacted, per-folder status badges, children built only when opened); inline or side
+by side with intra-line marks; 3-way merges colored by v1/base/v2 section with a conflict stepper. Diffs over
+3,000 lines are cut with the whole diff written alongside and linked; files over 16 MB are listed as "large"
+unless `--large`; past `--max-diffs` (5,000) files are listed with a note; the footer totals all of it. All
+data reaches the page as JSON and is inserted as text, never as HTML. Not built: syntax highlighting.
 
 ## 6. Honesty is the guardrail against a silent crush
 

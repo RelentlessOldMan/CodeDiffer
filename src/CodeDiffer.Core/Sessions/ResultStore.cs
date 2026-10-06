@@ -1,0 +1,449 @@
+using System.Globalization;
+using System.Reflection;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using CodeDiffer.Core.Compare;
+using CodeDiffer.Core.Ledger;
+using CodeDiffer.Core.Model;
+using CodeDiffer.Core.ThreeWay;
+using CompareOptions = CodeDiffer.Core.Compare.CompareOptions;
+
+namespace CodeDiffer.Core.Sessions;
+
+/// <summary>A saved compare as listed (from its compare.json only — the change lists are not read).</summary>
+public sealed record SavedCompare(
+    string Dir, string Id, string Kind, string State, DateTime StartedUtc, TimeSpan Elapsed,
+    IReadOnlyList<(string Name, string Path)> Roots, IReadOnlyList<(string Name, long Count)> Counts, string? Error);
+
+/// <summary>
+/// The on-disk result store (docs/OUTPUT.md §1). Each compare gets a fresh directory
+/// <c>&lt;root&gt;\yyyyMMdd-HHmmss-&lt;id&gt;\</c>, never inside a compared tree (we never diff our own output),
+/// never reused. It holds:
+/// <list type="bullet">
+/// <item><c>compare.json</c> — format/version, kind, id, state (running | done | failed), roots, options, read
+///   cost and phase timings, summary counts. Written first as "running", replaced atomically when finished.</item>
+/// <item>2-way: <c>changes.jsonl</c> — one line per path (identical included), sorted by path.</item>
+/// <item>3-way: <c>v1.jsonl</c> / <c>v2.jsonl</c> (each side's 2-way changes) and <c>entries.jsonl</c> (one line per
+///   touched path with its merge outcome).</item>
+/// <item>Whatever is derived from it later: capped <c>.patch</c> files, apply reports, the HTML <c>report\</c>.</item>
+/// </list>
+/// Only the verdicts are stored, not file contents: a reopened compare renders diffs from the live trees and
+/// says so when a file's size no longer matches.
+/// </summary>
+public static class ResultStore
+{
+    public const string Format = "codediffer-result";
+    public const int FormatVersion = 1;
+    public const string MetaName = "compare.json";
+
+    private static readonly JsonWriterOptions LineOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    private static readonly JsonWriterOptions MetaOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, Indented = true };
+
+    /// <summary>CODEDIFFER_RESULTS_DIR, else %LOCALAPPDATA%\CodeDiffer\results.</summary>
+    public static string DefaultRoot =>
+        Environment.GetEnvironmentVariable("CODEDIFFER_RESULTS_DIR") is { Length: > 0 } d
+            ? d
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodeDiffer", "results");
+
+    public static string Version =>
+        typeof(ResultStore).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
+
+    // ---- create / save ----
+
+    /// <summary>Create the compare's fresh directory with a "running" compare.json. Refuses a results root
+    /// inside (or equal to) any compared tree.</summary>
+    public static string CreateRunDir(string root, string id, string kind, IReadOnlyList<string> roots)
+    {
+        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        foreach (var r in roots)
+            if (IsUnder(root, r))
+                throw new ArgumentException($"the results directory {root} is inside the compared tree {r}; a compare never writes into " +
+                                            "its own input — set CODEDIFFER_RESULTS_DIR to somewhere else");
+        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+        var dir = Path.Combine(root, $"{stamp}-{id}");
+        for (int n = 2; Directory.Exists(dir); n++) dir = Path.Combine(root, $"{stamp}-{id}-{n}"); // never reuse
+        Directory.CreateDirectory(dir);
+        WriteMeta(dir, w =>
+        {
+            Head(w, kind, id, "running", DateTime.UtcNow, null);
+            Roots(w, kind, roots);
+        });
+        return dir;
+    }
+
+    /// <summary>Save a finished compare: the change list(s) first, then compare.json flips to "done".</summary>
+    internal static void Save(Session s, object result)
+    {
+        var dir = s.ResultDir!;
+        switch (s, result)
+        {
+            case (CompareSession c, CompareReport r):
+                WriteLines(Path.Combine(dir, "changes.jsonl"), r.Changes, WriteChange);
+                WriteMeta(dir, w =>
+                {
+                    Head(w, "compare", s.Id, "done", s.StartedUtc, s.Elapsed);
+                    Roots(w, "compare", [c.Left, c.Right]);
+                    Options(w, s.Options);
+                    w.WritePropertyName("report");
+                    Stats(w, r);
+                    w.WriteStartObject("counts");
+                    foreach (var st in Enum.GetValues<ChangeStatus>()) w.WriteNumber(Token(st), r.Count(st));
+                    w.WriteEndObject();
+                });
+                break;
+            case (Compare3Session c3, ThreeWayReport t):
+                WriteLines(Path.Combine(dir, "v1.jsonl"), t.V1Report.Changes, WriteChange);
+                WriteLines(Path.Combine(dir, "v2.jsonl"), t.V2Report.Changes, WriteChange);
+                WriteLines(Path.Combine(dir, "entries.jsonl"), t.Entries, WriteEntry);
+                WriteMeta(dir, w =>
+                {
+                    Head(w, "compare3", s.Id, "done", s.StartedUtc, s.Elapsed);
+                    Roots(w, "compare3", [c3.Base, c3.V1, c3.V2]);
+                    Options(w, s.Options);
+                    w.WritePropertyName("v1Report");
+                    Stats(w, t.V1Report);
+                    w.WritePropertyName("v2Report");
+                    Stats(w, t.V2Report);
+                    Timings(w, t.Timings);
+                    w.WriteStartObject("counts");
+                    foreach (var o in Enum.GetValues<Merge3Outcome>()) w.WriteNumber(Token(o), t.Count(o));
+                    w.WriteNumber("conflictRegions", t.Entries.Sum(e => e.ConflictRegions));
+                    w.WriteEndObject();
+                });
+                break;
+            default:
+                throw new ArgumentException($"can't save a {result.GetType().Name} for a {s.GetType().Name}");
+        }
+    }
+
+    /// <summary>Best effort: record that the compare failed (so a listing doesn't show it as still running).</summary>
+    internal static void TryMarkFailed(Session s, Exception ex)
+    {
+        try
+        {
+            var (kind, roots) = s switch
+            {
+                CompareSession c => ("compare", new[] { c.Left, c.Right }),
+                Compare3Session t => ("compare3", new[] { t.Base, t.V1, t.V2 }),
+                _ => ("unknown", Array.Empty<string>()),
+            };
+            WriteMeta(s.ResultDir!, w =>
+            {
+                Head(w, kind, s.Id, "failed", s.StartedUtc, s.Elapsed);
+                Roots(w, kind, roots);
+                w.WriteString("error", (ex.InnerException ?? ex).Message);
+            });
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    // ---- find / list / load ----
+
+    /// <summary>The newest result directory for this id under <paramref name="root"/>, or null.</summary>
+    public static string? Find(string root, string id)
+    {
+        if (!Regex.IsMatch(id, "^[0-9A-Fa-f]{4}$") || !Directory.Exists(root)) return null;
+        return Directory.EnumerateDirectories(root, $"*-{id}*")
+            .Where(d => Regex.IsMatch(Path.GetFileName(d), $"^\\d{{8}}-\\d{{6}}-{id}(-\\d+)?$", RegexOptions.IgnoreCase))
+            .OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    /// <summary>Saved compares, newest first (unreadable directories are skipped).</summary>
+    public static IReadOnlyList<SavedCompare> List(string root, int max = 20)
+    {
+        if (!Directory.Exists(root)) return [];
+        var list = new List<SavedCompare>();
+        foreach (var dir in Directory.EnumerateDirectories(root).OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal))
+        {
+            if (list.Count >= max) break;
+            try
+            {
+                using var doc = ReadMeta(dir);
+                var m = doc.RootElement;
+                var roots = m.GetProperty("roots").EnumerateObject().Select(p => (p.Name, p.Value.GetString() ?? "")).ToList();
+                var counts = m.TryGetProperty("counts", out var cs) ? cs.EnumerateObject().Select(p => (p.Name, p.Value.GetInt64())).ToList() : [];
+                list.Add(new SavedCompare(dir, Str(m, "id"), Str(m, "kind"), Str(m, "state"), Started(m), Elapsed(m), roots, counts,
+                    m.TryGetProperty("error", out var e) ? e.GetString() : null));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or KeyNotFoundException or InvalidOperationException) { }
+        }
+        return list;
+    }
+
+    /// <summary>Reopen a finished compare. Throws <see cref="InvalidDataException"/> if it is not a finished
+    /// CodeDiffer result (unknown format/version, still running, failed, or a data file is missing).</summary>
+    public static Session Load(string dir)
+    {
+        dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+        using var doc = ReadMeta(dir);
+        var m = doc.RootElement;
+        var id = Str(m, "id");
+        var state = Str(m, "state");
+        if (state != "done")
+            throw new InvalidDataException(state == "failed"
+                ? $"compare {id} failed: {(m.TryGetProperty("error", out var e) ? e.GetString() : "?")}"
+                : $"compare {id} in {dir} never finished (state '{state}') — the process running it stopped");
+        var opt = m.GetProperty("options");
+        var options = new CompareOptions
+        {
+            Cache = Enum.TryParse<CacheMode>(Str(opt, "cache"), true, out var cm) ? cm : CacheMode.On,
+            Parallelism = Math.Clamp(opt.GetProperty("threads").GetInt32(), 1, 64),
+            StrictStat = opt.GetProperty("strictStat").GetBoolean(),
+        };
+        var roots = m.GetProperty("roots");
+        try
+        {
+            return Str(m, "kind") switch
+            {
+                "compare" => new CompareSession(id, Str(roots, "left"), Str(roots, "right"), options,
+                    ReadReport(Path.Combine(dir, "changes.jsonl"), m.GetProperty("report")), dir, Started(m), Elapsed(m), reopened: true),
+                "compare3" => new Compare3Session(id, Str(roots, "base"), Str(roots, "v1"), Str(roots, "v2"), options, new ThreeWayReport
+                {
+                    V1Report = ReadReport(Path.Combine(dir, "v1.jsonl"), m.GetProperty("v1Report")),
+                    V2Report = ReadReport(Path.Combine(dir, "v2.jsonl"), m.GetProperty("v2Report")),
+                    Entries = ReadLines(Path.Combine(dir, "entries.jsonl"), ReadEntry),
+                    Timings = ReadTimings(m),
+                }, dir, Started(m), Elapsed(m)),
+                var k => throw new InvalidDataException($"unknown compare kind '{k}' in {dir}"),
+            };
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or KeyNotFoundException or JsonException or InvalidOperationException or FormatException)
+        {
+            throw new InvalidDataException($"result {dir} is incomplete or corrupt: {ex.Message}", ex);
+        }
+    }
+
+    // ---- compare.json ----
+
+    private static void WriteMeta(string dir, Action<Utf8JsonWriter> body)
+    {
+        var path = Path.Combine(dir, MetaName);
+        var tmp = path + ".tmp";
+        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+        using (var w = new Utf8JsonWriter(fs, MetaOptions))
+        {
+            w.WriteStartObject();
+            body(w);
+            w.WriteEndObject();
+        }
+        File.Move(tmp, path, overwrite: true);
+    }
+
+    private static JsonDocument ReadMeta(string dir)
+    {
+        var path = Path.Combine(dir, MetaName);
+        if (!File.Exists(path)) throw new InvalidDataException($"{dir} is not a CodeDiffer result (no {MetaName})");
+        var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+        var m = doc.RootElement;
+        if (!m.TryGetProperty("format", out var f) || f.GetString() != Format)
+        {
+            doc.Dispose();
+            throw new InvalidDataException($"{path} is not a CodeDiffer result");
+        }
+        if (!m.TryGetProperty("version", out var v) || v.GetInt32() != FormatVersion)
+        {
+            doc.Dispose();
+            throw new InvalidDataException($"{path}: result format version {v} is not supported (this build reads {FormatVersion})");
+        }
+        return doc;
+    }
+
+    private static void Head(Utf8JsonWriter w, string kind, string id, string state, DateTime startedUtc, TimeSpan? elapsed)
+    {
+        w.WriteString("format", Format);
+        w.WriteNumber("version", FormatVersion);
+        w.WriteString("kind", kind);
+        w.WriteString("id", id);
+        w.WriteString("state", state);
+        w.WriteString("tool", Version);
+        w.WriteString("started", startedUtc.ToString("O", CultureInfo.InvariantCulture));
+        if (elapsed is { } e) w.WriteNumber("elapsedSeconds", Math.Round(e.TotalSeconds, 3));
+    }
+
+    private static void Roots(Utf8JsonWriter w, string kind, IReadOnlyList<string> roots)
+    {
+        string[] names = kind == "compare3" ? ["base", "v1", "v2"] : ["left", "right"];
+        w.WriteStartObject("roots");
+        for (int i = 0; i < Math.Min(names.Length, roots.Count); i++) w.WriteString(names[i], roots[i]);
+        w.WriteEndObject();
+    }
+
+    private static void Options(Utf8JsonWriter w, CompareOptions o)
+    {
+        w.WriteStartObject("options");
+        w.WriteString("cache", o.Cache.ToString().ToLowerInvariant());
+        w.WriteNumber("threads", o.Parallelism);
+        w.WriteBoolean("strictStat", o.StrictStat);
+        w.WriteEndObject();
+    }
+
+    private static void Stats(Utf8JsonWriter w, CompareReport r)
+    {
+        w.WriteStartObject();
+        w.WriteNumber("comparedPairs", r.ComparedPairs);
+        w.WriteNumber("cacheHits", r.CacheHits);
+        w.WriteNumber("codeCompassHits", r.CodeCompassHits);
+        w.WriteNumber("unstableFiles", r.UnstableFiles);
+        w.WriteNumber("pendingFiles", r.PendingFiles);
+        w.WriteNumber("bytesRead", r.BytesRead);
+        w.WriteNumber("leftDroppedDirectories", r.LeftDroppedDirectories);
+        w.WriteNumber("rightDroppedDirectories", r.RightDroppedDirectories);
+        Timings(w, r.Timings);
+        w.WriteEndObject();
+    }
+
+    private static void Timings(Utf8JsonWriter w, IReadOnlyList<(string Phase, TimeSpan Elapsed)> timings)
+    {
+        w.WriteStartArray("timings");
+        foreach (var (phase, elapsed) in timings)
+        {
+            w.WriteStartObject();
+            w.WriteString("phase", phase);
+            w.WriteNumber("seconds", Math.Round(elapsed.TotalSeconds, 3));
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static List<(string, TimeSpan)> ReadTimings(JsonElement e)
+        => e.TryGetProperty("timings", out var t)
+            ? t.EnumerateArray().Select(x => (Str(x, "phase"), TimeSpan.FromSeconds(x.GetProperty("seconds").GetDouble()))).ToList()
+            : [];
+
+    private static CompareReport ReadReport(string changesFile, JsonElement stats)
+        => new(ReadLines(changesFile, ReadChange),
+               stats.GetProperty("leftDroppedDirectories").GetInt32(), stats.GetProperty("rightDroppedDirectories").GetInt32())
+        {
+            ComparedPairs = stats.GetProperty("comparedPairs").GetInt32(),
+            CacheHits = stats.GetProperty("cacheHits").GetInt32(),
+            CodeCompassHits = stats.GetProperty("codeCompassHits").GetInt32(),
+            UnstableFiles = stats.GetProperty("unstableFiles").GetInt32(),
+            PendingFiles = stats.GetProperty("pendingFiles").GetInt32(),
+            BytesRead = stats.GetProperty("bytesRead").GetInt64(),
+            Timings = ReadTimings(stats),
+        };
+
+    // ---- jsonl ----
+
+    private static void WriteLines<T>(string path, IEnumerable<T> items, Action<Utf8JsonWriter, T> write)
+    {
+        var tmp = path + ".tmp";
+        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
+        {
+            var w = new Utf8JsonWriter(fs, LineOptions);
+            foreach (var item in items)
+            {
+                write(w, item);
+                w.Flush();
+                fs.WriteByte((byte)'\n');
+                w.Reset(fs);
+            }
+            w.Dispose();
+        }
+        File.Move(tmp, path, overwrite: true);
+    }
+
+    private static List<T> ReadLines<T>(string path, Func<JsonElement, T> read)
+    {
+        var list = new List<T>();
+        foreach (var line in File.ReadLines(path))
+        {
+            if (line.Length == 0) continue;
+            using var doc = JsonDocument.Parse(line);
+            list.Add(read(doc.RootElement));
+        }
+        return list;
+    }
+
+    private static void WriteChange(Utf8JsonWriter w, FileChange c) => WriteChange(w, c, null);
+
+    private static void WriteChange(Utf8JsonWriter w, FileChange c, string? name)
+    {
+        if (name is null) w.WriteStartObject(); else w.WriteStartObject(name);
+        w.WriteString("path", c.RelativePath);
+        w.WriteString("status", Token(c.Status));
+        if (c.Reason is { } r) w.WriteString("reason", CanonicalTokens.Token(r));
+        w.WriteNumber("leftSize", c.LeftSize);
+        w.WriteNumber("rightSize", c.RightSize);
+        if (c.RenamedFrom is { } f) w.WriteString("from", f);
+        if (c.SimilarityMilli is { } s) w.WriteNumber("similarity", s);
+        w.WriteEndObject();
+    }
+
+    private static FileChange ReadChange(JsonElement e) => new(
+        Str(e, "path"),
+        Enum.Parse<ChangeStatus>(Str(e, "status"), ignoreCase: true),
+        e.TryGetProperty("reason", out var r) ? CanonicalTokens.Reason(r.GetString()!) : null,
+        e.GetProperty("leftSize").GetInt64(),
+        e.GetProperty("rightSize").GetInt64(),
+        e.TryGetProperty("from", out var f) ? f.GetString() : null,
+        e.TryGetProperty("similarity", out var s) ? s.GetInt32() : null);
+
+    private static void WriteEntry(Utf8JsonWriter w, Merge3Entry e)
+    {
+        w.WriteStartObject();
+        w.WriteString("path", e.Path);
+        w.WriteString("outcome", Token(e.Outcome));
+        if (e.ConflictKind is { } k) w.WriteString("kind", k);
+        w.WriteNumber("conflicts", e.ConflictRegions);
+        w.WriteNumber("clean", e.CleanRegions);
+        if (e.MergedPath is { } m) w.WriteString("merged", m);
+        if (e.Note is { } n) w.WriteString("note", n);
+        if (e.V1 is { } v1) WriteChange(w, v1, "v1");
+        if (e.V2 is { } v2) WriteChange(w, v2, "v2");
+        w.WriteEndObject();
+    }
+
+    private static Merge3Entry ReadEntry(JsonElement e) => new(
+        Str(e, "path"),
+        e.TryGetProperty("v1", out var v1) ? ReadChange(v1) : null,
+        e.TryGetProperty("v2", out var v2) ? ReadChange(v2) : null,
+        Outcome(Str(e, "outcome")),
+        e.TryGetProperty("kind", out var k) ? k.GetString() : null,
+        e.GetProperty("conflicts").GetInt32(),
+        e.GetProperty("clean").GetInt32(),
+        e.TryGetProperty("merged", out var m) ? m.GetString() : null,
+        e.TryGetProperty("note", out var n) ? n.GetString() : null);
+
+    // ---- tokens / helpers ----
+
+    internal static string Token(ChangeStatus s) => s.ToString().ToLowerInvariant();
+
+    internal static string Token(Merge3Outcome o) => o switch
+    {
+        Merge3Outcome.V1Only => "v1only",
+        Merge3Outcome.V2Only => "v2only",
+        Merge3Outcome.Agreed => "agreed",
+        Merge3Outcome.Merged => "merged",
+        _ => "conflict",
+    };
+
+    private static Merge3Outcome Outcome(string t) => t switch
+    {
+        "v1only" => Merge3Outcome.V1Only,
+        "v2only" => Merge3Outcome.V2Only,
+        "agreed" => Merge3Outcome.Agreed,
+        "merged" => Merge3Outcome.Merged,
+        "conflict" => Merge3Outcome.Conflict,
+        _ => throw new FormatException($"unknown outcome '{t}'"),
+    };
+
+    private static string Str(JsonElement e, string name) => e.GetProperty(name).GetString() ?? "";
+
+    private static DateTime Started(JsonElement m)
+        => DateTime.Parse(Str(m, "started"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+
+    private static TimeSpan Elapsed(JsonElement m)
+        => m.TryGetProperty("elapsedSeconds", out var e) ? TimeSpan.FromSeconds(e.GetDouble()) : TimeSpan.Zero;
+
+    /// <summary>Is <paramref name="path"/> equal to or inside <paramref name="tree"/>? (case-insensitive on Windows)</summary>
+    internal static bool IsUnder(string path, string tree)
+    {
+        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var p = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)) + Path.DirectorySeparatorChar;
+        var t = Path.TrimEndingDirectorySeparator(Path.GetFullPath(tree)) + Path.DirectorySeparatorChar;
+        return p.StartsWith(t, cmp);
+    }
+}

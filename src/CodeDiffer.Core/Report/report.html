@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeDiffer report</title>
+<style>
+:root {
+  --bg: #fbfbfa; --panel: #ffffff; --fg: #1d1f21; --muted: #6a6f75; --border: #dfe1e4; --hover: #f1f3f5;
+  --accent: #2f6fde; --warn-bg: #fff5d6; --warn-fg: #6b4e00;
+  --add-bg: #e6f6ea; --add-hl: #b5e5c0; --del-bg: #fdecec; --del-hl: #f6c2c2; --hunk-bg: #eef3fb; --meta-fg: #59606b;
+  --t-M: #b26b00; --t-A: #1f8a3b; --t-D: #c4372f; --t-R: #6c4fc4; --t-eq: #7b8088;
+  --t-CF: #c4372f; --t-MG: #1f8a3b; --t-AG: #2f6fde; --t-v1: #b26b00; --t-v2: #6c4fc4;
+  --v1-bg: #fff1dc; --base-bg: #eef0f3; --v2-bg: #efe9fc; --mk-bg: #e3e6ea; --tag-fg: #ffffff;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15171a; --panel: #1c1f23; --fg: #e3e5e8; --muted: #9aa1a9; --border: #30353b; --hover: #252a30;
+    --accent: #6ea0ff; --warn-bg: #3a3014; --warn-fg: #f2d68a;
+    --add-bg: #12301c; --add-hl: #1f5a33; --del-bg: #3a1a1a; --del-hl: #6b2a2a; --hunk-bg: #1d2738; --meta-fg: #a3abb5;
+    --t-M: #e2a14a; --t-A: #5fcf7d; --t-D: #f07a72; --t-R: #a993f0; --t-eq: #8a9099;
+    --t-CF: #f07a72; --t-MG: #5fcf7d; --t-AG: #6ea0ff; --t-v1: #e2a14a; --t-v2: #a993f0;
+    --v1-bg: #3a2c14; --base-bg: #262a30; --v2-bg: #2b2340; --mk-bg: #30353b; --tag-fg: #15171a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15171a; --panel: #1c1f23; --fg: #e3e5e8; --muted: #9aa1a9; --border: #30353b; --hover: #252a30;
+  --accent: #6ea0ff; --warn-bg: #3a3014; --warn-fg: #f2d68a;
+  --add-bg: #12301c; --add-hl: #1f5a33; --del-bg: #3a1a1a; --del-hl: #6b2a2a; --hunk-bg: #1d2738; --meta-fg: #a3abb5;
+  --t-M: #e2a14a; --t-A: #5fcf7d; --t-D: #f07a72; --t-R: #a993f0; --t-eq: #8a9099;
+  --t-CF: #f07a72; --t-MG: #5fcf7d; --t-AG: #6ea0ff; --t-v1: #e2a14a; --t-v2: #a993f0;
+  --v1-bg: #3a2c14; --base-bg: #262a30; --v2-bg: #2b2340; --mk-bg: #30353b; --tag-fg: #15171a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1400px; margin: 0 auto; padding: 20px 16px 60px; }
+h1 { font-size: 20px; margin: 0 0 6px; font-weight: 600; }
+.roots { font-family: var(--mono); font-size: 12.5px; color: var(--muted); display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 10px; }
+.roots b { color: var(--fg); font-weight: 600; }
+.roots span { overflow-wrap: anywhere; }
+.meta { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+.notes { margin: 12px 0 0; padding: 0; list-style: none; }
+.notes li { background: var(--warn-bg); color: var(--warn-fg); border-radius: 6px; padding: 7px 10px; margin-top: 6px; font-size: 13px; }
+.tiles { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 12px; }
+.tile { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; min-width: 104px; cursor: pointer; text-align: left; color: inherit; font: inherit; }
+.tile .n { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; display: block; }
+.tile .l { font-size: 12px; color: var(--muted); }
+.tile.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.tile:disabled { cursor: default; opacity: .6; }
+.tile.info { cursor: default; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: sticky; top: 0; background: var(--bg); padding: 8px 0; z-index: 2; border-bottom: 1px solid var(--border); }
+.controls input[type=search] { flex: 1 1 260px; min-width: 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; }
+.controls select, .controls button { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; cursor: pointer; }
+.controls button.on { border-color: var(--accent); color: var(--accent); }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; }
+.seg button:first-child { border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+.shown { color: var(--muted); font-size: 12.5px; margin-left: auto; }
+.tree { margin-top: 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.row { display: flex; align-items: center; gap: 8px; padding: 3px 10px; border-top: 1px solid var(--border); cursor: pointer; min-width: 0; }
+.tree > .row:first-child, .tree > div:first-child > .row:first-child { border-top: 0; }
+.row:hover { background: var(--hover); }
+.row .caret { width: 12px; flex: none; color: var(--muted); font-size: 10px; }
+.row .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 13px; }
+.row.dir .name { font-weight: 600; }
+.row .extra { flex: none; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.row .warn { color: var(--warn-fg); background: var(--warn-bg); border-radius: 4px; padding: 0 5px; font-size: 11.5px; flex: none; }
+.tag { flex: none; font: 600 11px/18px var(--mono); min-width: 22px; text-align: center; border-radius: 4px; color: var(--tag-fg); padding: 0 4px; }
+.badges { display: flex; gap: 4px; flex: none; }
+.badges .tag { font-weight: 500; }
+.panel { border-top: 1px solid var(--border); background: var(--bg); padding: 8px 10px 12px; }
+.panel .head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+.panel .head a { color: var(--accent); }
+.panel .head .w { color: var(--warn-fg); background: var(--warn-bg); padding: 2px 6px; border-radius: 4px; }
+.panel .msg { font-size: 13px; color: var(--muted); }
+.diff { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+table.d { border-collapse: collapse; font: 12.5px/1.5 var(--mono); width: 100%; }
+table.d td { padding: 0 8px; white-space: pre; vertical-align: top; }
+table.d td.ln { color: var(--muted); text-align: right; user-select: none; width: 1%; border-right: 1px solid var(--border); }
+table.d td.sg { width: 1%; user-select: none; color: var(--muted); padding: 0 2px 0 6px; }
+table.d tr.add td.tx, table.d tr.add td.sg { background: var(--add-bg); }
+table.d tr.del td.tx, table.d tr.del td.sg { background: var(--del-bg); }
+table.d td.add { background: var(--add-bg); }
+table.d td.del { background: var(--del-bg); }
+table.d td.void { background: var(--hover); }
+table.d .hl-add { background: var(--add-hl); border-radius: 2px; }
+table.d .hl-del { background: var(--del-hl); border-radius: 2px; }
+table.d tr.hunk td { background: var(--hunk-bg); color: var(--meta-fg); }
+table.d tr.meta td { color: var(--meta-fg); font-weight: 600; }
+table.d tr.v1 td.tx { background: var(--v1-bg); }
+table.d tr.base td.tx { background: var(--base-bg); }
+table.d tr.v2 td.tx { background: var(--v2-bg); }
+table.d tr.mk td { background: var(--mk-bg); font-weight: 600; }
+table.d td.half { width: 50%; }
+.cnav button { padding: 2px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel); color: var(--fg); cursor: pointer; font: inherit; font-size: 12px; }
+.empty { padding: 24px; text-align: center; color: var(--muted); }
+footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
+@media (max-width: 640px) {
+  .row .extra { display: none; }
+  .shown { margin-left: 0; width: 100%; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">CodeDiffer report</h1>
+    <div class="roots" id="roots"></div>
+    <div class="meta" id="meta"></div>
+    <ul class="notes" id="notes"></ul>
+  </header>
+  <div class="tiles" id="tiles"></div>
+  <div class="controls">
+    <input type="search" id="q" placeholder="Filter paths: text, or a glob like src/**/*.c" aria-label="Filter paths">
+    <select id="reason" aria-label="Reason" hidden></select>
+    <span class="seg" role="group" aria-label="Diff layout">
+      <button type="button" id="m-inline" class="on">Inline</button><button type="button" id="m-split">Side by side</button>
+    </span>
+    <button type="button" id="expand">Expand all</button>
+    <button type="button" id="collapse">Collapse all</button>
+    <span class="shown" id="shown"></span>
+  </div>
+  <div class="tree" id="tree"><div class="empty">Loading…</div></div>
+  <footer id="foot"></footer>
+</main>
+<script>
+"use strict";
+// Every value from the data files is inserted with textContent / DOM properties — never as HTML.
+var CD = (function () {
+  var meta = null, files = [], diffs = {}, waiting = {};
+  var state = { tags: new Set(), q: "", reason: "", mode: "inline", open: new Set(), panels: new Map() };
+  var TAGS2 = [["M", "modified", "modified"], ["A", "added", "added"], ["D", "removed", "removed"], ["R", "renamed", "renamed"], ["=", "identical", "identical"]];
+  var TAGS3 = [["CF", "conflict", "conflict"], ["MG", "merged", "merged cleanly"], ["AG", "agreed", "agreed"], ["v1", "v1only", "v1 only"], ["v2", "v2only", "v2 only"]];
+  var COLOR = { "M": "--t-M", "A": "--t-A", "D": "--t-D", "R": "--t-R", "=": "--t-eq", "CF": "--t-CF", "MG": "--t-MG", "AG": "--t-AG", "v1": "--t-v1", "v2": "--t-v2" };
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = String(text);
+    return e;
+  }
+  function $(id) { return document.getElementById(id); }
+  function fmt(n) { return Number(n).toLocaleString("en-US"); }
+  function bytes(b) {
+    if (b >= 1073741824) return (b / 1073741824).toFixed(1) + " GB";
+    if (b >= 1048576) return (b / 1048576).toFixed(1) + " MB";
+    if (b >= 1024) return (b / 1024).toFixed(1) + " KB";
+    return b + " B";
+  }
+  function clock(s) {
+    s = Math.round(s); var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+    return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0");
+  }
+  function tagEl(t, text) {
+    var e = el("span", "tag", text === undefined ? t : text);
+    e.style.background = "var(" + (COLOR[t] || "--t-eq") + ")";
+    return e;
+  }
+  function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+
+  // ---- data entry points (called by data/index.js and data/d/N.js) ----
+
+  function index(data) {
+    meta = data; files = data.files || [];
+    files.forEach(function (f, i) { f.i = i; });
+    var tags = meta.kind === "compare3" ? TAGS3 : TAGS2;
+    tags.forEach(function (t) { if (t[0] !== "=") state.tags.add(t[0]); });
+    var m = store("codediffer.mode"); if (m === "split" || m === "inline") state.mode = m;
+    header(); tiles(); controls(); render();
+  }
+
+  function diff(i, d) {
+    diffs[i] = d;
+    (waiting[i] || []).forEach(function (cb) { cb(d); });
+    delete waiting[i];
+  }
+
+  function load(i, cb) {
+    if (diffs[i]) return cb(diffs[i]);
+    if (waiting[i]) { waiting[i].push(cb); return; }
+    waiting[i] = [cb];
+    var s = document.createElement("script");
+    s.src = "data/d/" + i + ".js";
+    s.onerror = function () { var w = waiting[i] || []; delete waiting[i]; w.forEach(function (f) { f(null); }); };
+    document.head.appendChild(s);
+  }
+
+  // ---- header / tiles / controls ----
+
+  function header() {
+    var three = meta.kind === "compare3";
+    document.title = "CodeDiffer · " + (three ? "3-way " : "") + "compare " + meta.id;
+    $("title").textContent = (three ? "3-way compare " : "Compare ") + meta.id;
+    var roots = $("roots");
+    Object.keys(meta.roots).forEach(function (k) { roots.appendChild(el("b", null, k)); roots.appendChild(el("span", null, meta.roots[k])); });
+    var started = new Date(meta.started);
+    $("meta").textContent = "Run " + started.toLocaleString() + " · took " + clock(meta.elapsedSeconds) + " · CodeDiffer " + meta.tool +
+      (three ? " · " + fmt(meta.baseFiles) + " base files · " + fmt(meta.conflictRegions) + " conflict regions" : "");
+    var notes = $("notes");
+    (meta.notes || []).forEach(function (n) { notes.appendChild(el("li", null, n)); });
+    var r = meta.report;
+    var foot = "Diffs: " + fmt(r.rendered) + " rendered";
+    if (r.capped) foot += " · " + fmt(r.capped) + " cut at " + fmt(r.maxLines) + " lines (full diff linked)";
+    if (r.large) foot += " · " + fmt(r.large) + " large file(s) not block-diffed";
+    if (r.notRendered) foot += " · " + fmt(r.notRendered) + " past the " + fmt(r.maxDiffs) + "-file limit";
+    if (r.unreadable) foot += " · " + fmt(r.unreadable) + " unreadable";
+    if (meta.resultDir) foot += " · saved result: " + meta.resultDir;
+    $("foot").textContent = foot;
+  }
+
+  function tiles() {
+    var box = $("tiles");
+    var defs = meta.kind === "compare3" ? TAGS3 : TAGS2;
+    defs.forEach(function (d) {
+      var n = (meta.counts && meta.counts[d[1]]) || 0;
+      var b = el("button", "tile");
+      b.type = "button";
+      var num = el("span", "n", fmt(n)); num.style.color = "var(" + COLOR[d[0]] + ")";
+      b.appendChild(num); b.appendChild(el("span", "l", d[2]));
+      var unlisted = d[0] === "=" && !meta.identicalListed;
+      if (unlisted) { b.disabled = true; b.title = "Identical files are counted, not listed (re-run the report with --include-identical)"; }
+      if (state.tags.has(d[0])) b.classList.add("on");
+      b.addEventListener("click", function () {
+        if (state.tags.has(d[0])) state.tags.delete(d[0]); else state.tags.add(d[0]);
+        b.classList.toggle("on", state.tags.has(d[0]));
+        render();
+      });
+      box.appendChild(b);
+    });
+  }
+
+  function controls() {
+    var q = $("q"), timer = null;
+    q.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(function () { state.q = q.value.trim(); render(); }, 150); });
+    if (meta.kind !== "compare3" && meta.reasons && Object.keys(meta.reasons).length > 0) {
+      var sel = $("reason"); sel.hidden = false;
+      var any = el("option", null, "any reason"); any.value = ""; sel.appendChild(any);
+      Object.keys(meta.reasons).forEach(function (k) { var o = el("option", null, k + " (" + fmt(meta.reasons[k]) + ")"); o.value = k; sel.appendChild(o); });
+      sel.addEventListener("change", function () { state.reason = sel.value; render(); });
+    }
+    function setMode(m) {
+      state.mode = m; store("codediffer.mode", m);
+      $("m-inline").classList.toggle("on", m === "inline"); $("m-split").classList.toggle("on", m === "split");
+      state.panels.forEach(function (p, i) { drawPanel(p, files[i]); });
+    }
+    $("m-inline").addEventListener("click", function () { setMode("inline"); });
+    $("m-split").addEventListener("click", function () { setMode("split"); });
+    setMode(state.mode);
+    $("expand").addEventListener("click", function () { walkDirs(current, function (d) { state.open.add(d.path); }); render(); });
+    $("collapse").addEventListener("click", function () { state.open.clear(); render(); });
+  }
+
+  // ---- filtering ----
+
+  function globRe(p) {
+    var nameOnly = p.indexOf("/") < 0, rx = "^";
+    for (var i = 0; i < p.length; i++) {
+      var c = p[i];
+      if (c === "*" && p[i + 1] === "*") { if (p[i + 2] === "/") { rx += "(?:.*/)?"; i += 2; } else { rx += ".*"; i++; } }
+      else if (c === "*") rx += "[^/]*";
+      else if (c === "?") rx += "[^/]";
+      else rx += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+    var re = new RegExp(rx + "$", "i");
+    return nameOnly ? function (s) { return re.test(s.slice(s.lastIndexOf("/") + 1)); } : function (s) { return re.test(s); };
+  }
+
+  function matcher() {
+    var q = state.q.replace(/\\/g, "/");
+    if (!q) return null;
+    if (/[*?]/.test(q)) return globRe(q);
+    var low = q.toLowerCase();
+    return function (s) { return s.toLowerCase().indexOf(low) >= 0; };
+  }
+
+  function filtered() {
+    var m = matcher();
+    return files.filter(function (f) {
+      if (!state.tags.has(f.t)) return false;
+      if (state.reason && f.r !== state.reason) return false;
+      return !m || m(f.p) || (f.f && m(f.f));
+    });
+  }
+
+  // ---- tree ----
+
+  var current = null;
+
+  function build(list) {
+    var root = { name: "", path: "", dirs: new Map(), files: [], count: 0, tags: {} };
+    list.forEach(function (f) {
+      var parts = f.p.split("/"), node = root;
+      for (var k = 0; k < parts.length - 1; k++) {
+        node.count++; node.tags[f.t] = (node.tags[f.t] || 0) + 1;
+        var next = node.dirs.get(parts[k]);
+        if (!next) { next = { name: parts[k], path: (node.path ? node.path + "/" : "") + parts[k], dirs: new Map(), files: [], count: 0, tags: {} }; node.dirs.set(parts[k], next); }
+        node = next;
+      }
+      node.count++; node.tags[f.t] = (node.tags[f.t] || 0) + 1;
+      node.files.push(f);
+    });
+    (function compact(n) {
+      n.dirs.forEach(function (d) {
+        while (d.files.length === 0 && d.dirs.size === 1) {
+          var only = d.dirs.values().next().value;
+          d.name += "/" + only.name; d.path = only.path; d.dirs = only.dirs; d.files = only.files;
+        }
+        compact(d);
+      });
+    })(root);
+    return root;
+  }
+
+  function walkDirs(node, fn) { if (!node) return; node.dirs.forEach(function (d) { fn(d); walkDirs(d, fn); }); }
+
+  function render() {
+    var list = filtered();
+    current = build(list);
+    state.panels.clear();
+    $("shown").textContent = fmt(list.length) + " of " + fmt(files.length) + " listed file(s) shown";
+    var tree = $("tree");
+    tree.replaceChildren();
+    if (list.length === 0) { tree.appendChild(el("div", "empty", files.length === 0 ? "No changed files." : "Nothing matches the filters.")); return; }
+    var openAll = list.length <= 300;
+    if (openAll) walkDirs(current, function (d) { state.open.add(d.path); });
+    fill(tree, current, 0);
+  }
+
+  function fill(box, node, depth) {
+    Array.from(node.dirs.values()).sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; })
+      .forEach(function (d) { box.appendChild(dirRow(d, depth)); });
+    node.files.forEach(function (f) { box.appendChild(fileRow(f, depth)); });
+  }
+
+  function dirRow(d, depth) {
+    var wrap = el("div");
+    var row = el("div", "row dir");
+    row.style.paddingLeft = (10 + depth * 16) + "px";
+    var caret = el("span", "caret", state.open.has(d.path) ? "▼" : "▶");
+    row.appendChild(caret);
+    row.appendChild(el("span", "name", d.name + "/"));
+    var badges = el("span", "badges");
+    Object.keys(d.tags).forEach(function (t) { badges.appendChild(tagEl(t, t + " " + fmt(d.tags[t]))); });
+    row.appendChild(badges);
+    var kids = null;
+    function sync() {
+      var open = state.open.has(d.path);
+      caret.textContent = open ? "▼" : "▶";
+      if (open && !kids) { kids = el("div"); fill(kids, d, depth + 1); wrap.appendChild(kids); }
+      if (kids) kids.hidden = !open;
+    }
+    row.addEventListener("click", function () { if (state.open.has(d.path)) state.open.delete(d.path); else state.open.add(d.path); sync(); });
+    wrap.appendChild(row);
+    sync();
+    return wrap;
+  }
+
+  function fileRow(f, depth) {
+    var wrap = el("div");
+    var row = el("div", "row file");
+    row.style.paddingLeft = (10 + depth * 16 + 12) + "px";
+    row.appendChild(tagEl(f.t));
+    var base = f.p.slice(f.p.lastIndexOf("/") + 1);
+    var name = el("span", "name", f.f ? f.f + " → " + base : base);
+    name.title = f.f ? f.f + " → " + f.p : f.p;
+    row.appendChild(name);
+    if (f.w) { var w = el("span", "warn", "changed since"); w.title = f.w; row.appendChild(w); }
+    row.appendChild(el("span", "extra", extra(f)));
+    var panel = null;
+    row.addEventListener("click", function () {
+      if (panel) { panel.remove(); panel = null; state.panels.delete(f.i); return; }
+      panel = el("div", "panel");
+      wrap.appendChild(panel);
+      state.panels.set(f.i, panel);
+      drawPanel(panel, f);
+    });
+    wrap.appendChild(row);
+    return wrap;
+  }
+
+  function extra(f) {
+    var bits = [];
+    if (meta.kind === "compare3") {
+      bits.push("v1 " + f.s1 + " · v2 " + f.s2);
+      if (f.ck && f.ck !== "content") bits.push(f.ck); // "content" is already implied by the two sides
+      if (f.c !== undefined) bits.push(f.c + " conflict / " + f.cl + " clean");
+    } else {
+      if (f.r) bits.push(f.r);
+      if (f.a !== undefined) bits.push("+" + fmt(f.a) + " −" + fmt(f.x));
+      else if (f.k && f.k !== "text") bits.push(f.k);
+      if (f.sim !== undefined) bits.push(Math.floor(f.sim / 10) + "% similar");
+      bits.push(f.t === "A" ? bytes(f.rs) : f.t === "D" ? bytes(f.ls) : f.ls === f.rs ? bytes(f.rs) : bytes(f.ls) + " → " + bytes(f.rs));
+    }
+    if (f.n) bits.push("ⓘ");
+    return bits.join(" · ");
+  }
+
+  // ---- one file's panel ----
+
+  function drawPanel(panel, f) {
+    panel.replaceChildren();
+    var head = el("div", "head");
+    head.appendChild(el("span", null, f.f ? f.f + " → " + f.p : f.p));
+    if (f.k) head.appendChild(el("span", null, f.k));
+    if (f.n) head.appendChild(el("span", null, f.n));
+    if (f.w) head.appendChild(el("span", "w", f.w));
+    panel.appendChild(head);
+    if (!f.d) { if (!f.n) panel.appendChild(el("div", "msg", "No diff for this file.")); return; }
+    var body = el("div", "msg", "Loading diff…");
+    panel.appendChild(body);
+    load(f.i, function (d) {
+      if (!panel.isConnected && !state.panels.has(f.i)) return;
+      if (!d) { body.textContent = "This file's diff could not be loaded (data/d/" + f.i + ".js is missing)."; return; }
+      if (d.mode === "merge" && d.blocks) {
+        head.appendChild(el("span", null, d.shownBlocks < d.blocks
+          ? "showing " + fmt(d.shownBlocks) + " of " + fmt(d.blocks) + " conflict blocks (" + fmt(d.shown) + " of " + fmt(d.total) + " lines)"
+          : fmt(d.blocks) + " conflict block(s) with context · " + fmt(d.total) + " lines in the merged file"));
+      } else if (d.full) {
+        head.appendChild(el("span", null, "showing " + fmt(d.shown) + " of " + fmt(d.total) + " lines"));
+      }
+      if (d.full) {
+        var a = el("a", null, "whole " + (d.mode === "merge" ? "merged file" : "patch"));
+        a.href = d.full; // a relative path we wrote ourselves (full/N.*), never data from the trees
+        head.appendChild(a);
+      }
+      var view = d.mode === "merge" ? mergeView(d, head) : (state.mode === "split" ? splitView(parse(d.text)) : inlineView(parse(d.text)));
+      body.replaceWith(view);
+    });
+  }
+
+  // Unified patch -> rows: {k: meta|hunk|ctx|add|del|nonl, t: text, o: old line, n: new line}
+  function parse(text) {
+    var out = [], o = 0, n = 0, inHunk = false;
+    var lines = text.split("\n"); if (lines.length && lines[lines.length - 1] === "") lines.pop();
+    lines.forEach(function (l) {
+      var m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+      if (m) { o = +m[1]; n = +m[2]; inHunk = true; out.push({ k: "hunk", t: l }); return; }
+      if (l.indexOf("diff --git ") === 0 || l.indexOf("--- v1's change") === 0 || l.indexOf("--- v2's change") === 0) inHunk = false;
+      if (!inHunk) { out.push({ k: "meta", t: l }); return; }
+      var c = l.charAt(0);
+      if (c === "+") out.push({ k: "add", t: l.slice(1), n: n++ });
+      else if (c === "-") out.push({ k: "del", t: l.slice(1), o: o++ });
+      else if (c === "\\") out.push({ k: "nonl", t: l });
+      else out.push({ k: "ctx", t: l.slice(1), o: o++, n: n++ });
+    });
+    return out;
+  }
+
+  // Changed middle of a paired -/+ line (common prefix/suffix stay plain).
+  function spans(td, text, other, cls) {
+    if (other === null || other === undefined) { td.textContent = text; return; }
+    var p = 0, max = Math.min(text.length, other.length);
+    while (p < max && text[p] === other[p]) p++;
+    var s = 0;
+    while (s < max - p && text[text.length - 1 - s] === other[other.length - 1 - s]) s++;
+    if (p === 0 && s === 0) { td.textContent = text; return; }
+    td.appendChild(document.createTextNode(text.slice(0, p)));
+    if (text.length - s > p) td.appendChild(el("span", cls, text.slice(p, text.length - s)));
+    td.appendChild(document.createTextNode(text.slice(text.length - s)));
+  }
+
+  // Pair each run of deletions with the following run of additions (for intra-line marks and side by side).
+  function blocks(rows) {
+    var out = [];
+    for (var i = 0; i < rows.length;) {
+      if (rows[i].k === "del" || rows[i].k === "add") {
+        var dels = [], adds = [];
+        while (i < rows.length && rows[i].k === "del") dels.push(rows[i++]);
+        while (i < rows.length && rows[i].k === "add") adds.push(rows[i++]);
+        out.push({ dels: dels, adds: adds });
+      } else out.push(rows[i++]);
+    }
+    return out;
+  }
+
+  function td(cls, text) { var c = el("td", cls); if (text !== undefined && text !== null) c.textContent = String(text); return c; }
+
+  function inlineView(rows) {
+    var box = el("div", "diff"), t = el("table", "d");
+    blocks(rows).forEach(function (b) {
+      if (b.dels) {
+        b.dels.forEach(function (r, j) { var tr = el("tr", "del"); tr.append(td("ln", r.o), td("ln"), td("sg", "-")); var x = td("tx"); spans(x, r.t, b.adds[j] && b.adds[j].t, "hl-del"); tr.appendChild(x); t.appendChild(tr); });
+        b.adds.forEach(function (r, j) { var tr = el("tr", "add"); tr.append(td("ln"), td("ln", r.n), td("sg", "+")); var x = td("tx"); spans(x, r.t, b.dels[j] && b.dels[j].t, "hl-add"); tr.appendChild(x); t.appendChild(tr); });
+        return;
+      }
+      var tr = el("tr", b.k === "hunk" || b.k === "meta" ? b.k : "");
+      if (b.k === "hunk" || b.k === "meta" || b.k === "nonl") { var c = td("tx", b.t); c.colSpan = 4; tr.appendChild(c); }
+      else tr.append(td("ln", b.o), td("ln", b.n), td("sg", " "), td("tx", b.t));
+      t.appendChild(tr);
+    });
+    box.appendChild(t);
+    return box;
+  }
+
+  function splitView(rows) {
+    var box = el("div", "diff"), t = el("table", "d");
+    blocks(rows).forEach(function (b) {
+      if (b.dels) {
+        for (var j = 0; j < Math.max(b.dels.length, b.adds.length); j++) {
+          var d = b.dels[j], a = b.adds[j], tr = el("tr");
+          if (d) { tr.appendChild(td("ln", d.o)); var x = td("tx half del"); spans(x, d.t, a && a.t, "hl-del"); tr.appendChild(x); }
+          else tr.append(td("ln void"), td("tx half void"));
+          if (a) { tr.appendChild(td("ln", a.n)); var y = td("tx half add"); spans(y, a.t, d && d.t, "hl-add"); tr.appendChild(y); }
+          else tr.append(td("ln void"), td("tx half void"));
+          t.appendChild(tr);
+        }
+        return;
+      }
+      var tr = el("tr", b.k === "hunk" || b.k === "meta" ? b.k : "");
+      if (b.k === "hunk" || b.k === "meta" || b.k === "nonl") { var c = td("tx", b.t); c.colSpan = 4; tr.appendChild(c); }
+      else tr.append(td("ln", b.o), td("tx half", b.t), td("ln", b.n), td("tx half", b.t));
+      t.appendChild(tr);
+    });
+    box.appendChild(t);
+    return box;
+  }
+
+  // A merged file with diff3 markers, as segments [startLine, text] (conflict blocks with context; the
+  // stretches between are collapsed). Colour the v1 / base / v2 sections; a button steps through conflicts.
+  function mergeView(d, head) {
+    var box = el("div", "diff"), t = el("table", "d"), zone = "", marks = [], next = 1;
+    var segs = d.segs || [[1, d.text || ""]];
+    function gap(n) {
+      var tr = el("tr", "hunk"), c = td("tx", "⋯ " + fmt(n) + " unchanged line(s) ⋯");
+      c.colSpan = 2; tr.appendChild(c); t.appendChild(tr);
+    }
+    segs.forEach(function (seg) {
+      var start = seg[0], lines = seg[1].split("\n");
+      if (lines.length && lines[lines.length - 1] === "") lines.pop();
+      if (start > next) gap(start - next);
+      lines.forEach(function (l, k) {
+        var tr, mk = true;
+        if (l.indexOf("<<<<<<< v1") === 0) zone = "v1";
+        else if (l.indexOf("||||||| base") === 0) zone = "base";
+        else if (l === "=======" && zone === "base") zone = "v2";
+        else if (l.indexOf(">>>>>>> v2") === 0) zone = "end";
+        else mk = false;
+        tr = el("tr", mk ? "mk" : zone && zone !== "end" ? zone : "");
+        if (mk && zone === "v1") marks.push(tr);
+        if (zone === "end") zone = "";
+        tr.append(td("ln", start + k), td("tx", l));
+        t.appendChild(tr);
+      });
+      next = start + lines.length;
+    });
+    if (d.total >= next && d.blocks) gap(d.total - next + 1);
+    box.appendChild(t);
+    if (marks.length > 0) {
+      var nav = el("span", "cnav"), at = -1, label = el("span", null, " ");
+      var step = el("button", null, "next conflict ↓");
+      step.type = "button";
+      step.addEventListener("click", function () { at = (at + 1) % marks.length; marks[at].scrollIntoView({ block: "center" }); label.textContent = " conflict " + (at + 1) + " of " + marks.length + " shown "; });
+      nav.append(label, step);
+      head.appendChild(nav);
+    }
+    return box;
+  }
+
+  return { index: index, diff: diff };
+})();
+</script>
+<script src="data/index.js" onerror="document.getElementById('tree').replaceChildren(Object.assign(document.createElement('div'), {className: 'empty', textContent: 'data/index.js is missing — the report was not finished.'}))"></script>
+</body>
+</html>

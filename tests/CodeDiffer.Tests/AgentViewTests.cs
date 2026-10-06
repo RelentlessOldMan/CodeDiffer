@@ -60,7 +60,7 @@ public class AgentViewTests : IDisposable
     [Fact]
     public void Summary_CountsEveryStatus_AndLatestIsDefault()
     {
-        var store = new SessionStore();
+        var store = new SessionStore(save: false);
         var s = Run(store);
         Assert.Same(s, store.Get(null));
         Assert.Same(s, store.Get(s.Id.ToUpperInvariant()));
@@ -76,7 +76,7 @@ public class AgentViewTests : IDisposable
     [Fact]
     public void ListFiles_Pages_Filters_AndCountsLines()
     {
-        var s = Run(new SessionStore());
+        var s = Run(new SessionStore(save: false));
         var p1 = AgentViews.ListFiles(s, pageSize: 50);
         Assert.Contains("64 file(s) match · page 1/2", p1);
         Assert.Contains("next page: page=2", p1);
@@ -100,7 +100,7 @@ public class AgentViewTests : IDisposable
     [Fact]
     public void FileDiff_SmallIsInline_LargeIsCappedToAPatchFile()
     {
-        var s = Run(new SessionStore());
+        var s = Run(new SessionStore(save: false));
         var small = AgentViews.FileDiff(s, "src\\f001.c");
         Assert.Contains("+1 -1 in 1 hunk(s)", small);
         Assert.Contains("-f1 11", small);
@@ -125,7 +125,7 @@ public class AgentViewTests : IDisposable
     [Fact]
     public void Export_WritesAPatchFile_AndStatsReportRenderedMovers()
     {
-        var s = Run(new SessionStore());
+        var s = Run(new SessionStore(save: false));
         AgentViews.FileDiff(s, "big.txt");
         var stats = AgentViews.Stats(s);
         Assert.Contains("most-changed lines", stats);
@@ -144,7 +144,7 @@ public class AgentViewTests : IDisposable
     [Fact]
     public void BadRoot_IsALoudError_AndRunningIsReported()
     {
-        var store = new SessionStore();
+        var store = new SessionStore(save: false);
         Assert.ThrowsAny<Exception>(() => store.Start(Path.Combine(_dir, "nope"), _right));
         var s = store.Start(_left, _right, new CompareOptions { Cache = CacheMode.Off });
         var text = AgentViews.Summary(s); // may or may not have finished yet — either form is valid
@@ -155,7 +155,7 @@ public class AgentViewTests : IDisposable
     [Fact]
     public void Store_EvictsOldestFinished_PastCapacity()
     {
-        var store = new SessionStore(capacity: 2);
+        var store = new SessionStore(capacity: 2, save: false);
         var a = Run(store);
         Run(store);
         Run(store);
