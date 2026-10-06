@@ -66,7 +66,8 @@ public static class CodeDifferTools
 
     [McpServerTool(Name = "get_summary")]
     [Description("Constant-size summary of a compare (2-way: counts by status/reason, changed bytes; 3-way: counts by " +
-                 "merge outcome and conflict kind). While it is still running, reports progress; wait_seconds waits for it.")]
+                 "merge outcome and conflict kind). While it is still running: progress, time left, and the differences found so " +
+                 "far (list_files / get_file_diff already work on those); wait_seconds waits for it.")]
     public static async Task<string> GetSummary(
         [Description("Compare id (default: the most recent).")] string? compare_id = null,
         [Description("Seconds to wait for a running compare to finish (default 0).")] int wait_seconds = 0)

@@ -58,7 +58,8 @@ public sealed class DirectoryComparer
 
     public DirectoryComparer(CompareOptions? options = null) => _options = options ?? new CompareOptions();
 
-    public CompareReport Compare(string left, string right)
+    /// <param name="progress">Optional live progress, including the differences found so far (see <see cref="CompareProgress"/>).</param>
+    public CompareReport Compare(string left, string right, CompareProgress? progress = null)
     {
         var timer = System.Diagnostics.Stopwatch.StartNew();
         var timings = new List<(string, TimeSpan)>();
@@ -68,11 +69,15 @@ public sealed class DirectoryComparer
         Phase("validate");
 
         // Walk both sides at once — two independent trees (often two shares) shouldn't queue behind each other.
+        progress?.SetPhase(ComparePhase.Walking);
         var walker = new TreeWalker(_options.IgnoredDirectoryNames, _options.Parallelism);
-        var leftWalk = Task.Run(() => walker.WalkAll(left));
-        var rightWalk = Task.Run(() => walker.WalkAll(right));
+        Action<int>? listedL = progress is null ? null : n => progress.Listed(true, n);
+        Action<int>? listedR = progress is null ? null : n => progress.Listed(false, n);
+        var leftWalk = Task.Run(() => walker.WalkAll(left, listedL));
+        var rightWalk = Task.Run(() => walker.WalkAll(right, listedR));
         var (lw, rw) = (leftWalk.GetAwaiter().GetResult(), rightWalk.GetAwaiter().GetResult());
         Phase("walk");
+        progress?.SetPhase(ComparePhase.Pairing);
         var leftMap = lw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
         var rightMap = rw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
         var classifier = new ReasonClassifier(_options.MaxClassifyBytes);
@@ -102,17 +107,28 @@ public sealed class DirectoryComparer
             else
                 sizeChanged.Add((le, re)); // modified for sure; only the reason needs the bytes
         }
+        if (progress is not null)
+        {
+            // Partial answers: adds and removes are known now (a rename may still pair some of them up).
+            progress.Paired(paths.Count, sameSize.Count, sameSize.Sum(p => p.L.Length));
+            foreach (var e in removed) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Removed, null, e.Length, 0), _options.DetectRenames);
+            foreach (var e in added) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Added, null, 0, e.Length), _options.DetectRenames);
+        }
 
         // Classify the size-changed pairs concurrently: each is a couple of opens/reads, and over SMB those
         // round-trips must overlap, not stack (serially, ~33 files cost ~10 s against a real share).
         var classified = new FileChange[sizeChanged.Count];
-        Parallel.For(0, sizeChanged.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism },
-            i => classified[i] = Modified(classifier, sizeChanged[i].L, sizeChanged[i].R));
+        Parallel.For(0, sizeChanged.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism }, i =>
+        {
+            classified[i] = Modified(classifier, sizeChanged[i].L, sizeChanged[i].R);
+            progress?.Add(classified[i]);
+        });
         changes.AddRange(classified);
 
         // Same-size pairs: the only place bytes cross the wire. Biggest first so a 1.5 GB header starts
         // early instead of becoming the lone straggler at the end (top 2% of files ≈ 80% of the bytes).
         Phase("pair+classify size-changed");
+        progress?.SetPhase(ComparePhase.Contents);
         sameSize.Sort((a, b) => b.L.Length.CompareTo(a.L.Length));
         var verdicts = new FileChange[sameSize.Count];
         Parallel.ForEachAsync(
@@ -122,6 +138,7 @@ public sealed class DirectoryComparer
             {
                 var (le, re) = sameSize[i];
                 bool equal;
+                long read = 0;
                 bool hasL = leftCache.TryGet(le, out var cl);
                 bool hasR = rightCache.TryGet(re, out var cr);
                 bool? cached = hasL && hasR ? ContentId.Same(cl, cr) : null;
@@ -133,7 +150,7 @@ public sealed class DirectoryComparer
                 {
                     var r = await PairComparer.CompareAsync(le, re, hashes: false, ct).ConfigureAwait(false);
                     equal = r.Equal;
-                    Interlocked.Add(ref bytesRead, 2 * le.Length); // upper bound (early exit on a difference)
+                    read = 2 * le.Length; // upper bound (early exit on a difference)
                 }
                 else if (hasL != hasR)
                 {
@@ -142,7 +159,7 @@ public sealed class DirectoryComparer
                     var h = await PairComparer.HashAsync(e, ct).ConfigureAwait(false);
                     cache.Record(e, h);
                     equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
-                    Interlocked.Add(ref bytesRead, e.Length);
+                    read = e.Length;
                 }
                 else
                 {
@@ -151,22 +168,31 @@ public sealed class DirectoryComparer
                     leftCache.Record(le, r.Left!);
                     rightCache.Record(re, r.Right!);
                     equal = r.Equal;
-                    Interlocked.Add(ref bytesRead, 2 * le.Length);
+                    read = 2 * le.Length;
                 }
+                Interlocked.Add(ref bytesRead, read);
                 verdicts[i] = equal
                     ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
                     : Modified(classifier, le, re);
+                if (progress is not null)
+                {
+                    if (!equal) progress.Add(verdicts[i]);
+                    progress.PairChecked(le.Length, read, (hasL ? 1 : 0) + (hasR ? 1 : 0));
+                }
             }).GetAwaiter().GetResult();
         changes.AddRange(verdicts);
 
         Phase("same-size content");
+        progress?.SetPhase(ComparePhase.Renames);
         AddResolvedAddsRemovesAndRenames(changes, removed, added);
         Phase("renames");
 
         changes.Sort((a, b) => string.CompareOrdinal(a.RelativePath, b.RelativePath));
+        progress?.SetPhase(ComparePhase.Saving);
         leftCache.Save(lw.Files);
         rightCache.Save(rw.Files);
         Phase("ledger save");
+        progress?.SetPhase(ComparePhase.Done);
 
         return new CompareReport(changes, lw.DroppedDirectories, rw.DroppedDirectories)
         {

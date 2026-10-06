@@ -75,7 +75,7 @@ public abstract class Session
             throw;
         }
         _finished = _clock.Elapsed;
-        Persist(result);
+        Persist(result!);
         return result;
     });
 
@@ -104,11 +104,25 @@ public sealed class CompareSession : Session
     /// <summary>Line counts for files whose diff has been rendered (get_file_diff / list_files lines=true).</summary>
     public ConcurrentDictionary<string, FileDiffInfo> DiffInfo { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>Live progress and the differences found so far; null for a compare that was not run here.</summary>
+    public CompareProgress? Progress { get; }
+
     internal CompareSession(string id, string left, string right, CompareOptions options, string? resultDir) : base(id, options, resultDir)
     {
         Left = left;
         Right = right;
-        _task = Run(() => new DirectoryComparer(options).Compare(left, right));
+        Progress = new CompareProgress();
+        _task = Run(() => new DirectoryComparer(options).Compare(left, right, Progress));
+    }
+
+    /// <summary>Tests: a compare whose completion the caller controls, to look at it while it "runs".</summary>
+    internal CompareSession(string id, string left, string right, CompareOptions options, CompareProgress progress, Task<CompareReport> task)
+        : base(id, options, null)
+    {
+        Left = left;
+        Right = right;
+        Progress = progress;
+        _task = task;
     }
 
     /// <summary>A compare that already ran (reopened from disk, or run by the CLI directly).</summary>
@@ -136,12 +150,31 @@ public sealed class Compare3Session : Session
     public override Task Task => _task;
     public override string Title => $"base {Base}  ·  v1 {V1}  ·  v2 {V2}";
 
+    /// <summary>Live progress of the base→v1 and base→v2 compares; null for a compare that was not run here.</summary>
+    public CompareProgress? Progress1 { get; }
+    public CompareProgress? Progress2 { get; }
+
     internal Compare3Session(string id, string baseDir, string v1, string v2, CompareOptions options, string? resultDir) : base(id, options, resultDir)
     {
         Base = baseDir;
         V1 = v1;
         V2 = v2;
-        _task = Run(() => TreeMerger.Run(baseDir, v1, v2, options));
+        Progress1 = new CompareProgress();
+        Progress2 = new CompareProgress();
+        _task = Run(() => TreeMerger.Run(baseDir, v1, v2, options, Progress1, Progress2));
+    }
+
+    /// <summary>Tests: a 3-way compare whose completion the caller controls.</summary>
+    internal Compare3Session(string id, string baseDir, string v1, string v2, CompareOptions options,
+        CompareProgress progress1, CompareProgress progress2, Task<ThreeWayReport> task)
+        : base(id, options, null)
+    {
+        Base = baseDir;
+        V1 = v1;
+        V2 = v2;
+        Progress1 = progress1;
+        Progress2 = progress2;
+        _task = task;
     }
 
     /// <summary>A finished 3-way compare reopened from its result directory.</summary>

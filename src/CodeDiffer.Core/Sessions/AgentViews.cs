@@ -70,6 +70,7 @@ public static class AgentViews
     {
         var o = new StringBuilder();
         o.Append($"compare {s.Id} · {s.Left}  vs  {s.Right}\n");
+        if (Partial(s) is { } p) return Running(o, s, p);
         if (Pending(s) is { } pending) return o.Append(pending).ToString();
         var r = s.Report!;
 
@@ -92,6 +93,35 @@ public static class AgentViews
         Saved(o, s);
         if (changed.Count > 0)
             o.Append($"next: list_files (paged) · get_file_diff(path) · export_changeset for the whole patch · write_report for a browsable HTML report\n");
+        return o.ToString();
+    }
+
+    /// <summary>
+    /// A running compare: what it is doing (with a rough time left), and the differences found so far — the
+    /// agent can start on those with list_files / get_file_diff while the rest is read.
+    /// </summary>
+    private static string Running(StringBuilder o, CompareSession s, CompareProgress p)
+    {
+        o.Append($"running · {Clock(s.Elapsed)} elapsed\n");
+        o.Append("  now: ").Append(ProgressView.Line(p)).Append('\n');
+        var found = p.Found();
+        if (found.Length == 0)
+        {
+            o.Append(p.Phase < ComparePhase.Contents
+                ? "nothing found yet: differences start to show once both trees are listed\n"
+                : "no differences found so far\n");
+            o.Append("next: get_summary(wait_seconds=…) to wait\n");
+            return o.ToString();
+        }
+
+        int N(ChangeStatus st) => found.Count(f => f.Change.Status == st);
+        o.Append($"found so far: {N(ChangeStatus.Modified):N0} modified · {N(ChangeStatus.Added):N0} added · {N(ChangeStatus.Removed):N0} removed\n");
+        if (found.Any(f => f.MayBeRename))
+            o.Append("  (renames are matched at the end: an added and a removed file may still turn out to be one rename)\n");
+        foreach (var f in found.Take(10)) o.Append("  ").Append(Tag(f.Change)).Append(' ').Append(f.Change.RelativePath)
+            .Append(f.Change.Reason is { } rr ? $"  [{CanonicalTokens.Token(rr)}]" : "").Append('\n');
+        if (found.Length > 10) o.Append($"  ... {found.Length - 10:N0} more (list_files)\n");
+        o.Append("next: list_files and get_file_diff work on what is found so far · get_summary(wait_seconds=…) waits for the rest\n");
         return o.ToString();
     }
 
@@ -150,14 +180,18 @@ public static class AgentViews
         int page = 1, int pageSize = DefaultPageSize, bool lines = false)
     {
         var o = new StringBuilder();
-        if (Pending(s) is { } pending) return o.Append($"compare {s.Id}: ").Append(pending).ToString();
-        var r = s.Report!;
+        // While running: the differences found so far, in the order found (so earlier pages don't shift).
+        var progress = Partial(s);
+        PartialChange[]? found = progress?.Found();
+        if (found is null && Pending(s) is { } pending) return o.Append($"compare {s.Id}: ").Append(pending).ToString();
+        IReadOnlyList<FileChange> changes = found is null ? s.Report!.Changes : [.. found.Select(f => f.Change)];
+        var maybeRename = found is null ? null : found.Where(f => f.MayBeRename).Select(f => f.Change.RelativePath).ToHashSet(StringComparer.Ordinal);
 
         if (!TryStatuses(status, out var statuses, out var err) || !TryReason(reason, out var reasonFilter, out err))
             return $"error: {err}\n";
         var glob = string.IsNullOrWhiteSpace(pathGlob) ? null : Glob(pathGlob);
 
-        var match = r.Changes.Where(c => statuses.Contains(c.Status)
+        var match = changes.Where(c => statuses.Contains(c.Status)
             && (reasonFilter is null || c.Reason == reasonFilter)
             && (glob is null || glob(c.RelativePath) || (c.RenamedFrom is { } f && glob(f)))).ToList();
 
@@ -166,9 +200,12 @@ public static class AgentViews
         page = Math.Clamp(page, 1, pages);
         var slice = match.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 
-        if (lines) Render(s, slice);
+        // A file that may still become part of a rename isn't rendered yet: its final diff may differ.
+        if (lines) Render(s, maybeRename is null ? slice : slice.Where(c => !maybeRename.Contains(c.RelativePath)).ToList());
 
-        o.Append($"compare {s.Id} · {match.Count:N0} file(s) match · page {page}/{pages}\n");
+        if (progress is not null)
+            o.Append($"compare {s.Id} · RUNNING, partial: {found!.Length:N0} difference(s) found so far, in the order found · {ProgressView.Line(progress, found: false)}\n");
+        o.Append($"compare {s.Id} · {match.Count:N0} file(s) match{(progress is null ? "" : " so far")} · page {page}/{pages}\n");
         foreach (var c in slice)
         {
             o.Append($"{Tag(c)} {Name(c)}");
@@ -182,9 +219,12 @@ public static class AgentViews
             });
             if (s.DiffInfo.TryGetValue(c.RelativePath, out var i))
                 o.Append(i.Kind == "text" ? $"  +{i.AddedLines:N0} -{i.RemovedLines:N0} ({i.Hunks:N0} hunk(s))" : $"  ({i.Kind})");
+            if (maybeRename?.Contains(c.RelativePath) == true) o.Append("  (may still pair into a rename)");
             o.Append('\n');
         }
         if (page < pages) o.Append($"next page: page={page + 1}\n");
+        if (progress is not null)
+            o.Append("partial: the list grows until the compare finishes; identical files are known only then\n");
         return o.ToString();
     }
 
@@ -196,22 +236,28 @@ public static class AgentViews
     public static string FileDiff(CompareSession s, string path, int context = PatchOptions.DefaultContextLines,
         int maxLines = DefaultMaxLines, int startLine = 1)
     {
-        if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
-        var r = s.Report!;
+        // While running, any difference found so far can be shown (diffs are rendered from the trees anyway).
+        var found = Partial(s)?.Found();
+        if (found is null && Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
+        IReadOnlyList<FileChange> changes = found is null ? s.Report!.Changes : [.. found.Select(f => f.Change)];
         path = Normalize(path);
-        var c = r.Changes.FirstOrDefault(c => c.RelativePath == path)
-             ?? r.Changes.FirstOrDefault(c => c.RenamedFrom == path)
-             ?? r.Changes.FirstOrDefault(c => string.Equals(c.RelativePath, path, StringComparison.OrdinalIgnoreCase));
+        var c = changes.FirstOrDefault(c => c.RelativePath == path)
+             ?? changes.FirstOrDefault(c => c.RenamedFrom == path)
+             ?? changes.FirstOrDefault(c => string.Equals(c.RelativePath, path, StringComparison.OrdinalIgnoreCase));
         if (c is null)
         {
+            if (found is not null)
+                return $"not among the {found.Length:N0} difference(s) found so far in running compare {s.Id}: {path}\n" +
+                       "(its contents may not be checked yet; identical files are known only at the end) — get_summary(wait_seconds=…) waits\n";
             var name = path[(path.LastIndexOf('/') + 1)..];
-            var near = r.Changes.Where(x => x.RelativePath.EndsWith(name, StringComparison.OrdinalIgnoreCase)).Take(5).Select(x => x.RelativePath).ToList();
+            var near = changes.Where(x => x.RelativePath.EndsWith(name, StringComparison.OrdinalIgnoreCase)).Take(5).Select(x => x.RelativePath).ToList();
             return $"not in compare {s.Id}: {path}\n" + (near.Count > 0 ? "did you mean: " + string.Join(", ", near) + "\n" : "");
         }
         if (c.Status == ChangeStatus.Identical) return $"{c.RelativePath}: identical\n";
 
-        var section = RenderOne(s, c, context);
-        var info = s.DiffInfo[c.RelativePath];
+        // An add/remove found mid-run may still become a rename: show it, but don't remember its line counts.
+        bool mayBeRename = found?.Any(f => f.MayBeRename && f.Change.RelativePath == c.RelativePath) == true;
+        var (section, info) = RenderOne(s, c, context, remember: !mayBeRename);
         var all = section.Split('\n');
         int total = all.Length - (section.EndsWith('\n') ? 1 : 0);
         maxLines = Math.Max(1, maxLines);
@@ -221,6 +267,8 @@ public static class AgentViews
         o.Append($"{Tag(c)} {Name(c)}{(c.Reason is { } rr ? $"  [{CanonicalTokens.Token(rr)}]" : "")}  ");
         o.Append(info.Kind == "text" ? $"+{info.AddedLines:N0} -{info.RemovedLines:N0} in {info.Hunks:N0} hunk(s)" : info.Kind);
         o.Append($" · {total:N0} patch line(s)\n");
+        if (found is not null)
+            o.Append("note: the compare is still running" + (mayBeRename ? "; this file may still pair into a rename" : "") + "\n");
         if (Stale(s, c) is { } stale) o.Append(stale).Append('\n');
 
         if (total <= maxLines && startLine == 1)
@@ -338,14 +386,15 @@ public static class AgentViews
         });
     }
 
-    private static string RenderOne(CompareSession s, FileChange c, int context)
+    private static (string Text, FileDiffInfo Info) RenderOne(CompareSession s, FileChange c, int context, bool remember = true)
     {
         var w = new StringWriter { NewLine = "\n" };
         var stats = new PatchStats();
         PatchWriter.WriteChange(w, c, s.Left, s.Right, new PatchOptions { Context = Math.Clamp(context, 0, 1000) }, stats);
         var text = w.ToString();
-        s.DiffInfo[c.RelativePath] = Count(text, stats);
-        return text;
+        var info = Count(text, stats);
+        if (remember) s.DiffInfo[c.RelativePath] = info;
+        return (text, info);
     }
 
     internal static FileDiffInfo Count(string section, PatchStats stats)
@@ -369,9 +418,13 @@ public static class AgentViews
     private static string? Pending(CompareSession s)
     {
         if (s.Error is { } e) return $"FAILED after {Clock(s.Elapsed)}: {e}\n";
-        if (!s.IsDone) return $"running · {Clock(s.Elapsed)} elapsed — call get_summary(wait_seconds=…) to wait for it\n";
+        if (!s.IsDone) return $"running · {Clock(s.Elapsed)} elapsed — this needs the finished compare; get_summary shows progress " +
+                              "and what is found so far, get_summary(wait_seconds=…) waits for it\n";
         return null;
     }
+
+    /// <summary>The live progress of a compare still running in this process, else null.</summary>
+    private static CompareProgress? Partial(CompareSession s) => s.IsDone ? null : s.Progress;
 
     /// <summary>Where the compare was saved (or why it wasn't) — only for a compare run in this process.</summary>
     internal static void Saved(StringBuilder o, Session s)

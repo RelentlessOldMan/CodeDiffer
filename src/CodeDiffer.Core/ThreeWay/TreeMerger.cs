@@ -60,15 +60,18 @@ public sealed class ThreeWayReport
 /// </summary>
 public static class TreeMerger
 {
-    public static ThreeWayReport Run(string baseDir, string v1Dir, string v2Dir, CompareOptions? options = null)
+    /// <param name="progress1">Optional live progress of the base→v1 compare.</param>
+    /// <param name="progress2">Optional live progress of the base→v2 compare (it starts when the first one ends).</param>
+    public static ThreeWayReport Run(string baseDir, string v1Dir, string v2Dir, CompareOptions? options = null,
+        CompareProgress? progress1 = null, CompareProgress? progress2 = null)
     {
         var opt = options ?? new CompareOptions();
         var timings = new List<(string, TimeSpan)>();
         var sw = Stopwatch.StartNew();
-        var r1 = new DirectoryComparer(opt).Compare(baseDir, v1Dir);
+        var r1 = new DirectoryComparer(opt).Compare(baseDir, v1Dir, progress1);
         timings.Add(("compare base->v1", sw.Elapsed));
         sw.Restart();
-        var r2 = new DirectoryComparer(opt).Compare(baseDir, v2Dir);
+        var r2 = new DirectoryComparer(opt).Compare(baseDir, v2Dir, progress2);
         timings.Add(("compare base->v2", sw.Elapsed));
         sw.Restart();
 

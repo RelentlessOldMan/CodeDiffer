@@ -62,7 +62,8 @@ Two exes over one engine (the CodeCompass model):
   ```
 
   Tools: `start_compare` / `start_compare3`
-  (background, return an id), `get_summary` (constant size), `list_files` (paged/filtered), `get_file_diff`
+  (background, return an id), `get_summary` (constant size; while running: progress, time left and the
+  differences found so far, which `list_files` / `get_file_diff` can already open), `list_files` (paged/filtered), `get_file_diff`
   (one file, capped — a 2-way patch, or a 3-way merge with diff3 conflict markers; the overflow goes to a
   file), `get_stats`, `export_changeset` (whole patch to a file), `apply_changeset` (port the changes onto a
   third tree by 3-way merge; dry run unless `write=true`), `write_report` (the HTML report, for a human),

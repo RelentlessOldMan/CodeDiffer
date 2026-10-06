@@ -66,9 +66,10 @@ static int Compare(string[] args)
     CompareReport report;
     var started = DateTime.UtcNow;
     var sw = System.Diagnostics.Stopwatch.StartNew();
+    var progress = new CompareProgress();
     try
     {
-        report = new DirectoryComparer(options).Compare(args[1], args[2]);
+        report = WithProgress(() => new DirectoryComparer(options).Compare(args[1], args[2], progress), () => ProgressView.Line(progress));
     }
     catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
     {
@@ -496,7 +497,8 @@ static int Apply(string[] args)
     PortResult result;
     try
     {
-        var report = new DirectoryComparer(options).Compare(args[1], args[2]);
+        var progress = new CompareProgress();
+        var report = WithProgress(() => new DirectoryComparer(options).Compare(args[1], args[2], progress), () => ProgressView.Line(progress));
         if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
         {
             Console.Error.WriteLine("error: incomplete walk (unlistable directories) — refusing to port a partial change set");
@@ -536,7 +538,10 @@ static int Compare3(string[] args)
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
     }
-    s.Wait(Timeout.InfiniteTimeSpan);
+    WithProgress(() => s.Wait(Timeout.InfiniteTimeSpan), () =>
+        s.Progress1!.Phase != ComparePhase.Done ? "base->v1: " + ProgressView.Line(s.Progress1)
+        : s.Progress2!.Phase != ComparePhase.Done ? "base->v2: " + ProgressView.Line(s.Progress2)
+        : "classifying and merging the paths both sides touched");
     if (s.Error is { } err)
     {
         Console.Error.WriteLine($"error: {err}");
@@ -556,6 +561,39 @@ static int Compare3(string[] args)
     }
     if (r.DroppedDirectories > 0) return 3;
     return r.Count(Merge3Outcome.Conflict) > 0 ? 1 : 0;
+}
+
+/// <summary>
+/// Run <paramref name="work"/> while showing <paramref name="line"/> on stderr: redrawn in place twice a second on a
+/// console, or written as a plain line every 30 s when stderr is redirected (a log). Nothing for a quick run.
+/// </summary>
+static T WithProgress<T>(Func<T> work, Func<string> line)
+{
+    var task = Task.Run(work);
+    bool console = !Console.IsErrorRedirected;
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    var logged = TimeSpan.Zero;
+    int drawn = 0;
+    while (!task.Wait(console ? 500 : 1000))
+    {
+        var t = sw.Elapsed;
+        var text = $"{(t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss"))}  {line()}";
+        if (console)
+        {
+            int width;
+            try { width = Math.Max(20, Console.WindowWidth - 1); } catch (IOException) { width = 119; }
+            if (text.Length > width) text = text[..(width - 1)] + "…";
+            Console.Error.Write("\r" + text.PadRight(drawn));
+            drawn = text.Length;
+        }
+        else if (t - logged >= TimeSpan.FromSeconds(30))
+        {
+            Console.Error.WriteLine(text);
+            logged = t;
+        }
+    }
+    if (drawn > 0) Console.Error.Write("\r" + new string(' ', drawn) + "\r");
+    return task.GetAwaiter().GetResult(); // the work's own exception, not an AggregateException
 }
 
 static void PrintUsage()

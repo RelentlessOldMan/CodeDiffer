@@ -30,7 +30,8 @@ public sealed class TreeWalker
     /// <summary>Walk and return just the files (drops the dropped-dir count; tests and small trees).</summary>
     public IEnumerable<FileEntry> Walk(string root) => WalkAll(root).Files;
 
-    public WalkResult WalkAll(string root)
+    /// <param name="listed">Called after each directory is listed with the number of files in it (progress).</param>
+    public WalkResult WalkAll(string root, Action<int>? listed = null)
     {
         var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
@@ -48,6 +49,7 @@ public sealed class TreeWalker
                     Interlocked.Increment(ref dropped);
                     return;
                 }
+                int found = 0;
                 foreach (var row in rows)
                 {
                     if (row.IsReparsePoint) continue; // don't follow junctions/symlinks (v1)
@@ -60,7 +62,9 @@ public sealed class TreeWalker
                     var rel = Path.GetRelativePath(rootFull, full).Replace('\\', '/');
                     files.Add(new FileEntry(rel, full, row.Length, new DateTime(row.LastWriteUtcTicks, DateTimeKind.Utc),
                         row.ChangeUtcTicks, row.FileId));
+                    found++;
                 }
+                listed?.Invoke(found);
             });
             frontier = [.. next];
         }

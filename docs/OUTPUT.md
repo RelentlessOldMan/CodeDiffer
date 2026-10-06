@@ -84,6 +84,16 @@ strict: a change touching a target edit conflicts, like git). A file with any co
 others are replaced atomically. Binary / EOL- or encoding-only / >16 MB / non-round-trippable files apply
 only when C equals the base byte for byte.
 
+**Progress and partial answers (built):** while a compare runs, `get_summary` says what it is doing (listing
+files with counts per side · checking contents N/M files, GB read and MB/s · a rough time left, the larger of
+a per-file and a per-byte estimate) and lists the differences found so far. Adds and removes are known right
+after the walk (flagged: a rename may still pair them up), size-changed files a moment later, same-size
+edits as their contents are checked. `list_files` and `get_file_diff` already work on that partial set
+(in the order found, so pages don't shift); `get_stats`, the export, apply and the report wait for the end.
+A running `compare3` shows each of its two compares and the paths changed on both sides so far. The CLI
+draws the same line on stderr (redrawn in place, or a line every 30 s when stderr is redirected). Death
+base→v1, warm: all 1,561 differences listed at 0:30 of a 1:40 run; "about 1:20 left" at 0:30 (actual 1:18).
+
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
 `<results>\yyyyMMdd-HHmmss-<id>\` (default `%LOCALAPPDATA%\CodeDiffer\results`, `CODEDIFFER_RESULTS_DIR`
 overrides; refused if it would land inside a compared tree). `compare.json` (format/version, kind, state

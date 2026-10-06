@@ -16,6 +16,7 @@ public static class ThreeWayViews
     {
         var o = new StringBuilder();
         o.Append($"compare3 {s.Id} · {s.Title}\n");
+        if (!s.IsDone && s.Progress1 is { } p1 && s.Progress2 is { } p2) return Running(o, s, p1, p2);
         if (Pending(s) is { } pending) return o.Append(pending).ToString();
         var r = s.Report!;
         int baseFiles = r.V1Report.Changes.Count(c => c.Status != ChangeStatus.Added);
@@ -218,10 +219,40 @@ public static class ThreeWayViews
     private static string SideCounts(CompareReport r) =>
         $"{r.Count(ChangeStatus.Modified):N0} modified, {r.Count(ChangeStatus.Added):N0} added, {r.Count(ChangeStatus.Removed):N0} deleted, {r.Count(ChangeStatus.Renamed):N0} renamed";
 
+    /// <summary>
+    /// A running 3-way compare: where each of its two compares is, and what is known so far — above all the
+    /// paths both sides changed, since those are the ones that will merge or conflict.
+    /// </summary>
+    private static string Running(StringBuilder o, Compare3Session s, CompareProgress p1, CompareProgress p2)
+    {
+        o.Append($"running · {Clock(s.Elapsed)} elapsed\n");
+        o.Append("  base->v1: ").Append(p1.Phase == ComparePhase.Done ? $"done · {p1.FoundCount:N0} changed" : ProgressView.Line(p1)).Append('\n');
+        o.Append("  base->v2: ").Append(p2.Phase == ComparePhase.Done ? $"done · {p2.FoundCount:N0} changed"
+            : p2.Phase == ComparePhase.Starting ? "waits for base->v1 (it reuses the base hashes)" : ProgressView.Line(p2)).Append('\n');
+        if (p2.Phase == ComparePhase.Done) o.Append("  now: classifying and merging the paths both sides touched\n");
+
+        var v1 = p1.Found();
+        var v2 = p2.Found();
+        if (v2.Length > 0)
+        {
+            var v1Paths = v1.Select(c => c.Change.RelativePath).ToHashSet(StringComparer.Ordinal);
+            var both = v2.Select(c => c.Change.RelativePath).Where(v1Paths.Contains).ToList();
+            o.Append($"so far: v1 changed {v1.Length:N0}{(p1.Phase == ComparePhase.Done ? " (complete)" : "")} · v2 changed {v2.Length:N0} · " +
+                     $"changed on both sides {both.Count:N0} (each will merge cleanly or conflict)\n");
+            foreach (var path in both.Take(10)) o.Append("  both: ").Append(path).Append('\n');
+            if (both.Count > 10) o.Append($"  ... {both.Count - 10:N0} more\n");
+        }
+        else if (v1.Length > 0)
+            o.Append($"so far: v1 changed {v1.Length:N0}{(p1.Phase == ComparePhase.Done ? " (complete)" : "")}\n");
+        o.Append("partial: renames are matched at the end of each compare, so an add/delete pair may still become one rename\n");
+        o.Append("next: get_summary(wait_seconds=…) waits for the rest; list_files and get_file_diff work once it finishes\n");
+        return o.ToString();
+    }
+
     private static string? Pending(Session s)
     {
         if (s.Error is { } e) return $"FAILED after {Clock(s.Elapsed)}: {e}\n";
-        if (!s.IsDone) return $"running · {Clock(s.Elapsed)} elapsed — call get_summary(wait_seconds=…) to wait for it\n";
+        if (!s.IsDone) return $"running · {Clock(s.Elapsed)} elapsed — get_summary shows progress and what is found so far; get_summary(wait_seconds=…) waits for it\n";
         return null;
     }
 
