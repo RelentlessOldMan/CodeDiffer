@@ -109,6 +109,13 @@ regions. `verify death_1.0.9-conflict.json --base --v1 --v2` (30 s): the merge's
 (11,371 conflict · 32,615 clean) reproduces `conflictTruthSha` exactly. `apply` base→v1 onto v2 (dry run,
 1:57) agrees: 620 files clean, 941 conflict, 21,246 hunks applied, 11,371 conflict, 0 fuzzy.
 
+CodeCompass v2 ledger at full scale (2026-10-06, CodeCompass 1.0.243): `codecompass index` of base and v1 on
+IRISH (66,337 of 68,661 files each; it skips the rest by size), then `compare` base→v1 with an empty
+CodeDiffer cache: 129,552 sides from CodeCompass's ledgers, 17.3 GB read (exactly the files CodeCompass
+skipped, plus both sides of the 1,561 modified files), 4:19. The 68,661 per-file verdicts are identical to
+a run on CodeDiffer's own ledger. Locally, a same-size edit with the mtime put back, a delete + recreate
+with the same size and mtime, and a move over an existing file were all re-read and reported modified.
+
 ## 5. The human HTML report
 
 Self-contained shell + a sidecar data dir in the result store. Summary tiles; a tree view with folder

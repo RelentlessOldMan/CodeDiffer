@@ -509,7 +509,7 @@ static int Apply(string[] args)
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
     }
-    Console.Write(AgentViews.PortText(result, $"{args[1]} -> {args[2]}", null, maxFiles: int.MaxValue));
+    Console.Write(AgentViews.PortText(result, $"{args[1]} -> {args[2]}", null, maxFiles: int.MaxValue, writeHint: "run again with --write"));
     return result.Count(PortStatus.Conflict) > 0 ? 1 : 0;
 }
 

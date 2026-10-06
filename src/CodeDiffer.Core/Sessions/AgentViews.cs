@@ -276,7 +276,8 @@ public static class AgentViews
     }
 
     /// <summary>The bounded port report (also used by the CLI); the full detail goes to <paramref name="reportFile"/>.</summary>
-    public static string PortText(PortResult r, string label, string? reportFile, int maxFiles = 50)
+    public static string PortText(PortResult r, string label, string? reportFile, int maxFiles = 50,
+                                  string writeHint = "call again with write=true")
     {
         var o = new StringBuilder();
         o.Append($"{(r.Written ? "APPLIED" : "dry run")} · {label} onto {r.Target}\n");
@@ -308,7 +309,7 @@ public static class AgentViews
             File.WriteAllText(reportFile, full.ToString(), new UTF8Encoding(false));
             o.Append($"full report: {reportFile}\n");
         }
-        if (!r.Written && r.Count(PortStatus.Clean) > 0) o.Append("nothing was written — call again with write=true to apply the clean files\n");
+        if (!r.Written && r.Count(PortStatus.Clean) > 0) o.Append($"nothing was written — {writeHint} to apply the clean files\n");
         return o.ToString();
     }
 
