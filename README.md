@@ -46,7 +46,9 @@ CodeDiffer is one of a family of local, large-repo tools (shared author, stack, 
 
 ## Use it
 
-Two exes over one engine (the CodeCompass model):
+Two exes over one engine (the CodeCompass model). The
+[Releases](https://github.com/RelentlessOldMan/CodeDiffer/releases) page has both as a self-contained
+Windows x64 zip (no .NET needed; `INSTALL.txt` inside); `release.ps1` builds it from source.
 
 - **`CodeDiffer.Cli.exe`** — `compare <left> <right>` (status + reason per file; `--patch` for a
   `git apply`-able patch), `compare3 <base> <v1> <v2>` (3-way: v1 only · v2 only · agreed · merged ·
