@@ -81,6 +81,42 @@ public sealed class DeltaTreeCrossCheckTests : IDisposable
     }
 
     [Fact]
+    public void FileOps_CodeDiffersOwnCompare_IsCheckedAgainstTheManifest()
+    {
+        var f = BuildContentFile("src/a.c", out var b, out var v);
+        Write(_base, "src/a.c", b);
+        Write(_variant, "src/a.c", v);
+        Write(_base, "eol.txt", "a\nb\n");
+        Write(_variant, "eol.txt", "a\r\nb\r\n");
+        Write(_base, "gone.c", "bye\n");
+        Write(_variant, "new.c", "hi\n");
+        var moved = string.Concat(Enumerable.Range(1, 20).Select(i => $"moved {i}\n"));
+        Write(_base, "old/m.c", moved);
+        Write(_variant, "new/m.c", moved);
+        var report = new CodeDiffer.Core.Compare.DirectoryComparer(new CodeDiffer.Core.Compare.CompareOptions { Cache = CodeDiffer.Core.Ledger.CacheMode.Off })
+            .Compare(_base, _variant);
+        var eol = new FileDelta("eol.txt", ChangeReason.Eol, "o", "n", 4, 6, [], []);
+        var faithful = new DeltaManifest(1, ["new.c"], ["gone.c"], [new RenameOp("old/m.c", "new/m.c", 1000)], [f, eol], DiffTruthSha: null);
+
+        var ok = DeltaFileOpsCheck.Run(report, faithful);
+        Assert.True(ok.Ok);
+        Assert.Equal(5, ok.Matched);
+
+        // A manifest CodeDiffer disagrees with fails, naming each difference.
+        var wrong = faithful with
+        {
+            Added = ["new.c", "phantom.c"],
+            Modified = [f, eol with { Reason = ChangeReason.Content }],
+            Renamed = [new RenameOp("old/m.c", "new/m.c", 900)],
+        };
+        var bad = DeltaFileOpsCheck.Run(report, wrong);
+        Assert.False(bad.Ok);
+        Assert.Equal((1, 0, 1, 1), (bad.MissingCount, bad.ExtraCount, bad.WrongReasonCount, bad.WrongSimilarityCount));
+        Assert.Equal("added phantom.c", Assert.Single(bad.Missing));
+        Assert.Contains("manifest content, CodeDiffer eol", Assert.Single(bad.WrongReason));
+    }
+
+    [Fact]
     public void NonContentReasons_AreSkipped_NotSilentlyPassed()
     {
         Write(_base, "x.bin", "whatever");

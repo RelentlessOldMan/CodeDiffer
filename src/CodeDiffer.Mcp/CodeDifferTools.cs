@@ -109,7 +109,7 @@ public static class CodeDifferTools
     [McpServerTool(Name = "get_file_diff")]
     [Description("One file. 2-way: its unified diff (git form, `git apply`-able). 3-way: the merged file with diff3 " +
                  "conflict markers (<<<<<<< v1 / ||||||| base / ======= / >>>>>>> v2), or the one side's patch. Hard-capped " +
-                 "at max_lines: longer output returns a map, the first page, and a file path with all of it; page with start_line.")]
+                 "at max_lines (and 256 KB; lines over 2,000 characters are cut): longer output returns a map, the first page, and a file path with all of it; page with start_line.")]
     public static string GetFileDiff(
         [Description("Relative path of the file (for a rename, either the old or the new path).")] string path,
         [Description("Compare id (default: the most recent).")] string? compare_id = null,
@@ -257,7 +257,7 @@ public static class CodeDifferTools
                    (r.Capped > 0 ? $" · {r.Capped:N0} cut (whole diff linked)" : "") +
                    (r.Large > 0 ? $" · {r.Large:N0} large not block-diffed (include_large=true)" : "") +
                    (r.NotRendered > 0 ? $" · {r.NotRendered:N0} past max_diffs" : "") +
-                   (r.Unreadable > 0 ? $" · {r.Unreadable:N0} unreadable" : "") + "\n" +
+                   (r.Unreadable > 0 ? $" · {r.Unreadable:N0} unreadable or not renderable" : "") + "\n" +
                    "  open index.html in a browser (works from disk, no server)\n";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -313,6 +313,11 @@ public static class CodeDifferTools
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return $"error: {ex.Message}";
+        }
+        // A view that renders files in parallel wraps their failure.
+        catch (AggregateException ex) when (ex.Flatten().InnerExceptions.All(e => e is IOException or UnauthorizedAccessException))
+        {
+            return $"error: {ex.Flatten().InnerExceptions[0].Message}";
         }
     }
 }

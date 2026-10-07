@@ -29,7 +29,8 @@ public sealed class HtmlReportOptions
     public string? OutDir { get; init; }
 }
 
-public sealed record HtmlReportResult(string IndexPath, int Files, int Rendered, int Capped, int Large, int NotRendered, int Unreadable);
+/// <param name="Stopped">Diffs not rendered because the report was stopped (Ctrl+C): the page lists those files without one.</param>
+public sealed record HtmlReportResult(string IndexPath, int Files, int Rendered, int Capped, int Large, int NotRendered, int Unreadable, int Stopped = 0);
 
 /// <summary>
 /// The human report (docs/OUTPUT.md §5): a small static shell (<c>index.html</c>, no external resources) plus
@@ -42,7 +43,14 @@ public static class HtmlReport
 {
     private static readonly JsonSerializerOptions Json = new(); // default encoder: escapes < > & ' and non-ASCII
 
-    public static HtmlReportResult Write(Session s, HtmlReportOptions? options = null, Action<int, int>? progress = null)
+    /// <summary>Most characters of one file's diff carried in the page (past it, as past MaxLines, the whole diff is
+    /// linked): a few thousand minified lines would otherwise make one data file tens of MB.</summary>
+    internal const int MaxChunkChars = 1024 * 1024;
+
+    /// <param name="ct">Stops rendering diffs: the files not reached are listed without one, and the report is still
+    /// written whole, so a stopped report opens.</param>
+    public static HtmlReportResult Write(Session s, HtmlReportOptions? options = null, Action<int, int>? progress = null,
+        CancellationToken ct = default)
     {
         var opt = options ?? new HtmlReportOptions();
         if (!s.IsDone || s.Error is not null) throw new InvalidOperationException($"compare {s.Id} has not finished successfully");
@@ -62,7 +70,7 @@ public static class HtmlReport
         };
 
         var rows = new Dictionary<string, object?>[items.Count];
-        int rendered = 0, capped = 0, large = 0, skipped = 0, unreadable = 0, done = 0;
+        int rendered = 0, capped = 0, large = 0, skipped = 0, unreadable = 0, stopped = 0, done = 0;
         int budget = opt.MaxDiffs;
         var renderable = new bool[items.Count];
         for (int i = 0; i < items.Count; i++)
@@ -76,6 +84,12 @@ public static class HtmlReport
             try
             {
                 if (!item.Wants) return;
+                if (ct.IsCancellationRequested)
+                {
+                    row["n"] = Join(row, "diff not rendered: the report was stopped — write it again for the rest");
+                    Interlocked.Increment(ref stopped);
+                    return;
+                }
                 if (!renderable[i])
                 {
                     row["n"] = Join(row, $"diff not included (report limit {opt.MaxDiffs:N0} files) — use get_file_diff or `codediffer report --max-diffs`");
@@ -112,15 +126,19 @@ public static class HtmlReport
                 }
                 else
                 {
-                    if (total > opt.MaxLines)
+                    int shown = total;
+                    if (!AgentViews.Fits(lines, total, opt.MaxLines, MaxChunkChars))
                     {
                         chunk["full"] = $"full/{i}.patch";
                         File.WriteAllText(Path.Combine(outDir, $"full/{i}.patch"), text, new UTF8Encoding(false));
-                        text = string.Join('\n', lines, 0, opt.MaxLines) + "\n";
+                        shown = AgentViews.WindowEnd(lines, total, 1, opt.MaxLines, MaxChunkChars);
+                        var cut = new StringBuilder();
+                        AgentViews.AppendWindow(cut, lines, 1, shown);
+                        text = cut.ToString();
                         Interlocked.Increment(ref capped);
                     }
                     chunk["text"] = text;
-                    chunk["shown"] = Math.Min(total, opt.MaxLines);
+                    chunk["shown"] = shown;
                 }
                 File.WriteAllText(Path.Combine(outDir, "data", "d", $"{i}.js"),
                     $"CD.diff({i},{JsonSerializer.Serialize(chunk, Json)});\n", new UTF8Encoding(false));
@@ -132,6 +150,12 @@ public static class HtmlReport
                 row["n"] = Join(row, $"unreadable: {ex.Message}");
                 Interlocked.Increment(ref unreadable);
             }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // One file must not cost the report (an unhandled one would end Parallel.For as an AggregateException).
+                row["n"] = Join(row, $"diff could not be rendered: {ex.GetType().Name}: {ex.Message}");
+                Interlocked.Increment(ref unreadable);
+            }
             finally
             {
                 progress?.Invoke(Interlocked.Increment(ref done), items.Count);
@@ -139,16 +163,18 @@ public static class HtmlReport
         });
 
         var meta = Meta(s, opt);
+        if (stopped > 0)
+            ((List<string>)meta["notes"]!).Add($"This report was stopped before it was finished: {stopped:N0} file(s) have no diff. Write it again for the rest.");
         meta["files"] = rows;
         meta["report"] = new Dictionary<string, object?>
         {
             ["rendered"] = rendered, ["capped"] = capped, ["large"] = large, ["notRendered"] = skipped,
-            ["unreadable"] = unreadable, ["maxLines"] = opt.MaxLines, ["maxDiffs"] = opt.MaxDiffs,
+            ["unreadable"] = unreadable, ["stopped"] = stopped, ["maxLines"] = opt.MaxLines, ["maxDiffs"] = opt.MaxDiffs,
         };
         File.WriteAllText(Path.Combine(outDir, "data", "index.js"), $"CD.index({JsonSerializer.Serialize(meta, Json)});\n", new UTF8Encoding(false));
         var index = Path.Combine(outDir, "index.html");
         File.WriteAllText(index, Template(), new UTF8Encoding(false));
-        return new HtmlReportResult(index, items.Count, rendered, capped, large, skipped, unreadable);
+        return new HtmlReportResult(index, items.Count, rendered, capped, large, skipped, unreadable, stopped);
     }
 
     // ---- items ----

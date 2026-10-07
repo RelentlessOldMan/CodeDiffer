@@ -233,6 +233,8 @@ public sealed class SessionStore
 
     private readonly object _gate = new();
     private readonly List<Session> _sessions = [];
+    // The compare most recently started here (what an omitted id means) — not one merely reopened by id since.
+    private Session? _lastStarted;
     private readonly int _capacity;
 
     /// <summary>Where compares are saved; null = in memory only.</summary>
@@ -290,6 +292,7 @@ public sealed class SessionStore
             var dir = ResultsRoot is null ? null : ResultStore.CreateRunDir(ResultsRoot, id, kind, roots);
             var session = make(id, dir);
             _sessions.Add(session);
+            _lastStarted = session;
             // Evict the oldest FINISHED compares past capacity; a running one is never dropped (it stays on disk).
             while (_sessions.Count > _capacity && _sessions.FirstOrDefault(s => s.IsDone && s != session) is { } old)
                 _sessions.Remove(old);
@@ -299,13 +302,14 @@ public sealed class SessionStore
 
     /// <summary>
     /// The compare with this id (in memory, else reopened from the results directory), a result directory
-    /// given by path, or the most recent compare of this process when id is null/empty.
+    /// given by path, or the compare most recently started in this process when id is null/empty (reopening an
+    /// older one by id does not change that).
     /// </summary>
     public Session? Get(string? id)
     {
         lock (_gate)
         {
-            if (string.IsNullOrWhiteSpace(id)) return _sessions.LastOrDefault();
+            if (string.IsNullOrWhiteSpace(id)) return _lastStarted ?? _sessions.LastOrDefault();
             id = id.Trim();
             var live = _sessions.FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase)
                 || (s.ResultDir is not null && string.Equals(s.ResultDir, Path.TrimEndingDirectorySeparator(id), StringComparison.OrdinalIgnoreCase)));

@@ -157,6 +157,19 @@ static int? WriteHtml(Session s, string[] args, TextWriter info)
         MaxDiffs = maxDiffs,
         OutDir = FlagValue(args, "--out"),
     };
+    // The first Ctrl+C stops rendering diffs and still writes the report (the files not reached have no diff);
+    // a second one ends the process.
+    using var cts = new CancellationTokenSource();
+    bool stopping = false;
+    ConsoleCancelEventHandler onCtrlC = (_, e) =>
+    {
+        if (stopping) return;
+        stopping = true;
+        e.Cancel = true;
+        Console.Error.WriteLine("\nstopping the report (Ctrl+C again to quit at once)");
+        cts.Cancel();
+    };
+    Console.CancelKeyPress += onCtrlC;
     try
     {
         int last = -1;
@@ -164,21 +177,23 @@ static int? WriteHtml(Session s, string[] args, TextWriter info)
         {
             int pct = total == 0 ? 100 : done * 100 / total;
             if (pct / 10 != last / 10) { last = pct; Console.Error.Write($"\r  report     rendering diffs {done}/{total}"); }
-        });
+        }, cts.Token);
         Console.Error.WriteLine();
         info.WriteLine($"  report     {r.IndexPath}");
         info.WriteLine($"             {r.Files:N0} file(s) · {r.Rendered:N0} diff(s) rendered" +
             (r.Capped > 0 ? $" · {r.Capped:N0} cut (whole diff linked)" : "") +
             (r.Large > 0 ? $" · {r.Large:N0} large not block-diffed (--large)" : "") +
             (r.NotRendered > 0 ? $" · {r.NotRendered:N0} past --max-diffs" : "") +
-            (r.Unreadable > 0 ? $" · {r.Unreadable:N0} unreadable" : ""));
-        return null;
+            (r.Unreadable > 0 ? $" · {r.Unreadable:N0} unreadable" : "") +
+            (r.Stopped > 0 ? $" · STOPPED: {r.Stopped:N0} without a diff (write it again for the rest)" : ""));
+        return r.Stopped > 0 ? 130 : null;
     }
-    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
     {
         Console.Error.WriteLine($"error: report: {ex.Message}");
         return 2;
     }
+    finally { Console.CancelKeyPress -= onCtrlC; }
 }
 
 /// <summary>report: the HTML report for a saved compare (by id or result directory).</summary>
@@ -331,7 +346,7 @@ static int Verify(string[] args)
 {
     if (args.Length < 2)
     {
-        Console.Error.WriteLine("usage: codediffer verify <delta.json>");
+        Console.Error.WriteLine("usage: codediffer verify <delta.json> [--base DIR --variant DIR] | <conflict.json> [--base DIR --v1 DIR --v2 DIR]");
         return 64;
     }
 
@@ -388,6 +403,30 @@ static int Verify(string[] args)
             Console.WriteLine($"    MISMATCH {f.Path} (manifest hunks do not rebuild the variant)");
         Console.WriteLine(cc.Ok ? "  OK — hunks reconstruct the variant" : "  FAIL — a manifest hunk set does not rebuild the variant");
         crossOk = cc.Ok;
+
+        // CodeDiffer's own compare of the two trees (hash cache on: warm, it reads only the changed files) against
+        // the manifest's file operations — the verdicts a user actually sees.
+        CompareReport report;
+        using var stop = new CancellationTokenSource();
+        var progress = new CompareProgress();
+        try
+        {
+            report = WithProgress(() => new DirectoryComparer(new CompareOptions()).Compare(baseDir, variantDir, progress, ct: stop.Token),
+                () => ProgressView.Line(progress), stop.Cancel);
+        }
+        catch (OperationCanceledException) { return Cancelled(TimeSpan.Zero, CacheMode.On); }
+        var fo = DeltaFileOpsCheck.Run(report, manifest);
+        Console.WriteLine($"  file-ops cross-check (CodeDiffer's own compare): {fo.Matched:N0}/{fo.Expected:N0} match · " +
+                          $"{fo.MissingCount:N0} missing · {fo.ExtraCount:N0} extra · {fo.WrongReasonCount:N0} wrong reason · {fo.WrongSimilarityCount:N0} wrong rename similarity");
+        foreach (var m in fo.Missing) Console.WriteLine($"    MISSING  {m}");
+        foreach (var x in fo.Extra) Console.WriteLine($"    EXTRA    {x}");
+        foreach (var w in fo.WrongReason.Concat(fo.WrongSimilarity)) Console.WriteLine($"    WRONG    {w}");
+        if (report.UnreadableFiles + report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
+            Console.WriteLine($"    (the compare could not read {report.UnreadableFiles:N0} file(s) / list " +
+                              $"{report.LeftDroppedDirectories + report.RightDroppedDirectories:N0} director(ies))");
+        Console.WriteLine(fo.Ok ? "  OK — CodeDiffer's compare reports exactly the manifest's file operations"
+                                : "  FAIL — CodeDiffer's compare disagrees with the manifest");
+        crossOk &= fo.Ok;
     }
 
     return v.Ok && crossOk ? 0 : 1;
@@ -441,9 +480,12 @@ static int VerifyConflict(string[] args)
             foreach (var c in cc.ConflictsOnlyInManifest) Console.WriteLine($"        - manifest-only conflict {c.Path}:{c.BaseStart},{c.BaseLines}");
         }
         Console.WriteLine($"    [2] reconstruction from manifest coords: V1 {cc.V1Reconstructed}/{cc.FilesChecked} · V2 {cc.V2Reconstructed}/{cc.FilesChecked}");
+        Console.WriteLine($"        conflicted files: {(cc.ConflictPathsMatch ? "my merge conflicts in exactly the manifest's files" : $"{cc.ConflictPathsOnlyInMine.Count:N0} only in mine · {cc.ConflictPathsOnlyInManifest.Count:N0} only in the manifest")}");
+        foreach (var p in cc.ConflictPathsOnlyInMine.Take(20)) Console.WriteLine($"        + mine-only conflicted file {p}");
+        foreach (var p in cc.ConflictPathsOnlyInManifest.Take(20)) Console.WriteLine($"        - manifest-only conflicted file {p}");
         Console.WriteLine(cc.Ok
-            ? "  OK — 3-way verified (decomposition match and/or reconstruction)"
-            : "  FAIL — neither my merge nor reconstruction confirms the manifest");
+            ? "  OK — 3-way verified (exact decomposition, or reconstruction with the same conflicted files)"
+            : "  FAIL — my merge does not reproduce the manifest's decomposition or its conflicted files");
         mergeOk = cc.Ok;
     }
 
@@ -802,7 +844,8 @@ static void PrintUsage()
                                        each file's diff loaded on expand; opens from disk.
                                        --large also block-diffs files over 16 MB. --out must
                                        be new, empty or an earlier report (it is replaced),
-                                       and outside the compared trees.
+                                       and outside the compared trees. Ctrl+C stops rendering
+                                       and still writes the report (the rest without a diff).
           codediffer results [--max N]   saved compares, newest first
           codediffer results --prune [--keep N] [--older-than DAYS] [--yes]
                                        delete all but the newest N (default 20) saved compares,
@@ -820,17 +863,21 @@ static void PrintUsage()
                                        apply a compare3 --merge-out overlay to v1 (or a copy):
                                        deletes.txt, then the directories the deletes emptied,
                                        then files\. Dry run unless --write; Ctrl+C stops
-                                       between files, run again to finish. Refuses a second
-                                       apply to the same target unless --again (it would
-                                       overwrite conflicts resolved since).
+                                       between files, run again to finish (also after a
+                                       failure). Refuses a second finished apply to the same
+                                       target unless --again (it would overwrite conflicts
+                                       resolved since).
           codediffer blockdiff <a> <b>         content-defined block diff of two large files
                                                (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]
                                                reproduce a delta's diffTruthSha; with trees,
                                                also assert CodeDiffer's hunks match the manifest
+                                               and that its own compare reports exactly the
+                                               manifest's files, reasons and renames
           codediffer verify <conflict.json> [--base <B> --v1 <dir> --v2 <dir>]
                                                reproduce a 3-way conflictTruthSha; with trees,
                                                also assert CodeDiffer's 3-way merge decomposition
+                                               (or reconstruction + the same conflicted files)
           codediffer help                      this help
         """);
 }

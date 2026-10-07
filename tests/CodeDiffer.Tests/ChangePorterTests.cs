@@ -218,6 +218,55 @@ public class ChangePorterTests : IDisposable
     }
 
     [Fact]
+    public void AMergedRename_RunAgain_IsAlready_NotATargetHasNoFileConflict()
+    {
+        Put("L/sub/m.c", Lines(1, 40, "mv"));
+        Put("R/sub/n.c", Lines(1, 39, "mv") + "tail\n");
+        Put("C/sub/m.c", "top\n" + Lines(1, 40, "mv"));        // the target's own edit: n.c is a merge, not R's bytes
+        Put("L/p.c", Lines(1, 20, "pure"));
+        Put("R/q/p.c", Lines(1, 20, "pure"));                   // a pure rename...
+        Put("C/p.c", Lines(1, 19, "pure") + "target's own\n"); // ...of a file the target edited
+        Assert.Equal(PortStatus.Clean, F(Port(write: true), "sub/n.c").Status);
+
+        var again = Port(write: true);
+        Assert.Equal(PortStatus.Already, F(again, "sub/n.c").Status);
+        Assert.Equal(PortStatus.Already, F(again, "q/p.c").Status);
+        Assert.Equal("top\n" + Lines(1, 39, "mv") + "tail\n", Read("C/sub/n.c"));
+
+        // A different file under the new name is still not "already".
+        Put("C/sub/n.c", "someone else's n.c\n");
+        Assert.Equal(PortStatus.Conflict, F(Port(write: false), "sub/n.c").Status);
+    }
+
+    [Fact]
+    public void ALargeFile_IsComparedAndCopiedStreamed()
+    {
+        Put("L/big.txt", Lines(1, 50));
+        Put("R/big.txt", Lines(1, 49) + "changed\n");
+        Put("C/big.txt", Lines(1, 50));
+        Put("L/big2.txt", Lines(1, 50));
+        Put("R/big2.txt", Lines(1, 49) + "changed\n");
+        Put("C/big2.txt", "top\n" + Lines(1, 50));
+        var report = new DirectoryComparer(new CompareOptions { Cache = CacheMode.Off }).Compare(L, R);
+        var r = ChangePorter.Run(report, L, R, C, write: true, maxTextBytes: 64); // every file "large"
+        Assert.Equal("replace", F(r, "big.txt").Action);
+        Assert.Equal(Lines(1, 49) + "changed\n", Read("C/big.txt"));
+        Assert.Equal(PortStatus.Conflict, F(r, "big2.txt").Status); // large: only onto an unchanged base
+        Assert.Equal(PortStatus.Already, F(ChangePorter.Run(report, L, R, C, write: false, maxTextBytes: 64), "big.txt").Status);
+    }
+
+    [Fact]
+    public void ALoneCr_StaysInItsLine_WhenMergingAcrossLineEndings()
+    {
+        Put("L/cr.txt", "a\rb\nc\nd\n");                       // a lone CR inside line 1
+        Put("R/cr.txt", "a\rb\nC\nd\n");
+        Put("C/cr.txt", "a\rb\r\nc\r\nd\r\n");                 // CRLF target
+        var f = F(Port(write: true), "cr.txt");
+        Assert.Equal(PortStatus.Clean, f.Status);
+        Assert.Equal("a\rb\r\nC\r\nd\r\n", Read("C/cr.txt"));    // not "a\r\nb..." — the lone CR is content
+    }
+
+    [Fact]
     public void ADifferentFileAtTheRenameTarget_IsStillAConflict()
     {
         Put("L/m.c", Lines(1, 40, "mv"));

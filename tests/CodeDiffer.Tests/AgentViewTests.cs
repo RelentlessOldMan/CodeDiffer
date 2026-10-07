@@ -123,6 +123,53 @@ public class AgentViewTests : IDisposable
     }
 
     [Fact]
+    public void FileDiff_IsCappedByCharactersToo_AndCappedFilesNeverShareAName()
+    {
+        // A minified file: a few lines, each enormous — under the line cap, far over any sane answer size.
+        var wide = new string('x', 300_000);
+        Put("L/min.js", $"{wide}a\n{wide}b\n");
+        Put("R/min.js", $"{wide}A\n{wide}B\n");
+        Put("L/a/b.c", Lines(1, 300));
+        Put("R/a/b.c", Lines(1, 300).Replace("line 7\n", "seven\n").Replace("line 290\n", "x\n"));
+        Put("L/a_b.c", Lines(1, 300));
+        Put("R/a_b.c", Lines(1, 300).Replace("line 8\n", "eight\n").Replace("line 280\n", "y\n"));
+        var s = Run(new SessionStore(save: false));
+
+        var min = AgentViews.FileDiff(s, "min.js");
+        Assert.True(min.Length < AgentViews.MaxChars, $"{min.Length:N0} characters");
+        Assert.Contains("line cut: 300,002 characters", min); // '+' + 300,000 + 'A'
+        Assert.Contains("lines over 2,000 characters cut", min);
+
+        string FullFile(string view)
+        {
+            int at = view.IndexOf("full patch: ", StringComparison.Ordinal) + "full patch: ".Length;
+            return view[at..view.IndexOf('\n', at)];
+        }
+        var f1 = FullFile(AgentViews.FileDiff(s, "a/b.c", maxLines: 5));
+        var f2 = FullFile(AgentViews.FileDiff(s, "a_b.c", maxLines: 5));
+        Assert.NotEqual(f1, f2);
+        Assert.Contains("+seven", File.ReadAllText(f1));
+        Assert.Contains("+eight", File.ReadAllText(f2));
+    }
+
+    [Fact]
+    public void AFileGoneSinceTheCompare_IsSaid_NotThrown()
+    {
+        var s = Run(new SessionStore(save: false));
+        File.Delete(Path.Combine(_right, "src", "f001.c"));
+        var view = AgentViews.FileDiff(s, "src/f001.c");
+        Assert.Contains("the right file is gone", view);
+        Assert.Contains("could not be read", view);
+        // Rendering the page's line counts must not throw; the gone file just has none (it may be back next time).
+        var list = AgentViews.ListFiles(s, pathGlob: "src/f00*.c", lines: true);
+        var lines = list.Split('\n');
+        Assert.DoesNotContain("hunk", lines.Single(l => l.StartsWith("M src/f001.c", StringComparison.Ordinal)));
+        Assert.Contains("hunk", lines.Single(l => l.StartsWith("M src/f003.c", StringComparison.Ordinal)));
+        Put("R/src/f001.c", Lines(1, 10, "f1") + "changed\n" + Lines(12, 20, "f1"));
+        Assert.Contains("+1 -1 (1 hunk(s))", AgentViews.ListFiles(s, pathGlob: "src/f001.c", lines: true));
+    }
+
+    [Fact]
     public void Export_WritesAPatchFile_AndStatsReportRenderedMovers()
     {
         var s = Run(new SessionStore(save: false));

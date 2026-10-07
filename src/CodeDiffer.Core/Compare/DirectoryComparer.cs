@@ -9,7 +9,8 @@ public sealed class CompareOptions
     /// <summary>Directory names skipped whole during the walk. Default ignores VCS metadata only.</summary>
     public IReadOnlyCollection<string> IgnoredDirectoryNames { get; init; } = [".git"];
 
-    /// <summary>Above this per-file size, reason classification stays coarse (content), not decoded.</summary>
+    /// <summary>Above this per-file size a pair's reason is found by a streamed byte comparison, not by decoding it
+    /// whole; above 64 MB it is content unchecked (see <see cref="ReasonClassifier"/>).</summary>
     public long MaxClassifyBytes { get; init; } = 8L * 1024 * 1024;
 
     /// <summary>Resolve added/removed pairs into renames (pure + edited). On by default.</summary>

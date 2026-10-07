@@ -272,15 +272,15 @@ public static class AgentViews
             o.Append("note: the compare is still running" + (mayBeRename ? "; this file may still pair into a rename" : "") + "\n");
         if (Stale(s, c) is { } stale) o.Append(stale).Append('\n');
 
-        if (total <= maxLines && startLine == 1)
+        if (startLine == 1 && Fits(all, total, maxLines))
             return o.Append(section).ToString();
 
         // Capped: write the whole section once, then show the requested window plus the hunk map.
-        var file = Path.Combine(OutDir(s), Safe(c.RelativePath) + (context == PatchOptions.DefaultContextLines ? "" : $".U{context}") + ".patch");
+        var file = OutFile(s, "diffs", c.RelativePath, (context == PatchOptions.DefaultContextLines ? "" : $".U{context}") + ".patch");
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         File.WriteAllText(file, section, new UTF8Encoding(false));
-        int end = Math.Min(total, startLine + maxLines - 1);
-        o.Append($"capped: showing lines {startLine:N0}-{end:N0} of {total:N0}; full patch: {file}\n");
+        int end = WindowEnd(all, total, startLine, maxLines);
+        o.Append($"capped: showing lines {startLine:N0}-{end:N0} of {total:N0}{CutNote(all, startLine, end, maxLines, total)}; full patch: {file}\n");
         if (startLine == 1 && info.Hunks > 0)
         {
             var heads = all.Select((l, n) => (l, n)).Where(x => x.l.StartsWith("@@", StringComparison.Ordinal)).ToList();
@@ -289,10 +289,71 @@ public static class AgentViews
             if (heads.Count > 40) o.Append($"  ... {heads.Count - 40:N0} more\n");
             o.Append("---\n");
         }
-        for (int i = startLine - 1; i < end; i++) o.Append(all[i]).Append('\n');
+        AppendWindow(o, all, startLine, end);
         if (end < total) o.Append($"next: startLine={end + 1}\n");
         return o.ToString();
     }
+
+    /// <summary>Most characters one diff answer carries, and of one line in it (a minified file is one huge line):
+    /// a line cap alone lets 2,000 long lines through as megabytes.</summary>
+    internal const int MaxChars = 256 * 1024, MaxLineChars = 2000;
+
+    /// <summary>Whether the whole text fits one answer: lines, characters and no over-long line.</summary>
+    internal static bool Fits(string[] lines, int total, int maxLines, int maxChars = MaxChars)
+    {
+        if (total > maxLines) return false;
+        long chars = 0;
+        for (int i = 0; i < total; i++)
+        {
+            if (lines[i].Length > MaxLineChars) return false;
+            chars += lines[i].Length + 1;
+        }
+        return chars <= maxChars;
+    }
+
+    /// <summary>The last line (1-based) of the window from <paramref name="startLine"/>: at most
+    /// <paramref name="maxLines"/> lines and about <paramref name="maxChars"/> characters (long lines counted as cut),
+    /// never fewer than one line.</summary>
+    internal static int WindowEnd(string[] lines, int total, int startLine, int maxLines, int maxChars = MaxChars)
+    {
+        int end = startLine - 1;
+        long chars = 0;
+        while (end < total && end - startLine + 1 < maxLines)
+        {
+            chars += Math.Min(lines[end].Length, MaxLineChars) + 1;
+            if (chars > maxChars && end >= startLine) break;
+            end++;
+        }
+        return end;
+    }
+
+    /// <summary>Lines startLine..end, each over <see cref="MaxLineChars"/> cut with a note.</summary>
+    internal static void AppendWindow(StringBuilder o, string[] lines, int startLine, int end)
+    {
+        for (int i = startLine - 1; i < end; i++)
+        {
+            var l = lines[i];
+            if (l.Length <= MaxLineChars) o.Append(l);
+            else o.Append(l, 0, MaxLineChars).Append($" ... [line cut: {l.Length:N0} characters; whole line in the file]");
+            o.Append('\n');
+        }
+    }
+
+    /// <summary>Why a window stopped short of the line cap, if it did.</summary>
+    internal static string CutNote(string[] lines, int startLine, int end, int maxLines, int total)
+    {
+        bool chars = end < total && end - startLine + 1 < maxLines;
+        bool longLine = false;
+        for (int i = startLine - 1; i < end && !longLine; i++) longLine = lines[i].Length > MaxLineChars;
+        return (chars ? $" (cut at {MaxChars / 1024} KB)" : "") + (longLine ? $" (lines over {MaxLineChars:N0} characters cut)" : "");
+    }
+
+    /// <summary>
+    /// Where a capped view writes its whole text: the relative path mirrored under <c>&lt;out&gt;\&lt;sub&gt;</c>, so two
+    /// files never share a name (flattening "a/b.c" and "a_b.c" to one name made one overwrite the other).
+    /// </summary>
+    internal static string OutFile(Session s, string sub, string rel, string suffix)
+        => Path.Combine(OutDir(s), sub, rel.Replace('/', Path.DirectorySeparatorChar)) + suffix;
 
     /// <summary>The whole A→B changeset as one git-style patch file (apply with `git apply`).</summary>
     public static string Export(CompareSession s, string? outPath = null, int context = PatchOptions.DefaultContextLines, bool literal = false)
@@ -405,13 +466,13 @@ public static class AgentViews
         PatchWriter.WriteChange(w, c, s.Left, s.Right, new PatchOptions { Context = Math.Clamp(context, 0, 1000) }, stats);
         var text = w.ToString();
         var info = Count(text, stats);
-        if (remember) s.DiffInfo[c.RelativePath] = info;
+        if (remember && info.Kind != "unreadable") s.DiffInfo[c.RelativePath] = info; // it may be readable next time
         return (text, info);
     }
 
     internal static FileDiffInfo Count(string section, PatchStats stats)
     {
-        var kind = stats.BinaryFiles > 0 ? "binary" : stats.GiantFiles > 0 ? "large" : stats.NoteFiles > 0 ? "eol/encoding note" : "text";
+        var kind = stats.UnreadableFiles > 0 ? "unreadable" : stats.BinaryFiles > 0 ? "binary" : stats.GiantFiles > 0 ? "large" : stats.NoteFiles > 0 ? "eol/encoding note" : "text";
         int hunks = 0, plus = 0, minus = 0;
         bool body = false; // file headers (---/+++) come before the first @@; after it every +/- is content
         foreach (var line in section.Split('\n'))
@@ -525,8 +586,6 @@ public static class AgentViews
     }
 
     private static string Normalize(string path) => path.Trim().Replace('\\', '/').TrimStart('/');
-
-    private static string Safe(string rel) => Regex.Replace(rel, @"[^A-Za-z0-9._-]", "_");
 
     private static string StatusToken(ChangeStatus st) => st.ToString().ToLowerInvariant();
 

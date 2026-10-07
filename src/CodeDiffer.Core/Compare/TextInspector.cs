@@ -55,6 +55,35 @@ internal static class TextInspector
         return ms.Length == ms.Capacity ? ms.GetBuffer() : ms.ToArray();
     }
 
+    /// <summary>Whether two files hold the same bytes, streamed (any size, a buffer's worth of memory).</summary>
+    public static bool SameBytes(string a, string b)
+    {
+        using var fa = OpenShared(a, 1);
+        using var fb = OpenShared(b, 1);
+        return fa.Length == fb.Length && SameStream(fa, fb, fa.Length);
+    }
+
+    /// <summary>Whether a file holds exactly these bytes, streamed.</summary>
+    public static bool SameBytes(string path, byte[] bytes)
+    {
+        using var fs = OpenShared(path, 1);
+        return fs.Length == bytes.Length && SameStream(fs, new MemoryStream(bytes, writable: false), bytes.Length);
+    }
+
+    private static bool SameStream(Stream a, Stream b, long length)
+    {
+        int size = (int)Math.Clamp(length, 1, 1 << 20);
+        var ba = new byte[size];
+        var bb = new byte[size];
+        while (true)
+        {
+            int na = a.ReadAtLeast(ba, ba.Length, throwOnEndOfStream: false);
+            int nb = b.ReadAtLeast(bb, bb.Length, throwOnEndOfStream: false);
+            if (na != nb || !ba.AsSpan(0, na).SequenceEqual(bb.AsSpan(0, nb))) return false;
+            if (na == 0) return true;
+        }
+    }
+
     /// <summary>
     /// Decode bytes to text, honoring a BOM (UTF-8/16/32) and defaulting to UTF-8 without one — strictly: bytes that are
     /// not valid in that encoding (a cp1252 / Latin-1 file) are read as Latin-1 instead, one char per byte, so two

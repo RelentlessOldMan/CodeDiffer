@@ -76,17 +76,20 @@ Change-porting tools: `export_changeset(A→B)` and `apply_changeset(onto=C)` dr
 
 **Built so far** (`CodeDiffer.Mcp.exe`, views in `CodeDiffer.Core/Sessions`): `start_compare` (background,
 returns an id, optional wait), `get_summary`, `list_files` (`status`/`path_glob`/`reason`/page, `lines=true`
-renders ±lines for just that page), `get_file_diff` (cap `max_lines`, page with `start_line`; overflow written
-whole to a `.patch`), `get_stats`, `export_changeset` (to a file, `literal` for a byte-exact `git apply`).
+renders ±lines for just that page), `get_file_diff` (cap `max_lines` and 256 KB, lines over 2,000 characters cut,
+page with `start_line`; overflow written whole to `diffs\<path>.patch` in the result directory — the path
+mirrored, so two files never share a name; a side gone or locked since the compare is said in one line), `get_stats`, `export_changeset` (to a file, `literal` for a byte-exact `git apply`).
 `apply_changeset(target, write=false)`: diff3 with base = left, change side = right, target = C, on the same
 merger the 3-way contract verifies. Per region applied | fuzzy (shifted line) | already | conflict (diff3 is
 strict: a change touching a target edit conflicts, like git). A file with any conflict is never written;
 others are replaced atomically. Binary / EOL- or encoding-only / >16 MB / non-round-trippable files apply
-only when C equals the base byte for byte.
+only when C equals the base byte for byte (compared and copied streamed, so a file of any size works). A
+lone CR is content: merging across line endings converts only CRLF.
 Stopping `apply --write` part way is safe: Ctrl+C stops between files (the report says how many were written
 and how many were not reached), each file is written whole via `<file>.codediffer.tmp` and a rename, and
 running the same apply again finishes the job — what is done comes out "already", a rename stopped between
-writing the new path and deleting the old one is completed, and a killed run's temp file is reused. A
+writing the new path and deleting the old one is completed (and one already merged into the target's own
+edits comes out "already"), and a killed run's temp file is reused. A
 case-only rename is left as a conflict (on Windows it is the same file).
 
 **Progress and partial answers (built):** while a compare runs, `get_summary` says what it is doing (listing
@@ -149,8 +152,9 @@ a plain path inside the target, and a target and overlay inside each other; it d
 directory in a listed path's place. Like `apply`, Ctrl+C stops between files, each is written whole (temp +
 rename), and running it again finishes the job (a path already deleted, or already holding the overlay's
 bytes, comes out "already"). The overlay holds `APPLYING.txt` while it runs and `APPLIED.txt` (target, time)
-once done; a second apply to the same target is refused unless `--again`, since it would overwrite conflicts
-resolved since. On death the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
+once done with nothing failed — after a failure it stays unapplied, so the same apply can be run again once the
+cause is fixed; a second finished apply to the same target is refused unless `--again`, since it would
+overwrite conflicts resolved since. On death the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
 
 Full-scale check (2026-10-05, CodeSpawner `death` 1.0.9 base / v1 / v2 on `\\IRISH\TestHole`, 68,661 base
 files, `--threads 4`, warm hash cache): `compare3` in 3:59 (base→v1 124 s, base→v2 109 s, merge 5 s; 0 bytes
@@ -188,7 +192,9 @@ list + summary) and one `data/d/N.js` per file diff, loaded by script tag on exp
 with no server. Tiles double as status filters; path filter (text or glob) and reason filter; a folder tree
 (single-child chains compacted, per-folder status badges, children built only when opened); inline or side
 by side with intra-line marks; 3-way merges colored by v1/base/v2 section with a conflict stepper. Diffs over
-3,000 lines are cut with the whole diff written alongside and linked; files over 16 MB are listed as "large"
+3,000 lines or 1 MB are cut (lines over 2,000 characters too) with the whole diff written alongside and
+linked; a file whose diff can't be read or rendered is listed with why; Ctrl+C stops rendering and still
+writes the report, the rest listed without a diff; files over 16 MB are listed as "large"
 unless `--large`; past `--max-diffs` (5,000) files are listed with a note; the footer totals all of it. All
 data reaches the page as JSON and is inserted as text, never as HTML. Not built: syntax highlighting.
 
@@ -212,6 +218,13 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   files, text that isn't UTF-8, unreadable files, the eol/encoding-only notes — is described in `#` lines
   outside any `diff --git` section, which git skips, so the rest still applies; the summary counts them as
   NOT CARRIED. A byte-identical rename is a header-only rename, binary or not; a UTF-8 BOM is kept.
+- A file over 8 MB is not decoded whole to find its reason: up to 64 MB it is compared streamed, as bytes
+  (BOM, ASCII whitespace and line endings normalized byte by byte, stopping at the first real difference), so
+  a large LF→CRLF change is still `eol`; past 64 MB, or in UTF-16/32, a difference is `content` unchecked.
+- `verify` checks CodeDiffer, not only the manifest: with the trees it runs CodeDiffer's own compare and
+  requires exactly the manifest's files, reasons and rename similarities (death 1.0.9: 1,561/1,561 and
+  1,354/1,354); the 3-way gate needs the exact decomposition, or reconstruction AND a merge conflicting in
+  exactly the manifest's files.
 - Deterministic output: two runs over the same inputs are byte-identical, so a diff of results is real.
 
 ## 7. Defaults (tunable)
@@ -219,7 +232,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 | Setting | Default | Why |
 |---|---|---|
 | Hide identical | on (all outputs) | identical is noise on big trees |
-| Per-file inline diff cap | ~2,000 lines / 256 KB | above → summary + `.patch` by reference |
+| Per-file inline diff cap | 2,000 lines / 256 KB, lines over 2,000 chars cut | above → window + hunk map + `.patch` by reference |
 | Giant-file threshold | 128 MB | matches CodeCompass streaming; always block-level + by-reference |
 | Result store location | fresh timestamped dir **outside** both trees | never overwrite; never diff own output |
 | Hash cache | on, keyed `(path,size,mtime)` | second compare of a near-identical tree is seconds |

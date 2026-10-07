@@ -1,4 +1,5 @@
 using System.Text;
+using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Port;
 using CodeDiffer.Core.Sessions;
 
@@ -17,7 +18,7 @@ public sealed record OverlayApplyResult(string Overlay, string Target, string? M
 /// Like <see cref="ChangePorter"/> it is safe to stop: a cancel stops between files, each file is written whole
 /// (via <c>&lt;file&gt;.codediffer.tmp</c> and a rename), and running it again finishes the job — a path already
 /// deleted, or already holding the overlay's bytes, comes out "already". While it writes, the overlay holds
-/// <c>APPLYING.txt</c>; when it finishes, <c>APPLIED.txt</c> (target and time). Applying the same overlay to the
+/// <c>APPLYING.txt</c>; when it finishes with nothing failed, <c>APPLIED.txt</c> (target and time). Applying the same overlay to the
 /// same target again is refused unless <c>again</c>, since it would overwrite conflicts resolved since.
 /// </para>
 /// It refuses, before touching anything, an overlay still being written (<c>INCOMPLETE.txt</c>), a target inside
@@ -63,7 +64,7 @@ public static class OverlayApplier
         if (progress is not null) progress.Total = deletes.Count + copies.Count;
 
         var applying = Path.Combine(overlay, ApplyingName);
-        if (write) File.WriteAllText(applying, $"being applied to\n{target}\n(if this stays, the apply was stopped: run it again to finish)\n");
+        if (write) File.WriteAllText(applying, $"being applied to\n{target}\n(if this stays, the apply was stopped or something failed: run it again to finish)\n");
 
         var failed = new System.Collections.Concurrent.ConcurrentBag<(string, string)>();
         int deleted = 0, gone = 0, copied = 0, there = 0, notReached = 0;
@@ -136,7 +137,7 @@ public static class OverlayApplier
                 if (Directory.Exists(dest) && (write || !Directory.EnumerateFiles(dest, "*", SearchOption.AllDirectories).All(hitSet.Contains)))
                     throw new IOException("the target has a directory there that the deletes do not empty");
                 long len = new FileInfo(src).Length;
-                if (File.Exists(dest) && new FileInfo(dest).Length == len && File.ReadAllBytes(dest).AsSpan().SequenceEqual(File.ReadAllBytes(src)))
+                if (File.Exists(dest) && new FileInfo(dest).Length == len && TextInspector.SameBytes(dest, src))
                     Interlocked.Increment(ref there);
                 else
                 {
@@ -161,10 +162,12 @@ public static class OverlayApplier
 
         bool cancelled = notReached > 0;
         var fails = failed.OrderBy(f => f.Item1, StringComparer.Ordinal).ToList();
-        if (write && !cancelled)
+        // Only a run that did everything is "applied": after a failure APPLYING.txt stays, so running it again (once
+        // the cause is fixed) is not refused — what already landed comes out "already".
+        if (write && !cancelled && fails.Count == 0)
         {
             File.AppendAllText(Path.Combine(overlay, AppliedName),
-                $"applied {DateTime.Now:yyyy-MM-dd HH:mm:ss} to\n{target}\n  {deleted:N0} deleted · {copied:N0} written · {fails.Count:N0} failed\n");
+                $"applied {DateTime.Now:yyyy-MM-dd HH:mm:ss} to\n{target}\n  {deleted:N0} deleted · {copied:N0} written\n");
             File.Delete(applying);
         }
         return new OverlayApplyResult(overlay, target, madeFor, write, cancelled, deleted, gone, copied, there, removedDirs, notReached, bytes,
@@ -195,7 +198,9 @@ public static class OverlayApplier
         if (r.Failed.Count > 0)
         {
             o.Append($"FAILED: {r.Failed.Count:N0}\n");
-            foreach (var (p, why) in r.Failed) o.Append($"  {p} — {why}\n");
+            foreach (var (p, why) in r.Failed.Take(maxList)) o.Append($"  {p} — {why}\n");
+            if (r.Failed.Count > maxList) o.Append($"  ... {r.Failed.Count - maxList:N0} more\n");
+            if (r.Written) o.Append("not marked applied: fix what failed and run the same apply-overlay again to finish\n");
         }
         if (!r.Written && r.Deleted > 0)
         {

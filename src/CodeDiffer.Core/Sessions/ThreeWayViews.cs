@@ -116,13 +116,13 @@ public static class ThreeWayViews
         if (Stale(s, e) is { } stale) o.Append(stale).Append('\n');
         maxLines = Math.Max(1, maxLines);
         startLine = Math.Clamp(startLine, 1, Math.Max(1, total));
-        if (total <= maxLines && startLine == 1) return o.Append(body).ToString();
+        if (startLine == 1 && AgentViews.Fits(lines, total, maxLines)) return o.Append(body).ToString();
 
-        var file = Path.Combine(AgentViews.OutDir(s), System.Text.RegularExpressions.Regex.Replace(e.Path, @"[^A-Za-z0-9._-]", "_") + ".merge.txt");
+        var file = AgentViews.OutFile(s, "merges", e.Path, ".merge.txt");
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         File.WriteAllText(file, body, new UTF8Encoding(false));
-        int end = Math.Min(total, startLine + maxLines - 1);
-        o.Append($"capped: showing lines {startLine:N0}-{end:N0} of {total:N0}; whole file: {file}\n");
+        int end = AgentViews.WindowEnd(lines, total, startLine, maxLines);
+        o.Append($"capped: showing lines {startLine:N0}-{end:N0} of {total:N0}{AgentViews.CutNote(lines, startLine, end, maxLines, total)}; whole file: {file}\n");
         if (startLine == 1)
         {
             var marks = lines.Select((l, n) => (l, n)).Where(x => x.l.StartsWith("<<<<<<< ", StringComparison.Ordinal)).ToList();
@@ -131,7 +131,7 @@ public static class ThreeWayViews
                 o.Append($"conflict blocks start at line: {string.Join(", ", marks.Take(40).Select(m => (m.n + 1).ToString("N0")))}{(marks.Count > 40 ? ", ..." : "")}\n---\n");
             }
         }
-        for (int i = startLine - 1; i < end; i++) o.Append(lines[i]).Append('\n');
+        AgentViews.AppendWindow(o, lines, startLine, end);
         if (end < total) o.Append($"next: startLine={end + 1}\n");
         return o.ToString();
     }

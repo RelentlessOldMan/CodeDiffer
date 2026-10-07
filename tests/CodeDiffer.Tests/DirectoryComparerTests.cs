@@ -137,6 +137,34 @@ public sealed class DirectoryComparerTests : IDisposable
     }
 
     [Fact]
+    public void ALargeFile_IsClassifiedStreamed_LikeASmallOne()
+    {
+        var body = string.Concat(Enumerable.Range(1, 200).Select(i => $"int v{i} = {i};\n"));
+        WriteLeft("eol.c", body);
+        WriteRight("eol.c", body.Replace("\n", "\r\n"));
+        WriteLeft("ws.c", body);
+        WriteRight("ws.c", body.Replace(" = ", "="));
+        WriteLeft("bom.c", body);
+        WriteRight("bom.c", [0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes(body)]);
+        WriteLeft("content.c", body);
+        WriteRight("content.c", body.Replace("v150 = 150", "v150 = 151"));
+        WriteLeft("lonecr.c", body);
+        WriteRight("lonecr.c", body.Replace("\n", "\r")); // CR line endings: NormalizeEol maps a lone CR to LF too
+        var small = new ReasonClassifier();
+        var streamed = new ReasonClassifier(maxClassifyBytes: 64); // every file "large"
+        var tooLarge = new ReasonClassifier(maxClassifyBytes: 64, maxStreamBytes: 128);
+        foreach (var (name, want) in new[] { ("eol.c", ChangeReason.Eol), ("ws.c", ChangeReason.Whitespace), ("bom.c", ChangeReason.Encoding),
+                                             ("content.c", ChangeReason.Content), ("lonecr.c", ChangeReason.Eol) })
+        {
+            string l = Path.Combine(_left, name), r = Path.Combine(_right, name);
+            long ll = new FileInfo(l).Length, rl = new FileInfo(r).Length;
+            Assert.Equal(want, small.Classify(l, ll, r, rl));
+            Assert.Equal((name, want), (name, streamed.Classify(l, ll, r, rl)));
+            Assert.Equal(ChangeReason.Content, tooLarge.Classify(l, ll, r, rl)); // past the stream cap: unchecked
+        }
+    }
+
+    [Fact]
     public void ALockedFile_IsUnreadable_AndTheCompareFinishes()
     {
         WriteLeft("locked.c", "same size\n");

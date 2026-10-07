@@ -25,7 +25,7 @@ ask whether to wait/retry or proceed. Renew during long runs; `computewarden_rel
 
 **No lease** (light or short, even on death):
 - Warm `compare` / `compare3` (cache hits: ~0 bytes read, a stat per file, 1–4 min; a few % CPU).
-- `verify` against the delta/conflict oracles (reads changed files only, 10–30 s).
+- `verify` against the delta/conflict oracles (a warm compare of the two trees plus the changed files, 30 s–2 min).
 - `apply` dry run or `--write` after a warm compare (reads the changed files of three trees, ~1–2 min).
 - The HTML report (`--html`, `report <id>`, `write_report`: seconds, a ~20 MB write).
 - `dotnet build`, the unit suite (seconds), `dotnet publish`, small fixtures, reads/edits/searches, git.

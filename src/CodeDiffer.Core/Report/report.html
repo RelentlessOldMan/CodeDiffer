@@ -202,10 +202,11 @@ var CD = (function () {
     (meta.notes || []).forEach(function (n) { notes.appendChild(el("li", null, n)); });
     var r = meta.report;
     var foot = "Diffs: " + fmt(r.rendered) + " rendered";
-    if (r.capped) foot += " · " + fmt(r.capped) + " cut at " + fmt(r.maxLines) + " lines (full diff linked)";
+    if (r.capped) foot += " · " + fmt(r.capped) + " cut at " + fmt(r.maxLines) + " lines or 1 MB (full diff linked)";
     if (r.large) foot += " · " + fmt(r.large) + " large file(s) not block-diffed";
     if (r.notRendered) foot += " · " + fmt(r.notRendered) + " past the " + fmt(r.maxDiffs) + "-file limit";
     if (r.unreadable) foot += " · " + fmt(r.unreadable) + " unreadable";
+    if (r.stopped) foot += " · " + fmt(r.stopped) + " not rendered (stopped)";
     if (meta.resultDir) foot += " · saved result: " + meta.resultDir;
     $("foot").textContent = foot;
   }

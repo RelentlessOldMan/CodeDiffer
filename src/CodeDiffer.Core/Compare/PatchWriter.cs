@@ -111,9 +111,24 @@ public static class PatchWriter
         return stats;
     }
 
-    /// <summary>One change's section, for a reader (an agent's or the report's view of one file).</summary>
+    /// <summary>One change's section, for a reader (an agent's or the report's view of one file). A side that can't
+    /// be read (gone or locked since the compare) is said in one line, never thrown.</summary>
     public static void WriteChange(TextWriter w, FileChange c, string leftRoot, string rightRoot, PatchOptions opt, PatchStats stats)
-        => Section(w, c, leftRoot, rightRoot, opt, stats, forGit: false);
+    {
+        var sw = new StringWriter { NewLine = "\n" };
+        var local = new PatchStats();
+        try
+        {
+            Section(sw, c, leftRoot, rightRoot, opt, local, forGit: false);
+            w.Write(sw.ToString());
+            stats.Add(local);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            w.Write($"{Name(c)}: could not be read ({OneLine(ex.Message)})\n");
+            stats.UnreadableFiles++;
+        }
+    }
 
     /// <param name="forGit">Part of a whole patch for <c>git apply</c>: what it can't carry goes in '#' lines.</param>
     private static void Section(TextWriter w, FileChange c, string leftRoot, string rightRoot, PatchOptions opt, PatchStats stats, bool forGit)

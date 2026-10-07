@@ -118,24 +118,25 @@ public static class ChangePorter
         string fromRel = c.RenamedFrom ?? path;                 // where the base content lives (and lives in C)
         string tFrom = Full(target, fromRel), tTo = Full(target, path);
 
+        // Whole-file checks stream (a file can be bigger than memory); only a text merge reads files whole.
         switch (c.Status)
         {
             case ChangeStatus.Added:
             {
-                var b = File.ReadAllBytes(Full(rightRoot, path));
+                var src = Full(rightRoot, path);
                 if (!File.Exists(tTo))
                 {
-                    if (write) WriteAtomic(tTo, b);
+                    if (write) Output.Copy(src).WriteTo(tTo);
                     return File1(c, PortStatus.Clean, "create", HunkOutcome.Applied, null);
                 }
-                return SameBytes(tTo, b)
+                return TextInspector.SameBytes(tTo, src)
                     ? File1(c, PortStatus.Already, "none", HunkOutcome.Already, null)
                     : File1(c, PortStatus.Conflict, "none", HunkOutcome.Conflict, "added on the right, but the target already has a different file here");
             }
             case ChangeStatus.Removed:
             {
                 if (!File.Exists(tFrom)) return File1(c, PortStatus.Already, "none", HunkOutcome.Already, null);
-                if (!SameBytes(tFrom, File.ReadAllBytes(Full(leftRoot, path))))
+                if (!TextInspector.SameBytes(tFrom, Full(leftRoot, path)))
                     return File1(c, PortStatus.Conflict, "none", HunkOutcome.Conflict, "removed on the right, but the target changed it");
                 if (write) File.Delete(tFrom);
                 return File1(c, PortStatus.Clean, "delete", HunkOutcome.Applied, null);
@@ -144,9 +145,10 @@ public static class ChangePorter
 
         // Modified or renamed: needs the target's copy of the base file.
         bool renamed = c.Status == ChangeStatus.Renamed;
+        string aPath = Full(leftRoot, fromRel), bPath = Full(rightRoot, path);
         if (!File.Exists(tFrom))
         {
-            if (renamed && File.Exists(tTo) && SameBytes(tTo, File.ReadAllBytes(Full(rightRoot, path))))
+            if (renamed && File.Exists(tTo) && RenameDone(c, aPath, bPath, tTo, maxText))
                 return File1(c, PortStatus.Already, "none", HunkOutcome.Already, null);
             return File1(c, PortStatus.Conflict, "none", HunkOutcome.Conflict, $"target has no {fromRel}");
         }
@@ -155,41 +157,57 @@ public static class ChangePorter
         if (renamed && TreeMerger.PathComparer.Equals(tFrom, tTo))
             return File1(c, PortStatus.Conflict, "none", HunkOutcome.Conflict, $"a case-only rename ({fromRel} -> {path}) — rename it by hand");
 
-        string aPath = Full(leftRoot, fromRel), bPath = Full(rightRoot, path);
-        long big = Math.Max(Math.Max(new FileInfo(aPath).Length, new FileInfo(bPath).Length), new FileInfo(tFrom).Length);
-        bool byteLevel = big > maxText || c.Reason is ChangeReason.Binary or ChangeReason.Eol or ChangeReason.Encoding;
-
-        PortFile f;
-        byte[]? output;
-        if (!byteLevel)
-        {
-            var a = File.ReadAllBytes(aPath);
-            var b = File.ReadAllBytes(bPath);
-            var t = File.ReadAllBytes(tFrom);
-            (f, output) = Text.TryRead(a, out var at) && Text.TryRead(b, out var bt) && Text.TryRead(t, out var tt)
-                ? Merge(c, at, bt, tt)
-                : ByteLevel(c, a, b, t, "not round-trippable text (legacy encoding?) — compared as bytes");
-        }
-        else
-            (f, output) = ByteLevel(c, File.ReadAllBytes(aPath), File.ReadAllBytes(bPath), File.ReadAllBytes(tFrom),
-                big > maxText ? "large file — applied only if the target equals the base" : null);
+        var (f, output) = Plan(c, aPath, bPath, tFrom, maxText);
         if (f.Status != PortStatus.Clean) return f;
 
         if (renamed && File.Exists(tTo))
         {
             // The new path is already there. If it holds exactly what this rename writes, an earlier run was stopped
             // between writing it and deleting the old path: finish that. Anything else is someone else's file.
-            if (!SameBytes(tTo, output!))
+            if (!output!.Holds(tTo))
                 return File1(c, PortStatus.Conflict, "none", HunkOutcome.Conflict, $"rename target {path} already exists in the target");
             if (write) File.Delete(tFrom);
             return f with { Note = Join(f.Note, $"finishes an interrupted rename ({path} was already written; deletes {fromRel})") };
         }
         if (write)
         {
-            WriteAtomic(tTo, output!);
+            output!.WriteTo(tTo);
             if (renamed) File.Delete(tFrom);
         }
         return f;
+    }
+
+    /// <summary>The port of one modified/renamed file onto the target's copy <paramref name="tPath"/>: its verdict, and
+    /// for a clean one what to write.</summary>
+    private static (PortFile, Output?) Plan(FileChange c, string aPath, string bPath, string tPath, long maxText)
+    {
+        long big = Math.Max(Math.Max(new FileInfo(aPath).Length, new FileInfo(bPath).Length), new FileInfo(tPath).Length);
+        if (big > maxText || c.Reason is ChangeReason.Binary or ChangeReason.Eol or ChangeReason.Encoding)
+            return ByteLevel(c, aPath, bPath, tPath, big > maxText ? "large file — applied only if the target equals the base" : null);
+        var a = TextInspector.ReadAll(aPath);
+        var b = TextInspector.ReadAll(bPath);
+        var t = TextInspector.ReadAll(tPath);
+        if (Text.TryRead(a, out var at) && Text.TryRead(b, out var bt) && Text.TryRead(t, out var tt))
+        {
+            var (f, bytes) = Merge(c, at, bt, tt);
+            return (f, bytes is null ? null : Output.Of(bytes));
+        }
+        return ByteLevel(c, aPath, bPath, tPath, "not round-trippable text (legacy encoding?) — compared as bytes");
+    }
+
+    /// <summary>
+    /// A rename whose old path is gone from the target and whose new path is there: did an earlier run do it? Yes when
+    /// the new path already has the whole change (merging it again changes nothing) and is that file — it holds the
+    /// right side exactly, or at least one of the change's regions, or (a rename without edits) still mostly the base.
+    /// </summary>
+    private static bool RenameDone(FileChange c, string aPath, string bPath, string tTo, long maxText)
+    {
+        if (TextInspector.SameBytes(tTo, bPath)) return true;
+        var (f, _) = Plan(c with { Status = ChangeStatus.Modified, RenamedFrom = null }, aPath, bPath, tTo, maxText);
+        if (f.Status != PortStatus.Already) return false;
+        if (f.Hunks.Any(h => h.Outcome == HunkOutcome.Already && h.BaseLine > 0)) return true;
+        if (Math.Max(new FileInfo(aPath).Length, new FileInfo(tTo).Length) > maxText) return false;
+        return Similarity.Milli(TextInspector.Decode(TextInspector.ReadAll(aPath)), TextInspector.Decode(TextInspector.ReadAll(tTo))) >= 500;
     }
 
     private static string Join(string? a, string b) => a is null ? b : a + "; " + b;
@@ -246,14 +264,14 @@ public static class ChangePorter
             normalize ? $"merged ignoring line endings; written with the target's {t.Eol}" : null), t.Encode(text));
     }
 
-    private static (PortFile, byte[]?) ByteLevel(FileChange c, byte[] a, byte[] b, byte[] t, string? note)
+    private static (PortFile, Output?) ByteLevel(FileChange c, string aPath, string bPath, string tPath, string? note)
     {
-        if (t.AsSpan().SequenceEqual(b) && c.Status != ChangeStatus.Renamed)
+        if (TextInspector.SameBytes(tPath, bPath) && c.Status != ChangeStatus.Renamed)
             return (File1(c, PortStatus.Already, "none", HunkOutcome.Already, note), null);
-        if (!t.AsSpan().SequenceEqual(a))
+        if (!TextInspector.SameBytes(tPath, aPath))
             return (File1(c, PortStatus.Conflict, "none", HunkOutcome.Conflict,
                 (note is null ? "" : note + "; ") + "the target differs from the base, and this file can't be merged line by line"), null);
-        return (File1(c, PortStatus.Clean, c.Status == ChangeStatus.Renamed ? "rename" : "replace", HunkOutcome.Applied, note), b);
+        return (File1(c, PortStatus.Clean, c.Status == ChangeStatus.Renamed ? "rename" : "replace", HunkOutcome.Applied, note), Output.Copy(bPath));
     }
 
     private static PortFile File1(FileChange c, PortStatus s, string action, HunkOutcome o, string? note) =>
@@ -262,7 +280,7 @@ public static class ChangePorter
     /// <summary>Lines with their terminators kept (the last may have none).</summary>
     internal static List<string> Lines(string text, bool normalizeEol)
     {
-        if (normalizeEol) text = TextInspector.NormalizeEol(text);
+        if (normalizeEol) text = text.Replace("\r\n", "\n"); // CRLF only: a lone CR is content, it stays in its line
         var lines = new List<string>();
         int start = 0;
         for (int i = 0; i < text.Length; i++)
@@ -271,26 +289,35 @@ public static class ChangePorter
         return lines;
     }
 
-    private static bool SameBytes(string path, byte[] bytes)
-        => new FileInfo(path).Length == bytes.Length && File.ReadAllBytes(path).AsSpan().SequenceEqual(bytes);
-
-    /// <summary>
-    /// Write via a temp file in the same directory, then replace: a reader never sees a half file. The temp name is
-    /// fixed (one change per path, so no two writes share it): a run killed mid-write leaves at most this file, and
-    /// the next run overwrites and renames it.
-    /// </summary>
-    private static void WriteAtomic(string path, byte[] bytes)
+    /// <summary>What a clean file becomes: merged bytes, or (byte-level) a copy of the right side's file.</summary>
+    private sealed class Output
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var tmp = path + TempSuffix;
-        try
+        private byte[]? _bytes;
+        private string? _from;
+        public static Output Of(byte[] bytes) => new() { _bytes = bytes };
+        public static Output Copy(string from) => new() { _from = from };
+
+        public bool Holds(string path) => _bytes is not null ? TextInspector.SameBytes(path, _bytes) : TextInspector.SameBytes(path, _from!);
+
+        /// <summary>
+        /// Write via a temp file in the same directory, then replace: a reader never sees a half file. The temp name is
+        /// fixed (one change per path, so no two writes share it): a run killed mid-write leaves at most this file, and
+        /// the next run overwrites and renames it.
+        /// </summary>
+        public void WriteTo(string path)
         {
-            File.WriteAllBytes(tmp, bytes);
-            File.Move(tmp, path, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(tmp)) File.Delete(tmp);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var tmp = path + TempSuffix;
+            try
+            {
+                if (_bytes is not null) File.WriteAllBytes(tmp, _bytes);
+                else File.Copy(_from!, tmp, overwrite: true);
+                File.Move(tmp, path, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(tmp)) File.Delete(tmp);
+            }
         }
     }
 

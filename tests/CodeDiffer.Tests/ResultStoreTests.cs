@@ -105,6 +105,30 @@ public class ResultStoreTests : IDisposable
     }
 
     [Fact]
+    public void TheDefaultCompare_IsTheLastStarted_NotOneReopenedSince()
+    {
+        var older = Done(new SessionStore(resultsRoot: Results).Start(L, R, NoCache));
+        var store = new SessionStore(resultsRoot: Results);
+        var latest = Done(store.Start(L, R, NoCache));
+        Assert.NotNull(store.Get(older.Id)); // reopened from disk
+        Assert.Same(latest, store.Get(null));
+    }
+
+    [Fact]
+    public void HtmlReport_Stopped_IsStillWrittenWhole_AndSaysSo()
+    {
+        var s = Done(new SessionStore(resultsRoot: Results).Start(L, R, NoCache));
+        using var stop = new CancellationTokenSource();
+        stop.Cancel();
+        var r = HtmlReport.Write(s, ct: stop.Token);
+        Assert.Equal(0, r.Rendered);
+        Assert.Equal(6, r.Stopped); // f3..f5, big.txt, gone.h, new.h
+        Assert.True(File.Exists(r.IndexPath));
+        Assert.Contains("stopped before it was finished", File.ReadAllText(Path.Combine(Path.GetDirectoryName(r.IndexPath)!, "data", "index.js")));
+        Assert.Equal(6, HtmlReport.Write(s).Rendered); // and written again whole
+    }
+
+    [Fact]
     public void ResultsInsideACompareTree_IsRefused()
     {
         var store = new SessionStore(resultsRoot: Path.Combine(L, "results"));

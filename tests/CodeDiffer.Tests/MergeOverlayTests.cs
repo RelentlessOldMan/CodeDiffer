@@ -352,6 +352,16 @@ public sealed class MergeOverlayTests : IDisposable
         var r = OverlayApplier.Run(outDir, t, write: true);
         Assert.Contains(r.Failed, f => f.Path == "gone.c" && f.Why.Contains("directory"));
         Assert.Equal("mine\n", Read(t, "gone.c/keep.c"));
+
+        // A run with a failure is not "applied": once the cause is gone, running it again is not refused.
+        Assert.False(File.Exists(Path.Combine(outDir, OverlayApplier.AppliedName)));
+        Assert.True(File.Exists(Path.Combine(outDir, OverlayApplier.ApplyingName)));
+        Assert.Contains("run the same apply-overlay again", OverlayApplier.Text(r));
+        Directory.Delete(Path.Combine(t, "gone.c"), true);
+        var again = OverlayApplier.Run(outDir, t, write: true);
+        Assert.Empty(again.Failed);
+        Assert.True(again.AlreadyThere > 0);
+        Assert.True(File.Exists(Path.Combine(outDir, OverlayApplier.AppliedName)));
     }
 
     [Fact]

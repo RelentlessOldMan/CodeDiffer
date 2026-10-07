@@ -6,17 +6,23 @@ namespace CodeDiffer.Core.Compare;
 /// Classifies WHY two files (already known to differ in bytes) are modified — the honesty-contract
 /// reason. Precedence (first match wins):
 ///   1. <b>binary</b> — a NUL (no BOM) on EITHER side. Fixes the prototype's one-sided binary bug.
-///   2. (too large to decode cheaply ⇒ <b>content</b> — the giant-file path; block-level detail is lazy.)
-///   3. <b>encoding</b> — decoded text identical, bytes differ (UTF-8↔UTF-16 / BOM).
-///   4. <b>eol</b> — equal after EOL normalization (LF↔CRLF). Never reported as "content with no diff".
-///   5. <b>whitespace</b> — equal after stripping whitespace.
-///   6. <b>content</b> — a real textual change.
+///   2. <b>encoding</b> — decoded text identical, bytes differ (UTF-8↔UTF-16 / BOM).
+///   3. <b>eol</b> — equal after EOL normalization (LF↔CRLF). Never reported as "content with no diff".
+///   4. <b>whitespace</b> — equal after stripping whitespace.
+///   5. <b>content</b> — a real textual change.
+/// A file over <c>maxClassifyBytes</c> is not decoded whole: it is compared streamed, as bytes (BOM, ASCII whitespace
+/// and line endings normalized byte by byte, stopping at the first real difference — so a content change costs only
+/// the read up to it). Past <c>maxStreamBytes</c>, or in UTF-16/32, a difference is called content unchecked.
 /// </summary>
 public sealed class ReasonClassifier
 {
-    private readonly long _maxClassifyBytes;
+    private readonly long _maxClassifyBytes, _maxStreamBytes;
 
-    public ReasonClassifier(long maxClassifyBytes = 8L * 1024 * 1024) => _maxClassifyBytes = maxClassifyBytes;
+    public ReasonClassifier(long maxClassifyBytes = 8L * 1024 * 1024, long maxStreamBytes = 64L * 1024 * 1024)
+    {
+        _maxClassifyBytes = maxClassifyBytes;
+        _maxStreamBytes = maxStreamBytes;
+    }
 
     public ChangeReason Classify(string leftPath, long leftLength, string rightPath, long rightLength)
     {
@@ -28,10 +34,8 @@ public sealed class ReasonClassifier
         if (TextInspector.LooksBinary(Head(leftBytes)) || TextInspector.LooksBinary(Head(rightBytes)))
             return ChangeReason.Binary;
 
-        // Too large to fully decode on the eager Tier-2 pass; bytes differ, so it's a content change.
-        // The precise block-level picture is produced lazily on demand (see docs/OUTPUT.md §3).
         if (large)
-            return ChangeReason.Content;
+            return Math.Max(leftLength, rightLength) <= _maxStreamBytes ? Streamed(leftPath, leftBytes, rightPath, rightBytes) : ChangeReason.Content;
 
         var leftText = TextInspector.Decode(leftBytes);
         var rightText = TextInspector.Decode(rightBytes);
@@ -51,4 +55,77 @@ public sealed class ReasonClassifier
     }
 
     private static ReadOnlySpan<byte> Head(byte[] bytes) => bytes.AsSpan(0, Math.Min(bytes.Length, TextInspector.HeadBytes));
+
+    private enum Norm { None, Whitespace, Eol }
+
+    /// <summary>The same precedence on a large file, by streamed byte comparison (UTF-8 or a single-byte code page).</summary>
+    private static ChangeReason Streamed(string leftPath, byte[] leftHead, string rightPath, byte[] rightHead)
+    {
+        if (Wide(leftHead) || Wide(rightHead)) return ChangeReason.Content;
+        int l = Utf8Bom(leftHead) ? 3 : 0, r = Utf8Bom(rightHead) ? 3 : 0;
+        if (l != r && Same(leftPath, l, rightPath, r, Norm.None)) return ChangeReason.Encoding;
+        // Whitespace-stripped first: it is implied by eol-equality, and a content change ends it at the first difference.
+        if (!Same(leftPath, l, rightPath, r, Norm.Whitespace)) return ChangeReason.Content;
+        return Same(leftPath, l, rightPath, r, Norm.Eol) ? ChangeReason.Eol : ChangeReason.Whitespace;
+    }
+
+    private static bool Utf8Bom(byte[] h) => h is [0xEF, 0xBB, 0xBF, ..];
+    private static bool Wide(byte[] h) => h is [0xFF, 0xFE, ..] or [0xFE, 0xFF, ..] or [0x00, 0x00, 0xFE, 0xFF, ..];
+
+    private static bool Same(string a, int skipA, string b, int skipB, Norm norm)
+    {
+        using var fa = new Feed(a, skipA);
+        using var fb = new Feed(b, skipB);
+        while (true)
+        {
+            int x = Next(fa, norm), y = Next(fb, norm);
+            if (x != y) return false;
+            if (x < 0) return true;
+        }
+    }
+
+    private static int Next(Feed f, Norm norm)
+    {
+        while (true)
+        {
+            int c = f.Next();
+            switch (norm)
+            {
+                case Norm.Whitespace when c is ' ' or (>= 0x09 and <= 0x0D):
+                    continue;
+                case Norm.Eol when c == '\r':
+                    if (f.Peek() == '\n') f.Next();
+                    return '\n';
+                default:
+                    return c;
+            }
+        }
+    }
+
+    /// <summary>A file's bytes one at a time (-1 at the end), buffered.</summary>
+    private sealed class Feed : IDisposable
+    {
+        private readonly FileStream _fs;
+        private readonly byte[] _buf = new byte[1 << 16];
+        private int _n, _i;
+
+        public Feed(string path, int skip)
+        {
+            _fs = TextInspector.OpenShared(path, 1);
+            _fs.Position = skip;
+        }
+
+        public int Peek() => _i < _n || Fill() ? _buf[_i] : -1;
+
+        public int Next() => _i < _n || Fill() ? _buf[_i++] : -1;
+
+        private bool Fill()
+        {
+            _n = _fs.Read(_buf, 0, _buf.Length);
+            _i = 0;
+            return _n > 0;
+        }
+
+        public void Dispose() => _fs.Dispose();
+    }
 }

@@ -19,21 +19,26 @@ public sealed record ConflictCrossCheckResult(
     IReadOnlyList<Conflict> ConflictsOnlyInMine,
     IReadOnlyList<Conflict> ConflictsOnlyInManifest,
     IReadOnlyList<CleanMerge> CleanOnlyInMine,
-    IReadOnlyList<CleanMerge> CleanOnlyInManifest)
+    IReadOnlyList<CleanMerge> CleanOnlyInManifest,
+    IReadOnlyList<string> ConflictPathsOnlyInMine,
+    IReadOnlyList<string> ConflictPathsOnlyInManifest)
 {
     public int FilesChecked => Files.Count;
     public int V1Reconstructed => Files.Count(f => f.V1Reconstructs);
     public int V2Reconstructed => Files.Count(f => f.V2Reconstructs);
     public bool Reconstructs => Files.Count > 0 && Files.All(f => f.V1Reconstructs && f.V2Reconstructs);
 
+    /// <summary>My merge conflicts in exactly the files the manifest says conflict (wherever in them).</summary>
+    public bool ConflictPathsMatch => ConflictPathsOnlyInMine.Count == 0 && ConflictPathsOnlyInManifest.Count == 0;
+
     /// <summary>
-    /// Pass if EITHER gate confirms: my own diff3 reproduces the exact decomposition (digest equality —
-    /// achievable when the diff is unambiguous), OR the manifest's per-side coords rebuild both trees
-    /// (robust when a run of identical lines makes the diff non-unique). The two gates cover each other's
-    /// blind spots: an identical-line corpus defeats digest equality; an agreed-edit region defeats v2
-    /// reconstruction. A faithful manifest clears at least one.
+    /// Pass if my own diff3 reproduces the exact decomposition (digest equality — achievable when the diff is
+    /// unambiguous), OR — when a run of identical lines makes the minimal diff non-unique, so regions may
+    /// legitimately sit elsewhere — the manifest's per-side coords rebuild both trees AND my merge conflicts in
+    /// exactly the same files. Reconstruction alone tests only the manifest; the file agreement keeps CodeDiffer's
+    /// own merge in the gate.
     /// </summary>
-    public bool Ok => DecompositionMatches || Reconstructs;
+    public bool Ok => DecompositionMatches || (Reconstructs && ConflictPathsMatch);
 }
 
 /// <summary>
@@ -129,7 +134,9 @@ public static class ConflictTreeCrossCheck
             myConflicts.Count, myClean.Count, manifest.Conflicts.Count, manifest.CleanMerges.Count,
             files,
             mineC.Except(manC).Take(20).ToList(), manC.Except(mineC).Take(20).ToList(),
-            mineM.Except(manM).Take(20).ToList(), manM.Except(mineM).Take(20).ToList());
+            mineM.Except(manM).Take(20).ToList(), manM.Except(mineM).Take(20).ToList(),
+            myConflicts.Select(c => c.Path).Except(manifest.Conflicts.Select(c => c.Path), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(),
+            manifest.Conflicts.Select(c => c.Path).Except(myConflicts.Select(c => c.Path), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList());
     }
 
     private static bool ReconstructsSide(
