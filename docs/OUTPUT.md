@@ -117,13 +117,17 @@ v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content
 add/add, rename/rename, path collision, binary, large. Renames are followed (renamed on one side, edited
 on the other ⇒ merged at the new name). The same `get_summary` / `list_files` / `get_file_diff` / `get_stats`
 serve it; `get_file_diff` shows the merged file with diff3 markers (`<<<<<<< v1 / ||||||| base / ======= /
->>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested).
+>>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested). A file's encoding (BOM, UTF-16) and
+line-ending style (LF / CRLF / mixed) merge 3-way like its lines: a side that changed them wins (v2's LF→CRLF
+is kept when v1 also edited the file), the same change on both sides agrees, and different changes on both
+sides are a conflict of kind `encoding` or `line endings` (both files listed, nothing written). A mixed file
+keeps each line's own ending; a lone CR stays part of its line.
 
 **Merge overlay (built):** `write_merge(id[, out_dir])` (CLI `compare3 … --merge-out DIR`) writes the merge
 as an overlay on v1, never the whole tree: `files\` holds only what the merge changes in v1 (v2's one-sided
-changes, clean merges in v1's encoding and line endings, text conflicts with diff3 markers),
+changes, clean merges in the merged encoding and line endings, text conflicts with diff3 markers),
 `deletes.txt` the v1 paths to delete (v2's deletes, the old side of a move), `conflicts.txt` the conflicts
-with markers plus those that can't be one file (binary, large, modify/delete, rename/rename, path collision)
+with markers plus those that can't be one file (binary, large, modify/delete, rename/rename, path collision, encoding, line endings)
 with each side's file, and `OVERLAY.txt` how to apply it: delete the paths in `deletes.txt` from v1, then copy
 `files\` over v1 (deletes first, so a file v2 turned into a directory, or a case-only rename, lands right).
 A move's old path is listed only once its new file is written, so a failed read never loses v1's copy. Each

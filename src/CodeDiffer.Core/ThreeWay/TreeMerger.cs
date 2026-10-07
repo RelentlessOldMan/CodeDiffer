@@ -175,17 +175,19 @@ public static class TreeMerger
             || LooksBinary(bytes1) || LooksBinary(bytes2) || LooksBinary(baseBytes))
             return Conflict(added ? "add/add (binary)" : "binary", "both changed a binary (or non-text) file differently");
 
-        bool normalize = t1.Eol != tb.Eol || t2.Eol != tb.Eol;
-        var lb = ChangePorter.Lines(tb.Content, normalize);
-        var l1 = ChangePorter.Lines(t1.Content, normalize);
-        var l2 = ChangePorter.Lines(t2.Content, normalize);
+        var form = FormOf(tb, t1, t2, added);
+        var lb = Split(tb.Content, form.Normalize);
+        var l1 = Split(t1.Content, form.Normalize);
+        var l2 = Split(t2.Content, form.Normalize);
         var regions = ThreeWayMerger.Regions(lb, l1, l2);
         int conflicts = regions.Count(r => r.Kind == RegionKind.Conflict);
         int clean = regions.Count - conflicts;
-        string? note = normalize ? "line endings differ between the sides; merged ignoring them" : null;
         if (conflicts > 0)
-            return new(path, c1, c2, Merge3Outcome.Conflict, added ? "add/add" : "content", conflicts, clean, dest, note);
-        return new(path, c1, c2, Merge3Outcome.Merged, null, 0, clean, dest, note);
+            return new(path, c1, c2, Merge3Outcome.Conflict, added ? "add/add" : "content", conflicts, clean, dest, form.Note);
+        // The lines merge, but both sides changed the encoding or the line endings differently: someone has to pick.
+        if (form.Conflict is { } kind)
+            return new(path, c1, c2, Merge3Outcome.Conflict, kind, 0, clean, dest, form.Note);
+        return new(path, c1, c2, Merge3Outcome.Merged, null, 0, clean, dest, form.Note);
     }
 
     /// <summary>
@@ -196,8 +198,8 @@ public static class TreeMerger
     public static string? MergedText(Merge3Entry e, string b, string v1, string v2) => Compose(e, b, v1, v2)?.Merged;
 
     /// <summary>
-    /// The merged file as bytes to write: <see cref="MergedText"/> in v1's encoding, and in v1's line endings when the
-    /// sides' endings differed (it was merged ignoring them). Null when the entry has no line-level merge.
+    /// The merged file as bytes to write: <see cref="MergedText"/> in the merged encoding and line endings — 3-way like
+    /// the lines: a side that changed them wins (see <see cref="Form"/>). Null when the entry has no line-level merge.
     /// </summary>
     public static byte[]? MergedBytes(Merge3Entry e, string b, string v1, string v2) => MergedBytes(e, b, v1, v2, out _);
 
@@ -207,8 +209,8 @@ public static class TreeMerger
         conflicts = 0;
         if (Compose(e, b, v1, v2) is not { } m) return null;
         conflicts = m.Conflicts;
-        var text = m.Normalized && m.V1.Eol == "CRLF" ? m.Merged.Replace("\n", "\r\n") : m.Merged;
-        return m.V1.Encode(text);
+        var text = m.Form.Normalize && m.Form.Eol == "CRLF" ? m.Merged.Replace("\n", "\r\n") : m.Merged;
+        return m.Form.Encoding.Encode(text);
     }
 
     /// <summary>
@@ -224,53 +226,124 @@ public static class TreeMerger
         return w.ToString();
     }
 
-    private static (string Base, string Merged, ChangePorter.Text V1, bool Normalized, int Conflicts)? Compose(Merge3Entry e, string b, string v1, string v2)
+    private static (string Base, string Merged, Form Form, int Conflicts)? Compose(Merge3Entry e, string b, string v1, string v2)
     {
         if (e.V1 is null || e.V2 is null || e.ConflictKind is not (null or "content" or "add/add") || e.Outcome == Merge3Outcome.Agreed) return null;
         bool added = e.V1.Status == ChangeStatus.Added;
         if (!ChangePorter.Text.TryRead(added ? [] : File.ReadAllBytes(Full(b, e.Path)), out var tb)
             || !ChangePorter.Text.TryRead(File.ReadAllBytes(Full(v1, e.V1.RelativePath)), out var t1)
             || !ChangePorter.Text.TryRead(File.ReadAllBytes(Full(v2, e.V2.RelativePath)), out var t2)) return null;
-        bool normalize = t1.Eol != tb.Eol || t2.Eol != tb.Eol;
-        var lb = ChangePorter.Lines(tb.Content, normalize);
-        var l1 = ChangePorter.Lines(t1.Content, normalize);
-        var l2 = ChangePorter.Lines(t2.Content, normalize);
+        var form = FormOf(tb, t1, t2, added);
+        var lb = Split(tb.Content, form.Normalize);
+        var l1 = Split(t1.Content, form.Normalize);
+        var l2 = Split(t2.Content, form.Normalize);
+        var regions = ThreeWayMerger.Regions(lb, l1, l2);
+
+        // A "mixed" result has no one line ending to convert to: emit each side's own lines as they are (only CRLF was
+        // collapsed to compare them, so the line numbers match), the unchanged ones from the side whose style won.
+        bool raw = form.Normalize && form.Eol == "mixed";
+        var (ob, o1, o2) = raw ? (Split(tb.Content, false), Split(t1.Content, false), Split(t2.Content, false)) : (lb, l1, l2);
+        var gap = form.GapSide switch { 1 when raw => o1, 2 when raw => o2, _ => ob };
 
         var o = new StringBuilder();
         int cursor = 0, conflicts = 0;
-        string nl = !normalize && t1.Eol == "CRLF" ? "\r\n" : "\n"; // markers in the file's own line endings
+        string nl = !form.Normalize && form.Eol == "CRLF" ? "\r\n" : "\n"; // markers in the file's line endings (converted later if normalized)
         void Emit(List<string> lines, int start, int count)
         {
             for (int k = 0; k < count; k++) o.Append(lines[start + k]);
         }
+        void EmitGap(int from, int to, int shift) => Emit(gap, from + shift, to - from); // unchanged base lines, from the gap source
+        int Shift(MergeRegion r) => form.GapSide switch { 1 when raw => r.V1Start0 - r.BaseStart0, 2 when raw => r.V2Start0 - r.BaseStart0, _ => 0 };
         void Marker(string text)
         {
             if (o.Length > 0 && o[^1] != '\n') o.Append(nl); // a side ending without a newline: marker still on its own line
             o.Append(text).Append(nl);
         }
-        foreach (var r in ThreeWayMerger.Regions(lb, l1, l2))
+        foreach (var r in regions)
         {
-            Emit(lb, cursor, r.BaseStart0 - cursor);
+            EmitGap(cursor, r.BaseStart0, Shift(r));
             cursor = r.BaseStart0 + r.BaseLines;
             switch (r.Kind)
             {
-                case RegionKind.V2Only: Emit(l2, r.V2Start0, r.V2Lines); break;
+                case RegionKind.V2Only: Emit(o2, r.V2Start0, r.V2Lines); break;
                 case RegionKind.Conflict:
                     conflicts++;
                     Marker($"<<<<<<< v1 ({e.V1.RelativePath}:{r.V1Start0 + 1})");
-                    Emit(l1, r.V1Start0, r.V1Lines);
+                    Emit(o1, r.V1Start0, r.V1Lines);
                     Marker($"||||||| base ({e.Path}:{r.BaseStart0 + 1})");
-                    Emit(lb, r.BaseStart0, r.BaseLines);
+                    Emit(ob, r.BaseStart0, r.BaseLines);
                     Marker("=======");
-                    Emit(l2, r.V2Start0, r.V2Lines);
+                    Emit(o2, r.V2Start0, r.V2Lines);
                     Marker($">>>>>>> v2 ({e.V2.RelativePath}:{r.V2Start0 + 1})");
                     break;
-                default: Emit(l1, r.V1Start0, r.V1Lines); break; // V1Only or Agreed
+                case RegionKind.Agreed when form.GapSide == 2 && raw: Emit(o2, r.V2Start0, r.V2Lines); break;
+                default: Emit(o1, r.V1Start0, r.V1Lines); break; // V1Only or Agreed
             }
         }
-        Emit(lb, cursor, lb.Count - cursor);
-        return (string.Concat(lb), o.ToString(), t1, normalize, conflicts);
+        int tail = form.GapSide switch { 1 when raw => o1.Count - ob.Count, 2 when raw => o2.Count - ob.Count, _ => 0 };
+        EmitGap(cursor, lb.Count, tail);
+        return (string.Concat(ob), o.ToString(), form, conflicts);
     }
+
+    /// <summary>
+    /// How a merged text file is written: 3-way on its encoding (with BOM) and its line-ending style, the way its lines
+    /// are merged — a side that changed it wins, both changing it the same way agree, both changing it differently is a
+    /// conflict (<see cref="Form.Conflict"/>). Two adds have no base: they must agree.
+    /// </summary>
+    /// <param name="Normalize">The sides' line endings differ: lines are compared with CRLF read as LF.</param>
+    /// <param name="Eol">The result's style: LF, CRLF or mixed.</param>
+    /// <param name="Encoding">The side whose encoding the result is written in.</param>
+    /// <param name="GapSide">Whose line-ending style won (0 base, 1 v1, 2 v2).</param>
+    internal sealed record Form(bool Normalize, string Eol, ChangePorter.Text Encoding, int GapSide, string? Conflict, string? Note);
+
+    private static Form FormOf(ChangePorter.Text tb, ChangePorter.Text t1, ChangePorter.Text t2, bool added)
+    {
+        static bool Same(ChangePorter.Text a, ChangePorter.Text b)
+            => a.Encoding.CodePage == b.Encoding.CodePage && a.Encoding.GetPreamble().Length == b.Encoding.GetPreamble().Length;
+        static string Name(ChangePorter.Text t) => t.Encoding.WebName.ToUpperInvariant() + (t.Encoding.GetPreamble().Length > 0 ? " with BOM" : "");
+        var notes = new List<string>();
+        string? conflict = null;
+
+        var enc = t1;
+        if (added ? !Same(t1, t2) : !Same(t1, tb) && !Same(t2, tb) && !Same(t1, t2))
+        {
+            conflict = "encoding";
+            notes.Add($"v1 changed the encoding to {Name(t1)}, v2 to {Name(t2)}");
+        }
+        else if (!added && Same(t1, tb) && !Same(t2, tb))
+        {
+            enc = t2;
+            notes.Add($"v2 changed the encoding ({Name(tb)} → {Name(t2)}); the merge keeps it");
+        }
+        else if (!added && !Same(t1, tb)) notes.Add($"v1 changed the encoding ({Name(tb)} → {Name(t1)}); the merge keeps it");
+
+        string eb = added ? t1.Eol : tb.Eol;
+        string eol = eb;
+        int side = 0;
+        if (added && t1.Eol != t2.Eol)
+        {
+            conflict ??= "line endings";
+            notes.Add($"v1 added it with {t1.Eol} line endings, v2 with {t2.Eol}");
+            eol = t1.Eol;
+            side = 1;
+        }
+        else if (!added && (t1.Eol != eb || t2.Eol != eb))
+        {
+            if (t1.Eol == eb) (eol, side) = (t2.Eol, 2);
+            else if (t2.Eol == eb || t1.Eol == t2.Eol) (eol, side) = (t1.Eol, 1);
+            else
+            {
+                conflict ??= "line endings";
+                notes.Add($"v1 changed the line endings to {t1.Eol}, v2 to {t2.Eol}");
+                (eol, side) = (t1.Eol, 1);
+            }
+            if (conflict != "line endings") notes.Add($"{(side == 1 ? "v1" : "v2")} changed the line endings ({eb} → {eol}); the merge keeps them");
+        }
+        return new(side != 0, eol, enc, side, conflict, notes.Count > 0 ? string.Join("; ", notes) : null);
+    }
+
+    /// <summary>Lines, each with its ending; <paramref name="normalize"/> reads CRLF as LF (a lone CR stays content).</summary>
+    private static List<string> Split(string text, bool normalize) => ChangePorter.Lines(normalize ? text.Replace("\r\n", "\n") : text, false);
 
     private static bool LooksBinary(byte[] bytes) => TextInspector.LooksBinary(bytes.AsSpan(0, Math.Min(bytes.Length, TextInspector.HeadBytes)));
 

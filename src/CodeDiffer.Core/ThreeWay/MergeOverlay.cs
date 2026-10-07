@@ -17,7 +17,7 @@ public sealed record OverlayResult(string Dir, int FromV2, int Merged, int Marke
 ///   and text conflicts written with diff3 markers (<c>&lt;&lt;&lt;&lt;&lt;&lt;&lt; v1</c> … <c>&gt;&gt;&gt;&gt;&gt;&gt;&gt; v2</c>).</item>
 /// <item><c>deletes.txt</c> — v1 paths to delete (removed by v2, or moved by a rename), one per line.</item>
 /// <item><c>conflicts.txt</c> — the conflicts: those in <c>files\</c> with markers, and those that can't be written
-///   as one file (binary, large, modify/delete, rename/rename, path collision) with each side's file to choose from.</item>
+///   as one file (binary, large, modify/delete, rename/rename, path collision, encoding, line endings) with each side's file to choose from.</item>
 /// <item><c>OVERLAY.txt</c> — what this is and how to apply it.</item>
 /// </list>
 /// Applying it: delete the paths in <c>deletes.txt</c> from v1, then copy <c>files\</c> over v1 (deletes first, so a
@@ -177,7 +177,7 @@ public static class MergeOverlay
 
               files\       {result.FromV2:N0} from v2 (only v2 changed them) · {result.Merged:N0} merged cleanly · {result.Markers:N0} with conflict markers · {result.Moved:N0} moved by v2's rename ({Bytes(bytes)})
               deletes.txt  {result.Deletes:N0} path(s)
-              conflicts.txt {result.Markers:N0} with markers in files\ · {result.Unresolved - result.Failed:N0} not merged (binary, large, delete or rename conflicts){(result.Failed > 0 ? $" · {result.Failed:N0} FAILED to write" : "")}: v1's version stays until decided
+              conflicts.txt {result.Markers:N0} with markers in files\ · {result.Unresolved - result.Failed:N0} not merged (binary, large, delete, rename, encoding or line-ending conflicts){(result.Failed > 0 ? $" · {result.Failed:N0} FAILED to write" : "")}: v1's version stays until decided
             {(result.DroppedDirectories > 0 ? $"\nINCOMPLETE COMPARE: {result.DroppedDirectories:N0} director(ies) could not be read, so changes under them are not in this overlay.\n" : "")}
             Written from the trees as they were when the overlay was written; if they changed after the compare, compare again first.
             """.Replace("\r\n", "\n"), new UTF8Encoding(false));
