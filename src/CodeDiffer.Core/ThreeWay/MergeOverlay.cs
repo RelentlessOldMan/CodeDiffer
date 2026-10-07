@@ -152,8 +152,10 @@ public static class MergeOverlay
         var c = new StringBuilder();
         var markers = done.Where(w => w.Kind == Kind.Markers).ToList();
         c.Append($"# {markers.Count} conflict(s) written to files\\ with diff3 markers (<<<<<<< v1 ... ||||||| base ... ======= ... >>>>>>> v2):\n");
-        foreach (var w in markers) c.Append($"markers  {w.Dest}  ({w.E.ConflictRegions} region(s))\n");
-        c.Append($"# {unresolved.Count} conflict(s) not written (v1's version stays until decided); each side's file to choose from:\n");
+        foreach (var w in markers)
+            c.Append($"markers  {w.Dest}  ({w.E.ConflictRegions} region(s))").Append(w.E.Note is { } n ? $"  — {n}" : "").Append('\n');
+        c.Append($"# {unresolved.Count - failed.Count} conflict(s) not written (v1's version stays until decided)" +
+                 (failed.IsEmpty ? "" : $" and {failed.Count} file(s) that FAILED to write") + "; each side's file to choose from:\n");
         foreach (var (e, why) in unresolved)
         {
             c.Append($"{why}  {e.Path}").Append(e.Note is { } n ? $"  — {n}" : "").Append('\n');

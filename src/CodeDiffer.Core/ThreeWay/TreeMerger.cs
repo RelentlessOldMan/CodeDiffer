@@ -184,8 +184,11 @@ public static class TreeMerger
         var regions = ThreeWayMerger.Regions(lb, l1, l2);
         int conflicts = regions.Count(r => r.Kind == RegionKind.Conflict);
         int clean = regions.Count - conflicts;
+        // Conflicting lines are written with markers; a conflict in the encoding or line endings too must not vanish
+        // behind them — the note says so, and that the markers file is written in v1's form.
         if (conflicts > 0)
-            return new(path, c1, c2, Merge3Outcome.Conflict, added ? "add/add" : "content", conflicts, clean, dest, form.Note);
+            return new(path, c1, c2, Merge3Outcome.Conflict, added ? "add/add" : "content", conflicts, clean, dest,
+                form.Conflict is { } also ? $"{also} conflict too ({form.Note}): the markers file is written in v1's" : form.Note);
         // The lines merge, but both sides changed the encoding or the line endings differently: someone has to pick.
         if (form.Conflict is { } kind)
             return new(path, c1, c2, Merge3Outcome.Conflict, kind, 0, clean, dest, form.Note);

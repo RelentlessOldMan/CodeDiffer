@@ -102,6 +102,27 @@ public class HashCacheTests : IDisposable
     }
 
     [Fact]
+    public void PureRenames_AreHashedOnce_ThenAnsweredFromTheLedger()
+    {
+        MakeTrees();
+        var moved = string.Concat(Enumerable.Range(0, 2000).Select(i => $"moved line {i}\n"));
+        Put("L/old/m.bin", moved);
+        Put("R/new/m.bin", moved);
+        Put("L/gone.txt", "short\n"); // no added file has its size: never read
+
+        var cold = Run();
+        var ren = cold.Changes.Single(c => c.Status == ChangeStatus.Renamed);
+        Assert.Equal(("new/m.bin", "old/m.bin", 1000), (ren.RelativePath, ren.RenamedFrom, ren.SimilarityMilli ?? 0));
+        long pairs = 2 * 10 * Encoding.UTF8.GetByteCount("line 0\nsame\n");
+        Assert.Equal(pairs + 2 * moved.Length, cold.BytesRead); // the rename's two reads are counted
+
+        var warm = Run();
+        Assert.Equal(22, warm.CacheHits); // 10 pairs × 2 sides + the rename's two sides
+        Assert.Equal(0, warm.BytesRead);
+        Assert.Equal(cold.Changes, warm.Changes);
+    }
+
+    [Fact]
     public void WarmRun_AnswersFromCache_ReadsNoBytes_SameVerdicts()
     {
         MakeTrees();

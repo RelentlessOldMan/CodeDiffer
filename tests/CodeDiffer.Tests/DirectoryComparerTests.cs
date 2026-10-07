@@ -47,6 +47,63 @@ public sealed class DirectoryComparerTests : IDisposable
     }
 
     [Fact]
+    public void PathsPastMaxPath_AreListedAndStatted()
+    {
+        // 300+ characters: the native listing and the cache's live stat must use the \\?\ form, or the deep
+        // directory is "unreadable" and its files fall out of the compare.
+        var deep = string.Join('/', Enumerable.Range(0, 8).Select(i => $"level{i}-" + new string('d', 30))) + "/f.c";
+        WriteLeft(deep, "one\n");
+        WriteRight(deep, "two\n");
+        WriteLeft("deep-same/" + deep, "same\n");
+        WriteRight("deep-same/" + deep, "same\n");
+        Assert.True(Path.Combine(_left, "deep-same", deep).Length > 300);
+
+        var cacheDir = Path.Combine(_left + "-cache");
+        var o = new CompareOptions { CacheBaseDir = cacheDir, Timing = new CodeDiffer.Core.Ledger.TrustTiming(0, 0) };
+        try
+        {
+            foreach (var run in new[] { "cold", "warm" })
+            {
+                var r = new DirectoryComparer(o).Compare(_left, _right);
+                Assert.Equal((0, 0), (r.LeftDroppedDirectories, r.RightDroppedDirectories));
+                Assert.Equal(ChangeStatus.Modified, Change(r, deep).Status);
+                Assert.Equal(ChangeStatus.Identical, Change(r, "deep-same/" + deep).Status);
+                if (run == "warm") Assert.Equal(4, r.CacheHits); // the live stat of a long path works
+            }
+        }
+        finally { try { Directory.Delete(cacheDir, true); } catch { } }
+    }
+
+    [Fact]
+    public void AJunction_IsNotFollowed_ButCounted()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        WriteLeft("a.c", "x\n");
+        WriteRight("a.c", "x\n");
+        var outside = _right + "-outside";
+        Write(outside, "behind.c", Encoding.UTF8.GetBytes("not in the tree\n"));
+        try
+        {
+            // A junction needs no admin rights (a symlink may); both are name-surrogate reparse points.
+            var mk = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe",
+                $"/c mklink /J \"{Path.Combine(_right, "link")}\" \"{outside}\"") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true })!;
+            mk.WaitForExit();
+            Assert.True(Directory.Exists(Path.Combine(_right, "link")), "mklink /J failed");
+
+            var r = Run();
+            Assert.Equal(1, r.SkippedLinks);
+            Assert.DoesNotContain(r.Changes, c => c.RelativePath.StartsWith("link", StringComparison.Ordinal));
+            Assert.Contains("1 symlink(s)/junction(s) not followed",
+                CodeDiffer.Core.Sessions.AgentViews.Summary(new CodeDiffer.Core.Sessions.SessionStore(save: false).Adopt(_left, _right, new CompareOptions(), r, DateTime.Now, TimeSpan.Zero)));
+        }
+        finally
+        {
+            try { Directory.Delete(Path.Combine(_right, "link")); } catch { }
+            try { Directory.Delete(outside, true); } catch { }
+        }
+    }
+
+    [Fact]
     public void AddedRemovedIdentical_AreClassified()
     {
         WriteLeft("gone.txt", "bye\n");

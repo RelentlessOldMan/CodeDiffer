@@ -415,7 +415,7 @@ var CD = (function () {
       if (!panel.isConnected && !state.panels.has(f.i)) return;
       if (!d) { body.textContent = "This file's diff could not be loaded (data/d/" + f.i + ".js is missing)."; return; }
       if (d.mode === "merge" && d.blocks) {
-        head.appendChild(el("span", null, d.shownBlocks < d.blocks
+        head.appendChild(el("span", null, d.full
           ? "showing " + fmt(d.shownBlocks) + " of " + fmt(d.blocks) + " conflict blocks (" + fmt(d.shown) + " of " + fmt(d.total) + " lines)"
           : fmt(d.blocks) + " conflict block(s) with context · " + fmt(d.total) + " lines in the merged file"));
       } else if (d.full) {
@@ -533,6 +533,7 @@ var CD = (function () {
       if (start > next) gap(start - next);
       lines.forEach(function (l, k) {
         var tr, mk = true;
+        if (l.charAt(l.length - 1) === "\r") l = l.slice(0, -1); // a CRLF file's lines keep their \r
         if (l.indexOf("<<<<<<< v1") === 0) zone = "v1";
         else if (l.indexOf("||||||| base") === 0) zone = "base";
         else if (l === "=======" && zone === "base") zone = "v2";

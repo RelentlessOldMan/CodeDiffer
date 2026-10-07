@@ -41,9 +41,10 @@ public static class GiantFileDiffer
         long changedOld = 0, changedNew = 0;
         foreach (var h in hunks)
         {
-            // Block span in each sequence: an insert/delete anchors on the "after-which" index.
+            // Block span in each sequence (0-based boundary): an insert's OldStart is the "after-which" block, but
+            // NewStart is always the first new block's 1-based index — a delete's too (see LineDiffer.BuildHunks).
             int oldStart = h.OldLines == 0 ? h.OldStart : h.OldStart - 1;
-            int newStart = h.NewLines == 0 ? h.NewStart : h.NewStart - 1;
+            int newStart = h.NewStart - 1;
 
             long oldOff = ByteOffsetAt(oldChunks, oldStart, oldSize);
             long oldLen = ByteOffsetAt(oldChunks, oldStart + h.OldLines, oldSize) - oldOff;

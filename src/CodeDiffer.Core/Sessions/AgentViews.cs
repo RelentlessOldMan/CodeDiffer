@@ -520,6 +520,8 @@ public static class AgentViews
                      "could not be listed; adds/removes under them may be listing failures.\n");
         if (r.UnstableFiles > 0)
             o.Append($"note: {r.UnstableFiles} file(s) changed while being read (live writer) — compared as read.\n");
+        if (r.SkippedLinks > 0)
+            o.Append($"note: {r.SkippedLinks} symlink(s)/junction(s) not followed — nothing behind them is compared.\n");
         if (r.UnreadableFiles > 0)
             o.Append($"WARNING: {r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown, " +
                      "listed as [unreadable] (a pair as modified, never identical); compare again once they can be read.\n");

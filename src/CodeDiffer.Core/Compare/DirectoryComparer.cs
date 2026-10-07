@@ -231,7 +231,9 @@ public sealed class DirectoryComparer
             Phase("same-size content");
             ct.ThrowIfCancellationRequested();
             progress?.SetPhase(ComparePhase.Renames);
-            AddResolvedAddsRemovesAndRenames(changes, removed, added, ct);
+            long renameBytes = AddResolvedAddsRemovesAndRenames(changes, removed, added, leftCache, rightCache, ct);
+            bytesRead += renameBytes;
+            progress?.RenamesRead(renameBytes);
             Phase("renames");
         }
         catch (Exception)
@@ -252,6 +254,7 @@ public sealed class DirectoryComparer
 
         return new CompareReport(changes, lw.DroppedDirectories, rw.DroppedDirectories)
         {
+            SkippedLinks = lw.SkippedLinks + rw.SkippedLinks,
             CacheHits = leftCache.Hits + rightCache.Hits,
             CodeCompassHits = leftCache.CodeCompassHits + rightCache.CodeCompassHits,
             ReusedLeftFiles = reusedFiles,
@@ -276,15 +279,19 @@ public sealed class DirectoryComparer
     /// leftover Added / Removed. A rename's destination path is its RelativePath; its source rides in
     /// RenamedFrom. Left/right sizes are carried so the summary can show both ends of a move.
     /// </summary>
-    private void AddResolvedAddsRemovesAndRenames(List<FileChange> changes, List<FileEntry> removed, List<FileEntry> added, CancellationToken ct)
+    /// <returns>The bytes rename detection read (ledger hits read none).</returns>
+    private long AddResolvedAddsRemovesAndRenames(List<FileChange> changes, List<FileEntry> removed, List<FileEntry> added,
+        HashCache leftCache, HashCache rightCache, CancellationToken ct)
     {
         IReadOnlyList<FileEntry> leftoverRemoved = removed;
         IReadOnlyList<FileEntry> leftoverAdded = added;
         IReadOnlyDictionary<string, string>? unreadable = null;
+        long read = 0;
 
         if (_options.DetectRenames)
         {
-            var result = new RenameDetector(_options).Detect(removed, added, ct);
+            var result = new RenameDetector(_options).Detect(removed, added, leftCache, rightCache, ct);
+            read = result.BytesRead;
             leftoverRemoved = result.UnmatchedRemoved;
             leftoverAdded = result.UnmatchedAdded;
             unreadable = result.Unreadable;
@@ -304,5 +311,6 @@ public sealed class DirectoryComparer
             changes.Add(new FileChange(e.RelativePath, ChangeStatus.Removed, null, e.Length, 0, Unreadable: Why(e)));
         foreach (var e in leftoverAdded)
             changes.Add(new FileChange(e.RelativePath, ChangeStatus.Added, null, 0, e.Length, Unreadable: Why(e)));
+        return read;
     }
 }

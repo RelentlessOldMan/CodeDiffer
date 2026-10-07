@@ -50,11 +50,17 @@ static int Run(string[] args)
 
 static int Compare(string[] args)
 {
+    const string compareUsage = "usage: codediffer compare <left-tree> <right-tree> [--threads N] [--no-cache | --rehash] [--fast-stat] " +
+                                "[--patch [-U N] [--literal]] [--timings] [--no-save] [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]";
     if (args.Length < 3)
     {
-        Console.Error.WriteLine("usage: codediffer compare <left-tree> <right-tree> [--threads N] [--no-cache | --rehash] [--fast-stat] [--patch [-U N] [--literal]]");
+        Console.Error.WriteLine(compareUsage);
         return 64;
     }
+    if (!ArgsOk(args, 2, compareUsage,
+            ["--no-cache", "--rehash", "--fast-stat", "--patch", "--literal", "--timings", "--no-save", "--html", "--large", "--include-identical"],
+            ["--threads", "-U", "--max-diffs", "--out"]))
+        return 64;
 
     int threads = new CompareOptions().Parallelism;
     if (FlagValue(args, "--threads") is { } t && (!int.TryParse(t, out threads) || threads < 1))
@@ -112,14 +118,17 @@ static int Compare(string[] args)
         (report.PendingFiles > 0 ? $" · {report.PendingFiles} too recently modified to cache yet" : ""));
     if (report.UnstableFiles > 0)
         Console.Error.WriteLine($"note: {report.UnstableFiles} file(s) changed while being read (live writer) — compared as read, not cached.");
+    if (report.SkippedLinks > 0)
+        Console.Error.WriteLine($"note: {report.SkippedLinks} symlink(s)/junction(s) not followed — nothing behind them is compared.");
 
+    int? htmlCode = null; // a failed or stopped report: its exit code, but only after the warnings below
     if (!args.Contains("--no-save"))
     {
         try
         {
             var session = new SessionStore().Adopt(args[1], args[2], options, report, started, compareTime);
             info.WriteLine(session.SaveError is { } se ? $"  saved      NOT saved: {se}" : $"  saved      {session.ResultDir}  (id {session.Id})");
-            if (args.Contains("--html") && session.SaveError is null && WriteHtml(session, args, info) is { } bad) return bad;
+            if (args.Contains("--html") && session.SaveError is null) htmlCode = WriteHtml(session, args, info);
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
@@ -138,7 +147,7 @@ static int Compare(string[] args)
     if (report.UnreadableFiles > 0)
         Console.Error.WriteLine($"WARNING: {report.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict " +
             "is unknown, listed as [unreadable] (a pair as modified, never identical); compare again once they can be read.");
-    return report.LeftDroppedDirectories + report.RightDroppedDirectories + report.UnreadableFiles > 0 ? 3 : 0;
+    return htmlCode ?? (report.LeftDroppedDirectories + report.RightDroppedDirectories + report.UnreadableFiles > 0 ? 3 : 0);
 }
 
 /// <summary>Write the HTML report for a finished session; prints its path. Returns an exit code on failure, else null.</summary>
@@ -199,9 +208,10 @@ static int? WriteHtml(Session s, string[] args, TextWriter info)
 /// <summary>report: the HTML report for a saved compare (by id or result directory).</summary>
 static int Report(string[] args)
 {
-    if (args.Length < 2)
+    const string reportUsage = "usage: codediffer report <id|result-dir> [--large] [--include-identical] [--max-diffs N] [--out DIR]";
+    if (args.Length < 2 || !ArgsOk(args, 1, reportUsage, ["--large", "--include-identical"], ["--max-diffs", "--out"]))
     {
-        Console.Error.WriteLine("usage: codediffer report <id|result-dir> [--large] [--include-identical] [--max-diffs N] [--out DIR]");
+        if (args.Length < 2) Console.Error.WriteLine(reportUsage);
         return 64;
     }
     Session? s;
@@ -503,6 +513,28 @@ static string DeltaKind(string path)
         : "diff";
 }
 
+/// <summary>
+/// Refuse what a command doesn't take: an unknown flag, an extra word, or a flag's missing value. A mistyped option
+/// (--no-chache, --merge-dir) used to be ignored — the run went ahead without it, perhaps for an hour.
+/// </summary>
+/// <returns>True when the arguments are fine; else the error and the usage are printed.</returns>
+static bool ArgsOk(string[] args, int positional, string usage, string[] switches, string[] valued)
+{
+    for (int i = 1 + positional; i < args.Length; i++)
+    {
+        if (switches.Contains(args[i])) continue;
+        if (valued.Contains(args[i]))
+        {
+            if (i + 1 < args.Length && !(args[i + 1].StartsWith("--", StringComparison.Ordinal))) { i++; continue; }
+            Console.Error.WriteLine($"error: {args[i]} needs a value");
+        }
+        else Console.Error.WriteLine($"error: unknown argument '{args[i]}'");
+        Console.Error.WriteLine(usage);
+        return false;
+    }
+    return true;
+}
+
 static string? FlagValue(string[] args, string flag, int from = 2)
 {
     for (int i = from; i < args.Length - 1; i++)
@@ -548,9 +580,10 @@ static void PrintChanges(CompareReport r)
 
 static int DiffFiles(string[] args)
 {
-    if (args.Length < 3)
+    const string diffUsage = "usage: codediffer diff <left-file> <right-file> [-U N] [--literal]";
+    if (args.Length < 3 || !ArgsOk(args, 2, diffUsage, ["--literal"], ["-U"]))
     {
-        Console.Error.WriteLine("usage: codediffer diff <left-file> <right-file> [-U N] [--literal]");
+        if (args.Length < 3) Console.Error.WriteLine(diffUsage);
         return 64;
     }
     if (Directory.Exists(args[1]) || Directory.Exists(args[2]))
@@ -596,9 +629,10 @@ static string Version()
 /// <summary>apply: port left->right onto a third tree (dry run unless --write). Exit 1 when anything conflicts.</summary>
 static int Apply(string[] args)
 {
-    if (args.Length < 4)
+    const string applyUsage = "usage: codediffer apply <left> <right> <target> [--write] [--threads N] [--no-cache]";
+    if (args.Length < 4 || !ArgsOk(args, 3, applyUsage, ["--write", "--no-cache"], ["--threads"]))
     {
-        Console.Error.WriteLine("usage: codediffer apply <left> <right> <target> [--write] [--threads N] [--no-cache]");
+        if (args.Length < 4) Console.Error.WriteLine(applyUsage);
         return 64;
     }
     int threads = new CompareOptions().Parallelism;
@@ -680,9 +714,12 @@ static int ApplyOverlay(string[] args)
 /// <summary>compare3: base vs v1 vs v2. Exit 1 when anything conflicts, 3 on an incomplete walk.</summary>
 static int Compare3(string[] args)
 {
-    if (args.Length < 4)
+    const string compare3Usage = "usage: codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache] [--merge-out DIR] [--no-save] " +
+                                 "[--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]";
+    if (args.Length < 4 || !ArgsOk(args, 3, compare3Usage,
+            ["--all", "--no-cache", "--no-save", "--html", "--large", "--include-identical"], ["--threads", "--merge-out", "--max-diffs", "--out"]))
     {
-        Console.Error.WriteLine("usage: codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache] [--merge-out DIR]");
+        if (args.Length < 4) Console.Error.WriteLine(compare3Usage);
         return 64;
     }
     int threads = new CompareOptions().Parallelism;
@@ -879,5 +916,8 @@ static void PrintUsage()
                                                also assert CodeDiffer's 3-way merge decomposition
                                                (or reconstruction + the same conflicted files)
           codediffer help                      this help
+
+        exit codes: 0 done · 1 conflicts / a file failed / a verify gate failed · 2 error
+                    3 done but incomplete (unlistable directory or unreadable file) · 64 usage · 130 Ctrl+C
         """);
 }

@@ -107,6 +107,16 @@ public sealed class MergeFormTests : IDisposable
     }
 
     [Fact]
+    public void AnEncodingConflict_IsStillSaid_WhenTheLinesConflictToo()
+    {
+        var (e, bytes) = Merge(Ten, Ten.Replace("line 5", "v1 five"), Ten.Replace("line 5", "v2 five"), e1: Utf8Bom, e2: Utf16);
+        Assert.Equal(("content", 1), (e.ConflictKind, e.ConflictRegions)); // written with markers...
+        Assert.Contains("encoding conflict too", e.Note);              // ...but the encoding conflict is not lost
+        Assert.Contains("v1 changed the encoding to UTF-8 with BOM, v2 to UTF-16", e.Note);
+        Assert.Equal(Utf8Bom.GetPreamble(), bytes![..3]);                // in v1's form, as the note says
+    }
+
+    [Fact]
     public void BothConvertingTheSameWay_Agrees()
     {
         var (e, bytes) = Merge(Ten, Crlf(Edit1(Ten)), Crlf(Edit2(Ten)));

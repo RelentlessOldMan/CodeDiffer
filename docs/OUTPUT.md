@@ -111,12 +111,23 @@ including rename detection and compare3's merge (death, cold, 25 s in: stopped i
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
 `<results>\yyyyMMdd-HHmmss-<id>\` (default `%LOCALAPPDATA%\CodeDiffer\results`, `CODEDIFFER_RESULTS_DIR`
 overrides; refused if it would land inside a compared tree). `compare.json` (format/version, kind, state
-running → done | failed, roots, options, read cost, timings, counts) is written first as "running", so a
-crashed compare leaves an honest trace; `changes.jsonl` (2-way, every path) or `v1.jsonl`/`v2.jsonl`/
+running → done | failed | cancelled, roots, options, read cost, timings, counts) is written first as "running",
+with the process and machine running it, so a crashed compare leaves an honest trace: once that process is gone
+it is listed as `stopped` (and `results --prune` may delete it at once; a "running" one from another machine, or
+one whose process can't be checked, is kept a day). A compare still running in another process (another MCP
+server, a CLI run) is listed, but only that process can answer about it; it opens here once it is done.
+A malformed `compare.json` is reported as a corrupt result, never an error that ends the server; a path with an
+unpaired UTF-16 surrogate (legal on NTFS) is saved losslessly, so it reopens as the same file; `changes.jsonl` (2-way, every path) or `v1.jsonl`/`v2.jsonl`/
 `entries.jsonl` (3-way) hold the verdicts. Only verdicts are stored, not file contents: any compare_id (or
 the directory) reopens without re-comparing (`list_compares`, CLI `results`), and a diff rendered later
 from the live trees warns when a file's size no longer matches what was compared. Capped patches, apply
 reports and the HTML report go into the same directory.
+
+Renames cost little on a warm compare: the pure (byte-identical) pass hashes only adds and removes whose size
+occurs on both sides, in parallel, and uses the hash ledgers (a second run reads nothing for it); the edited
+pass reads the text candidates in parallel, skips every pair whose line counts alone rule out the 50% threshold,
+and scores the rest in parallel — exactly the contract's similarity, the same pairs as scoring all of them. Both
+are counted in the bytes read.
 
 `start_compare3(base, v1, v2)` (CLI `compare3`): base→v1 then base→v2, sequential, and the second reuses
 the first's base listing and the base hashes it proved (no re-listing, no re-reading, not even a per-file
@@ -128,8 +139,10 @@ serve it; `get_file_diff` shows the merged file with diff3 markers (`<<<<<<< v1 
 >>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested). A file's encoding (BOM, UTF-16) and
 line-ending style (LF / CRLF / mixed) merge 3-way like its lines: a side that changed them wins (v2's LF→CRLF
 is kept when v1 also edited the file), the same change on both sides agrees, and different changes on both
-sides are a conflict of kind `encoding` or `line endings` (both files listed, nothing written). A mixed file
-keeps each line's own ending; a lone CR stays part of its line.
+sides are a conflict of kind `encoding` or `line endings` (both files listed, nothing written); when the lines
+conflict too, the file is a `content` conflict written with markers in v1's encoding and line endings, and its
+note says the encoding or line-ending conflict as well. A mixed file keeps each line's own ending; a lone CR
+stays part of its line.
 
 **Merge overlay (built):** `write_merge(id[, out_dir])` (CLI `compare3 … --merge-out DIR`) writes the merge
 as an overlay on v1, never the whole tree: `files\` holds only what the merge changes in v1 (v2's one-sided
@@ -151,7 +164,8 @@ Before touching anything it refuses an unfinished overlay (`INCOMPLETE.txt`), a 
 a plain path inside the target, and a target and overlay inside each other; it deletes files only, never a
 directory in a listed path's place. Like `apply`, Ctrl+C stops between files, each is written whole (temp +
 rename), and running it again finishes the job (a path already deleted, or already holding the overlay's
-bytes, comes out "already"). The overlay holds `APPLYING.txt` while it runs and `APPLIED.txt` (target, time)
+bytes, comes out "already" — a case-only rename already done, and a file v2 turned into a directory already in
+place, too). The overlay holds `APPLYING.txt` while it runs and `APPLIED.txt` (target, time)
 once done with nothing failed — after a failure it stays unapplied, so the same apply can be run again once the
 cause is fixed; a second finished apply to the same target is refused unless `--again`, since it would
 overwrite conflicts resolved since. On death the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
@@ -191,7 +205,9 @@ result directory: `index.html` (static shell, no external resources, light/dark)
 list + summary) and one `data/d/N.js` per file diff, loaded by script tag on expand — so it opens from disk
 with no server. Tiles double as status filters; path filter (text or glob) and reason filter; a folder tree
 (single-child chains compacted, per-folder status badges, children built only when opened); inline or side
-by side with intra-line marks; 3-way merges colored by v1/base/v2 section with a conflict stepper. Diffs over
+by side with intra-line marks; 3-way merges colored by v1/base/v2 section with a conflict stepper (a merged
+file is shown as its conflict blocks with context, whole blocks until 3,000 lines or 1 MB, the head of a first
+block that alone is bigger; whatever is left out links the whole merged file). Diffs over
 3,000 lines or 1 MB are cut (lines over 2,000 characters too) with the whole diff written alongside and
 linked; a file whose diff can't be read or rendered is listed with why; Ctrl+C stops rendering and still
 writes the report, the rest listed without a diff; files over 16 MB are listed as "large"
@@ -212,6 +228,12 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   as itself, left out of rename matching), every summary warns, and the CLI exits 3. Files are opened so a
   writer can keep writing (a log being appended to is still read), and the hashes read are kept even when a
   compare fails.
+- Symlinks and junctions are not followed (one can point outside the tree, or back into it); each skipped one
+  is counted and the summary says how many. Other reparse points — OneDrive / cloud placeholders, deduplicated
+  files — are ordinary files and directories and are compared. Paths past 260 characters are listed and
+  checked like any other.
+- A command given an option it doesn't take (`--no-chache`), an extra word, or a flag without its value stops
+  at once with the usage (exit 64), instead of running an hour without it.
 - Text that isn't valid UTF-8 (a cp1252 / Latin-1 file) is read byte for byte, never with U+FFFD in place of
   the bad bytes: `25°C` → `25±C` is a `content` change, not "the same text, encoding changed".
 - A whole patch (`--patch`, `export_changeset`) is for `git apply`: what it can't carry — binary and large
@@ -233,11 +255,22 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 |---|---|---|
 | Hide identical | on (all outputs) | identical is noise on big trees |
 | Per-file inline diff cap | 2,000 lines / 256 KB, lines over 2,000 chars cut | above → window + hunk map + `.patch` by reference |
-| Giant-file threshold | 128 MB | matches CodeCompass streaming; always block-level + by-reference |
+| Large-file threshold | 16 MB | above → never line-diffed whole: a block-level diff by reference (`get_file_diff`, `report --large`), a `large` conflict in compare3, byte-for-byte only in `apply` |
 | Result store location | fresh timestamped dir **outside** both trees | never overwrite; never diff own output |
 | Hash cache | on, keyed `(path,size,mtime)` | second compare of a near-identical tree is seconds |
 | SMB walk | concurrent, bounded; metadata off enumeration | overlaps round-trips on a latency-bound share |
 | Metadata-only diffing (mode) | **off** (opt-in) | over SMB mode is mostly noise |
+
+## 8. CLI exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | done: nothing conflicts and nothing is missing |
+| 1 | done, with conflicts (`compare3`, `apply`), a file that failed (`apply-overlay`), a `verify` gate failed, or a prune that could not delete everything |
+| 2 | error: a tree or file not found, a refused directory, an unreadable manifest, a failed `--html` / `--merge-out` |
+| 3 | done but INCOMPLETE: a directory could not be listed or a file could not be read (the warnings say which) |
+| 64 | usage: a missing argument, an unknown option, a flag without its value |
+| 130 | stopped by Ctrl+C (a compare, an apply, or a report written part way) |
 
 Net: the agent pays for a summary plus what it opens; the human gets a shareable shell that lazily
 loads; the 1 GB header is touched a few MB at a time and reported as a bounded, honest summary with the

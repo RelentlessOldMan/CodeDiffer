@@ -285,6 +285,13 @@ public sealed class MergeOverlayTests : IDisposable
         Assert.Contains(t, File.ReadAllText(Path.Combine(outDir, OverlayApplier.AppliedName)));
         Assert.False(File.Exists(Path.Combine(outDir, OverlayApplier.ApplyingName)));
         Assert.Contains("written for v1", OverlayApplier.Text(r)); // a copy, not v1 itself
+
+        // Run again: the case-only rename is done (on a case-insensitive disk "same.c" still answers to the new
+        // name), so nothing is deleted or rewritten.
+        var rerun = OverlayApplier.Run(outDir, t, write: true, again: true);
+        Assert.Empty(rerun.Failed);
+        Assert.Equal((0, 0), (rerun.Deleted, rerun.Copied));
+        Assert.Equal(Tree(Apply(outDir)), Tree(t));
     }
 
     [Fact]

@@ -138,4 +138,39 @@ public sealed class RenameDetectionTests : IDisposable
         Assert.Equal("src/old.c", Single(r, ChangeStatus.Removed).RelativePath);
         Assert.Equal("src/new.c", Single(r, ChangeStatus.Added).RelativePath);
     }
+
+    [Fact]
+    public void EditedRenames_PrefilteredAndParallel_AreExactlyTheBruteForceAnswer()
+    {
+        // Files of very different lengths sharing a small line pool (duplicates included): many pairs are ruled
+        // out by line counts alone, many score near the threshold — the fast path must agree on every one.
+        var rng = new Random(1234);
+        string Make(int n) => string.Concat(Enumerable.Range(0, n).Select(_ => $"w{rng.Next(40)}\n"));
+        var left = Enumerable.Range(0, 30).Select(i => (Path: $"old/f{i:D2}.c", Text: Make(rng.Next(5, 80)))).ToList();
+        var right = Enumerable.Range(0, 30).Select(i => (Path: $"new/g{i:D2}.c", Text: Make(rng.Next(5, 80)))).ToList();
+        foreach (var (p, t) in left) WriteLeft(p, t);
+        foreach (var (p, t) in right) WriteRight(p, t);
+
+        // The reference: every pair scored by the contract's Similarity, then the same greedy best-first assignment.
+        var scored = (from l in left from r in right
+                      let m = CodeDiffer.Core.Diff.Similarity.Milli(l.Text, r.Text)
+                      where m >= 500
+                      select (From: l.Path, To: r.Path, m))
+            .OrderByDescending(x => x.m).ThenBy(x => x.From, StringComparer.Ordinal).ThenBy(x => x.To, StringComparer.Ordinal).ToList();
+        var usedL = new HashSet<string>();
+        var usedR = new HashSet<string>();
+        var expected = new List<(string, string, int)>();
+        foreach (var (from, to, m) in scored)
+        {
+            if (usedL.Contains(from) || usedR.Contains(to)) continue;
+            usedL.Add(from);
+            usedR.Add(to);
+            expected.Add((from, to, m));
+        }
+        Assert.True(expected.Count >= 5, $"fixture too easy: {expected.Count} renames");
+
+        var actual = Run().Changes.Where(c => c.Status == ChangeStatus.Renamed)
+            .Select(c => (c.RenamedFrom!, c.RelativePath, c.SimilarityMilli!.Value)).ToList();
+        Assert.Equal(expected.OrderBy(e => e.Item1, StringComparer.Ordinal), actual.OrderBy(e => e.Item1, StringComparer.Ordinal));
+    }
 }

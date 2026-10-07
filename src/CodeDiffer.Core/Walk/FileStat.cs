@@ -44,7 +44,7 @@ public readonly record struct FileStat(long Length, long LastWriteUtcTicks, long
             var fi = new FileInfo(path);
             return new FileStat(fi.Length, fi.LastWriteTimeUtc.Ticks, 0, 0);
         }
-        using var h = CreateFileW(path, FileReadAttributes, 7 /*share all*/, IntPtr.Zero, 3 /*OPEN_EXISTING*/, 0, IntPtr.Zero);
+        using var h = CreateFileW(DirectoryLister.LongPath(path), FileReadAttributes, 7 /*share all*/, IntPtr.Zero, 3 /*OPEN_EXISTING*/, 0, IntPtr.Zero);
         if (h.IsInvalid) throw new IOException($"cannot open {path} (win32 error {Marshal.GetLastWin32Error()})");
         return Of(h, path);
     }

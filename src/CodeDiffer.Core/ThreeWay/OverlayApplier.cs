@@ -78,6 +78,15 @@ public static class OverlayApplier
             progress.AfterFile?.Invoke(progress.Done);
         }
 
+        // A case-only rename (Same.c -> same.c) deletes the old name and writes the new one. On a case-insensitive
+        // target the deleted name still "exists" once the new one is there: it is already done only when the file's
+        // name on disk is the new spelling, else a re-run would delete the merged file every time.
+        var copyByCase = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in copies) copyByCase.TryAdd(c.Replace('\\', '/'), c); // two names differing in case only: the first
+        bool RenamedAlready(string d, string p) =>
+            copyByCase.TryGetValue(d, out var to) && !string.Equals(to.Replace('\\', '/'), d, StringComparison.Ordinal)
+            && NameOnDisk(p) == Path.GetFileName(to);
+
         // 1. Deletes first, so a file v2 turned into a directory, or a case-only rename, lands right.
         foreach (var d in deletes)
         {
@@ -85,8 +94,10 @@ public static class OverlayApplier
             var p = Full(target, d);
             try
             {
-                if (Directory.Exists(p)) failed.Add((d, "to delete, but the target has a directory there; left alone"));
-                else if (!File.Exists(p))
+                // A directory where files\ has one too: v2 turned the file into a directory, and a run already did it.
+                if (Directory.Exists(p) && Directory.Exists(Full(files, d))) gone++;
+                else if (Directory.Exists(p)) failed.Add((d, "to delete, but the target has a directory there; left alone"));
+                else if (!File.Exists(p) || RenamedAlready(d, p))
                 {
                     gone++;
                     if (write) emptied.Add(Path.GetDirectoryName(p)!); // a stopped run may have deleted it and not the directory
@@ -211,6 +222,15 @@ public static class OverlayApplier
         o.Append(r.Written ? "conflicts not merged keep the target's version: see conflicts.txt in the overlay\n"
                            : "nothing was changed — run again with --write to apply it\n");
         return o.ToString();
+    }
+
+    /// <summary>The file's name as the directory spells it (a case-insensitive file system answers any spelling).</summary>
+    private static string? NameOnDisk(string path)
+    {
+        var dir = new DirectoryInfo(Path.GetDirectoryName(path)!);
+        var name = Path.GetFileName(path);
+        var names = dir.EnumerateFiles().Select(f => f.Name).Where(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase)).ToList();
+        return names.Contains(name, StringComparer.Ordinal) ? name : names.FirstOrDefault(); // case-sensitive: both may exist
     }
 
     private static string Full(string root, string rel) => Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));

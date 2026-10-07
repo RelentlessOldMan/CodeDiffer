@@ -140,12 +140,62 @@ public class ResultStoreTests : IDisposable
     [Fact]
     public void UnfinishedResult_IsReportedNotLoaded()
     {
-        var dir = ResultStore.CreateRunDir(Results, "beef", "compare", [L, R]); // as if the process died mid-compare
+        var dir = ResultStore.CreateRunDir(Results, "beef", "compare", [L, R]); // this process is "running" it
         var ex = Assert.Throws<InvalidDataException>(() => new SessionStore(resultsRoot: Results).Get("beef"));
-        Assert.Contains("never finished", ex.Message);
+        Assert.Contains("still running", ex.Message);
         Assert.Equal("running", Assert.Single(ResultStore.List(Results)).State);
         Assert.Equal(dir, ResultStore.Find(Results, "beef"));
         Assert.Null(ResultStore.Find(Results, "*"));  // ids are hex only — never a wildcard
+
+        // The process that ran it is gone: "stopped", said so, and prunable at once (no day's grace needed).
+        using (var gone = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c exit") { CreateNoWindow = true, UseShellExecute = false })!)
+        {
+            gone.WaitForExit();
+            var meta = Path.Combine(dir, ResultStore.MetaName);
+            File.WriteAllText(meta, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(meta), "\"pid\": \\d+", $"\"pid\": {gone.Id}"));
+        }
+        ex = Assert.Throws<InvalidDataException>(() => new SessionStore(resultsRoot: Results).Get("beef"));
+        Assert.Contains("never finished", ex.Message);
+        Assert.Equal("stopped", Assert.Single(ResultStore.List(Results)).State);
+        Assert.Single(ResultStore.PruneCandidates(Results, 0, null, DateTime.UtcNow));
+    }
+
+    [Fact]
+    public void ACorruptCompareJson_IsSaidToBeCorrupt_NeverAnUnhandledError()
+    {
+        var store = new SessionStore(resultsRoot: Results);
+        var s = Done(store.Start(L, R, NoCache));
+        var meta = Path.Combine(s.ResultDir!, ResultStore.MetaName);
+        var good = File.ReadAllText(meta);
+        foreach (var bad in new[]
+                 {
+                     good.Replace("\"version\": 1", "\"version\": \"1\""),   // a string where a number goes
+                     good.Replace("\"threads\"", "\"thread\""),             // a missing field
+                     good[..(good.Length / 2)],                             // cut short
+                     "[]",
+                 })
+        {
+            File.WriteAllText(meta, bad);
+            Assert.Throws<InvalidDataException>(() => ResultStore.Load(s.ResultDir!));
+            Assert.Throws<InvalidDataException>(() => new SessionStore(resultsRoot: Results).Get(s.Id));
+            Assert.True(ResultStore.List(Results).Count <= 1); // listed or skipped, never thrown
+        }
+    }
+
+    [Fact]
+    public void APathWithALoneSurrogate_IsSavedAndReopenedExactly()
+    {
+        if (!OperatingSystem.IsWindows()) return; // NTFS allows such names; other file systems may not
+        var odd = "odd\uD800name.c";
+        Put("L/" + odd, "one\n");
+        Put("R/" + odd, "two\n");
+        var s = Done(new SessionStore(resultsRoot: Results).Start(L, R, NoCache));
+        Assert.Contains(s.Report!.Changes, c => c.RelativePath == odd);
+
+        var back = Assert.IsType<CompareSession>(new SessionStore(resultsRoot: Results).Get(s.Id));
+        Assert.Contains(back.Report!.Changes, c => c.RelativePath == odd && c.Status == ChangeStatus.Modified);
+        Assert.Equal(s.Report.Changes, back.Report.Changes);
+        Assert.Contains("+two", AgentViews.FileDiff(back, odd)); // the real file, not a U+FFFD name
     }
 
     [Fact]
@@ -298,6 +348,32 @@ public class ResultStoreTests : IDisposable
         Assert.Equal(4 * 13 + 10, all.Kept);       // the last block ends the file: no trailing context
         var cut = HtmlReport.Condense(arr, lines.Count, 3, 30);
         Assert.Equal(2, cut.ShownBlocks);          // 13 + 13 fits in 30, a third block would not
+        Assert.True(cut.Cut);
+        Assert.False(all.Cut);
+    }
+
+    [Fact]
+    public void Condense_NeverPassesTheCap_EvenForOneHugeBlock_OrNoMarkers()
+    {
+        // One conflict block of 5,000 lines: it used to be shown whole, whatever the cap.
+        var huge = new[] { "<<<<<<< v1" }.Concat(Enumerable.Range(0, 5000).Select(i => $"v1 {i}"))
+            .Concat(["||||||| base", "b", "=======", "c", ">>>>>>> v2"]).Append("").ToArray();
+        var c = HtmlReport.Condense(huge, huge.Length - 1, 3, 100);
+        Assert.True(c.Cut);
+        Assert.Equal(100, c.Kept);
+        Assert.Equal(100, c.Segments.Single().Text.Count(ch => ch == '\n'));
+
+        // No markers: the head, and Cut so the whole file is linked (it used to be cut without a link).
+        var plain = Enumerable.Range(0, 500).Select(i => $"line {i}").Append("").ToArray();
+        var p = HtmlReport.Condense(plain, 500, 3, 100);
+        Assert.Equal((100, true), (p.Kept, p.Cut));
+
+        // By characters too: a few minified lines are cut per line, and that is a cut as well.
+        var wide = new[] { "<<<<<<< v1", new string('x', 50_000), "||||||| base", "b", "=======", "c", ">>>>>>> v2", "" };
+        var w = HtmlReport.Condense(wide, wide.Length - 1, 3, 1000);
+        Assert.True(w.Cut);
+        Assert.Contains("[line cut: 50,000 characters", w.Segments.Single().Text);
+        Assert.True(w.Segments.Single().Text.Length < 3000);
     }
 
     /// <summary>Parse a data file's JSON payload: <c>{prefix}{json});</c>.</summary>

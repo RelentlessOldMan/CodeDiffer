@@ -36,6 +36,9 @@ public sealed class CompareReport
     public int LeftDroppedDirectories { get; }
     public int RightDroppedDirectories { get; }
 
+    /// <summary>Symlinks and junctions found in either tree and not followed (said, so nothing under one is assumed compared).</summary>
+    public int SkippedLinks { get; init; }
+
     /// <summary>Same-size pairs that needed a content verdict (the only ones that can cost a read).</summary>
     public int ComparedPairs { get; init; }
     /// <summary>File sides answered from a trusted hash ledger instead of being read (of them, via CodeCompass).</summary>

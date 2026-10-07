@@ -163,9 +163,11 @@ public static class ResultStore
             {
                 using var doc = ReadMeta(dir);
                 var m = doc.RootElement;
-                var roots = m.GetProperty("roots").EnumerateObject().Select(p => (p.Name, p.Value.GetString() ?? "")).ToList();
+                var rootsEl = m.GetProperty("roots");
+                var roots = rootsEl.EnumerateObject().Where(p => !p.Name.EndsWith(Utf16Suffix, StringComparison.Ordinal))
+                    .Select(p => (p.Name, PathOf(rootsEl, p.Name))).ToList();
                 var counts = m.TryGetProperty("counts", out var cs) ? cs.EnumerateObject().Select(p => (p.Name, p.Value.GetInt64())).ToList() : [];
-                list.Add(new SavedCompare(dir, Str(m, "id"), Str(m, "kind"), Str(m, "state"), Started(m), Elapsed(m), roots, counts,
+                list.Add(new SavedCompare(dir, Str(m, "id"), Str(m, "kind"), State(m), Started(m), Elapsed(m), roots, counts,
                     m.TryGetProperty("error", out var e) ? e.GetString() : null));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException
@@ -176,7 +178,8 @@ public static class ResultStore
 
     // ---- prune ----
 
-    /// <summary>A "running" result younger than this may belong to a live process (an MCP server); prune leaves it.</summary>
+    /// <summary>A "running" result younger than this may belong to a live process (an MCP server); prune leaves it. One whose
+    /// process is known to be gone is listed as "stopped" instead and needs no grace.</summary>
     public static readonly TimeSpan RunningGrace = TimeSpan.FromDays(1);
 
     /// <summary>
@@ -250,30 +253,31 @@ public static class ResultStore
         dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
         using var doc = ReadMeta(dir);
         var m = doc.RootElement;
-        var id = Str(m, "id");
-        var state = Str(m, "state");
-        if (state != "done")
-            throw new InvalidDataException(state switch
-            {
-                "failed" => $"compare {id} failed: {(m.TryGetProperty("error", out var e) ? e.GetString() : "?")}",
-                "cancelled" => $"compare {id} was cancelled before it finished",
-                _ => $"compare {id} in {dir} never finished (state '{state}') — the process running it stopped",
-            });
-        var opt = m.GetProperty("options");
-        var options = new CompareOptions
-        {
-            Cache = Enum.TryParse<CacheMode>(Str(opt, "cache"), true, out var cm) ? cm : CacheMode.On,
-            Parallelism = Math.Clamp(opt.GetProperty("threads").GetInt32(), 1, 64),
-            StrictStat = opt.GetProperty("strictStat").GetBoolean(),
-        };
-        var roots = m.GetProperty("roots");
         try
         {
+            var id = Str(m, "id");
+            var state = State(m);
+            if (state != "done")
+                throw new InvalidDataException(state switch
+                {
+                    "failed" => $"compare {id} failed: {(m.TryGetProperty("error", out var e) ? e.GetString() : "?")}",
+                    "cancelled" => $"compare {id} was cancelled before it finished",
+                    "running" => $"compare {id} is still running (process {Pid(m)}); open it once it has finished",
+                    _ => $"compare {id} in {dir} never finished — the process running it stopped",
+                });
+            var opt = m.GetProperty("options");
+            var options = new CompareOptions
+            {
+                Cache = Enum.TryParse<CacheMode>(Str(opt, "cache"), true, out var cm) ? cm : CacheMode.On,
+                Parallelism = Math.Clamp(opt.GetProperty("threads").GetInt32(), 1, 64),
+                StrictStat = opt.GetProperty("strictStat").GetBoolean(),
+            };
+            var roots = m.GetProperty("roots");
             return Str(m, "kind") switch
             {
-                "compare" => new CompareSession(id, Str(roots, "left"), Str(roots, "right"), options,
+                "compare" => new CompareSession(id, PathOf(roots, "left"), PathOf(roots, "right"), options,
                     ReadReport(Path.Combine(dir, "changes.jsonl"), m.GetProperty("report")), dir, Started(m), Elapsed(m), reopened: true),
-                "compare3" => new Compare3Session(id, Str(roots, "base"), Str(roots, "v1"), Str(roots, "v2"), options, new ThreeWayReport
+                "compare3" => new Compare3Session(id, PathOf(roots, "base"), PathOf(roots, "v1"), PathOf(roots, "v2"), options, new ThreeWayReport
                 {
                     V1Report = ReadReport(Path.Combine(dir, "v1.jsonl"), m.GetProperty("v1Report")),
                     V2Report = ReadReport(Path.Combine(dir, "v2.jsonl"), m.GetProperty("v2Report")),
@@ -309,17 +313,21 @@ public static class ResultStore
     {
         var path = Path.Combine(dir, MetaName);
         if (!File.Exists(path)) throw new InvalidDataException($"{dir} is not a CodeDiffer result (no {MetaName})");
-        var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(File.ReadAllBytes(path)); }
+        catch (JsonException ex) { throw new InvalidDataException($"{path} is corrupt: {ex.Message}", ex); }
         var m = doc.RootElement;
-        if (!m.TryGetProperty("format", out var f) || f.GetString() != Format)
+        if (m.ValueKind != JsonValueKind.Object || !m.TryGetProperty("format", out var f) || f.ValueKind != JsonValueKind.String
+            || f.GetString() != Format)
         {
             doc.Dispose();
             throw new InvalidDataException($"{path} is not a CodeDiffer result");
         }
-        if (!m.TryGetProperty("version", out var v) || v.GetInt32() != FormatVersion)
+        if (!m.TryGetProperty("version", out var v) || v.ValueKind != JsonValueKind.Number || !v.TryGetInt32(out int ver) || ver != FormatVersion)
         {
+            var msg = $"{path}: result format version {(v.ValueKind == JsonValueKind.Undefined ? "(none)" : v.GetRawText())} is not supported (this build reads {FormatVersion})";
             doc.Dispose();
-            throw new InvalidDataException($"{path}: result format version {v} is not supported (this build reads {FormatVersion})");
+            throw new InvalidDataException(msg);
         }
         return doc;
     }
@@ -334,13 +342,44 @@ public static class ResultStore
         w.WriteString("tool", Version);
         w.WriteString("started", startedUtc.ToString("O", CultureInfo.InvariantCulture));
         if (elapsed is { } e) w.WriteNumber("elapsedSeconds", Math.Round(e.TotalSeconds, 3));
+        if (state == "running")
+        {
+            // Who is running it: a listing can then tell a live compare from one whose process died.
+            using var me = System.Diagnostics.Process.GetCurrentProcess();
+            w.WriteNumber("pid", me.Id);
+            w.WriteString("host", Environment.MachineName);
+        }
     }
+
+    /// <summary>
+    /// The state as saved, except that a "running" compare whose process is gone is "stopped": its process (same host,
+    /// same pid, started no later than the compare) no longer runs. One from another host, or without a pid (saved
+    /// before 2026-10-07), stays "running" — it can't be checked from here.
+    /// </summary>
+    private static string State(JsonElement m)
+    {
+        var state = Str(m, "state");
+        if (state != "running" || !m.TryGetProperty("pid", out var p) || !p.TryGetInt32(out int pid)
+            || !string.Equals(m.TryGetProperty("host", out var h) ? h.GetString() : null, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+            return state;
+        try
+        {
+            using var proc = System.Diagnostics.Process.GetProcessById(pid);
+            // A pid is reused: a process that started after the compare did is not the one running it.
+            return proc.HasExited || proc.StartTime.ToUniversalTime() > Started(m).AddSeconds(5) ? "stopped" : state;
+        }
+        catch (ArgumentException) { return "stopped"; }              // no such process
+        catch (InvalidOperationException) { return "stopped"; }      // it exited while we looked
+        catch (System.ComponentModel.Win32Exception) { return state; } // not allowed to look: can't tell
+    }
+
+    private static string Pid(JsonElement m) => m.TryGetProperty("pid", out var p) ? p.ToString() : "?";
 
     private static void Roots(Utf8JsonWriter w, string kind, IReadOnlyList<string> roots)
     {
         string[] names = kind == "compare3" ? ["base", "v1", "v2"] : ["left", "right"];
         w.WriteStartObject("roots");
-        for (int i = 0; i < Math.Min(names.Length, roots.Count); i++) w.WriteString(names[i], roots[i]);
+        for (int i = 0; i < Math.Min(names.Length, roots.Count); i++) WritePath(w, names[i], roots[i]);
         w.WriteEndObject();
     }
 
@@ -365,6 +404,7 @@ public static class ResultStore
         w.WriteNumber("bytesRead", r.BytesRead);
         w.WriteNumber("leftDroppedDirectories", r.LeftDroppedDirectories);
         w.WriteNumber("rightDroppedDirectories", r.RightDroppedDirectories);
+        w.WriteNumber("skippedLinks", r.SkippedLinks);
         Timings(w, r.Timings);
         w.WriteEndObject();
     }
@@ -398,6 +438,7 @@ public static class ResultStore
             UnstableFiles = stats.GetProperty("unstableFiles").GetInt32(),
             PendingFiles = stats.GetProperty("pendingFiles").GetInt32(),
             BytesRead = stats.GetProperty("bytesRead").GetInt64(),
+            SkippedLinks = stats.TryGetProperty("skippedLinks", out var links) ? links.GetInt32() : 0, // absent before 2026-10-07
             Timings = ReadTimings(stats),
         };
 
@@ -438,36 +479,36 @@ public static class ResultStore
     private static void WriteChange(Utf8JsonWriter w, FileChange c, string? name)
     {
         if (name is null) w.WriteStartObject(); else w.WriteStartObject(name);
-        w.WriteString("path", c.RelativePath);
+        WritePath(w, "path", c.RelativePath);
         w.WriteString("status", Token(c.Status));
         if (c.Reason is { } r) w.WriteString("reason", CanonicalTokens.Token(r));
         w.WriteNumber("leftSize", c.LeftSize);
         w.WriteNumber("rightSize", c.RightSize);
-        if (c.RenamedFrom is { } f) w.WriteString("from", f);
+        if (c.RenamedFrom is { } f) WritePath(w, "from", f);
         if (c.SimilarityMilli is { } s) w.WriteNumber("similarity", s);
         if (c.Unreadable is { } u) w.WriteString("unreadable", u);
         w.WriteEndObject();
     }
 
     private static FileChange ReadChange(JsonElement e) => new(
-        Str(e, "path"),
+        PathOf(e, "path"),
         Enum.Parse<ChangeStatus>(Str(e, "status"), ignoreCase: true),
         e.TryGetProperty("reason", out var r) ? CanonicalTokens.Reason(r.GetString()!) : null,
         e.GetProperty("leftSize").GetInt64(),
         e.GetProperty("rightSize").GetInt64(),
-        e.TryGetProperty("from", out var f) ? f.GetString() : null,
+        e.TryGetProperty("from", out _) ? PathOf(e, "from") : null,
         e.TryGetProperty("similarity", out var s) ? s.GetInt32() : null,
         e.TryGetProperty("unreadable", out var u) ? u.GetString() : null);
 
     private static void WriteEntry(Utf8JsonWriter w, Merge3Entry e)
     {
         w.WriteStartObject();
-        w.WriteString("path", e.Path);
+        WritePath(w, "path", e.Path);
         w.WriteString("outcome", Token(e.Outcome));
         if (e.ConflictKind is { } k) w.WriteString("kind", k);
         w.WriteNumber("conflicts", e.ConflictRegions);
         w.WriteNumber("clean", e.CleanRegions);
-        if (e.MergedPath is { } m) w.WriteString("merged", m);
+        if (e.MergedPath is { } m) WritePath(w, "merged", m);
         if (e.Note is { } n) w.WriteString("note", n);
         if (e.V1 is { } v1) WriteChange(w, v1, "v1");
         if (e.V2 is { } v2) WriteChange(w, v2, "v2");
@@ -475,14 +516,14 @@ public static class ResultStore
     }
 
     private static Merge3Entry ReadEntry(JsonElement e) => new(
-        Str(e, "path"),
+        PathOf(e, "path"),
         e.TryGetProperty("v1", out var v1) ? ReadChange(v1) : null,
         e.TryGetProperty("v2", out var v2) ? ReadChange(v2) : null,
         Outcome(Str(e, "outcome")),
         e.TryGetProperty("kind", out var k) ? k.GetString() : null,
         e.GetProperty("conflicts").GetInt32(),
         e.GetProperty("clean").GetInt32(),
-        e.TryGetProperty("merged", out var m) ? m.GetString() : null,
+        e.TryGetProperty("merged", out _) ? PathOf(e, "merged") : null,
         e.TryGetProperty("note", out var n) ? n.GetString() : null);
 
     // ---- tokens / helpers ----
@@ -509,6 +550,54 @@ public static class ResultStore
     };
 
     private static string Str(JsonElement e, string name) => e.GetProperty(name).GetString() ?? "";
+
+    private const string Utf16Suffix = "16";
+
+    /// <summary>
+    /// A path, written so it reads back exactly. A Windows name may hold an unpaired UTF-16 surrogate, which JSON's
+    /// UTF-8 can't carry (it would come back as U+FFFD, naming another file): such a path also gets
+    /// <c>&lt;name&gt;16</c>, its UTF-16 code units in hex, which <see cref="PathOf"/> prefers.
+    /// </summary>
+    private static void WritePath(Utf8JsonWriter w, string name, string path)
+    {
+        if (!HasLoneSurrogate(path))
+        {
+            w.WriteString(name, path);
+            return;
+        }
+        var shown = new System.Text.StringBuilder(path.Length);
+        var hex = new System.Text.StringBuilder(path.Length * 4);
+        for (int i = 0; i < path.Length; i++)
+        {
+            bool pair = char.IsHighSurrogate(path[i]) && i + 1 < path.Length && char.IsLowSurrogate(path[i + 1]);
+            if (pair) shown.Append(path, i, 2);
+            else shown.Append(char.IsSurrogate(path[i]) ? '\uFFFD' : path[i]);
+            hex.Append(((int)path[i]).ToString("X4", CultureInfo.InvariantCulture));
+            if (pair) hex.Append(((int)path[++i]).ToString("X4", CultureInfo.InvariantCulture));
+        }
+        w.WriteString(name, shown.ToString()); // readable, and what an older reader gets
+        w.WriteString(name + Utf16Suffix, hex.ToString());
+    }
+
+    private static string PathOf(JsonElement e, string name)
+    {
+        if (!e.TryGetProperty(name + Utf16Suffix, out var raw)) return Str(e, name);
+        var hex = raw.GetString() ?? "";
+        if (hex.Length % 4 != 0) throw new FormatException($"bad {name}{Utf16Suffix}");
+        var chars = new char[hex.Length / 4];
+        for (int i = 0; i < chars.Length; i++) chars[i] = (char)int.Parse(hex.AsSpan(i * 4, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+        return new string(chars);
+    }
+
+    internal static bool HasLoneSurrogate(string s)
+    {
+        for (int i = 0; i < s.Length; i++)
+        {
+            if (char.IsHighSurrogate(s[i]) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1])) i++;
+            else if (char.IsSurrogate(s[i])) return true;
+        }
+        return false;
+    }
 
     private static DateTime Started(JsonElement m)
         => DateTime.Parse(Str(m, "started"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);

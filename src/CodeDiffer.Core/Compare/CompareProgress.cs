@@ -123,6 +123,9 @@ public sealed class CompareProgress
         Interlocked.Add(ref _bytesRead, read);
     }
 
+    /// <summary>What rename detection read (hashing same-size adds/removes, reading text candidates).</summary>
+    internal void RenamesRead(long bytes) => Interlocked.Add(ref _bytesRead, bytes);
+
     /// <param name="size">The pair's size not already counted by <see cref="Streamed"/>.</param>
     internal void PairChecked(long size, long read, int cacheSides)
     {

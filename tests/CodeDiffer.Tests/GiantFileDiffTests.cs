@@ -106,6 +106,26 @@ public class GiantFileDiffTests
     }
 
     [Fact]
+    public void ADeletedBlock_SitsWhereItWasInTheNewFile_NotOneBlockLater()
+    {
+        static List<Chunk> Blocks(params (string Sha, int Len)[] bs)
+        {
+            long off = 0;
+            var list = new List<Chunk>();
+            foreach (var (sha, len) in bs) { list.Add(new Chunk(off, len, sha)); off += len; }
+            return list;
+        }
+        var old = Blocks(("A", 100), ("B", 200), ("C", 300), ("D", 400));
+        var cut = Blocks(("A", 100), ("B", 200), ("D", 400)); // C deleted
+
+        var del = Assert.Single(GiantFileDiffer.Diff(old, cut).Changes);
+        Assert.Equal(new ChangedBlock(HunkOp.Delete, 300, 300, 300, 0), del); // gone from old 300..600; new file at 300
+
+        var ins = Assert.Single(GiantFileDiffer.Diff(cut, old).Changes);
+        Assert.Equal(new ChangedBlock(HunkOp.Insert, 300, 0, 300, 300), ins);
+    }
+
+    [Fact]
     public void Append_ChangeIsAtTail_AndReflectsGrowth()
     {
         var data = Payload(20_000, 6);

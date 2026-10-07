@@ -2,8 +2,9 @@ using System.Collections.Concurrent;
 
 namespace CodeDiffer.Core.Walk;
 
-/// <summary>A completed walk: every file found, plus how many directories could not be listed.</summary>
-public sealed record WalkResult(IReadOnlyList<FileEntry> Files, int DroppedDirectories);
+/// <summary>A completed walk: every file found, how many directories could not be listed, and how many symlinks /
+/// junctions were skipped (never followed: a link can point outside the tree or back into it).</summary>
+public sealed record WalkResult(IReadOnlyList<FileEntry> Files, int DroppedDirectories, int SkippedLinks = 0);
 
 /// <summary>
 /// Walks a tree and yields every file as a <see cref="FileEntry"/>, reading size/mtime/ChangeTime/FileId
@@ -37,7 +38,7 @@ public sealed class TreeWalker
         var rootFull = RootOf(root);
 
         var files = new ConcurrentBag<FileEntry>();
-        int dropped = 0;
+        int dropped = 0, links = 0;
         var frontier = new List<string> { rootFull };
         while (frontier.Count > 0)
         {
@@ -53,7 +54,7 @@ public sealed class TreeWalker
                 int found = 0;
                 foreach (var row in rows)
                 {
-                    if (row.IsReparsePoint) continue; // don't follow junctions/symlinks (v1)
+                    if (row.IsLink) { Interlocked.Increment(ref links); continue; } // symlinks/junctions: not followed, counted
                     var full = Path.Combine(dir, row.Name);
                     if (row.IsDirectory)
                     {
@@ -72,7 +73,7 @@ public sealed class TreeWalker
 
         var list = files.ToList();
         list.Sort((a, b) => string.CompareOrdinal(a.RelativePath, b.RelativePath)); // deterministic order
-        return new WalkResult(list, dropped);
+        return new WalkResult(list, dropped, links);
     }
 
     /// <summary>The full root path without a trailing separator — except a drive root keeps it: "Z:" alone means

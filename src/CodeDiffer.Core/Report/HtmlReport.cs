@@ -117,7 +117,7 @@ public static class HtmlReport
                     chunk["shown"] = c.Kept;
                     chunk["blocks"] = c.Blocks;
                     chunk["shownBlocks"] = c.ShownBlocks;
-                    if (c.ShownBlocks < c.Blocks)
+                    if (c.Cut)
                     {
                         chunk["full"] = $"full/{i}.txt";
                         File.WriteAllText(Path.Combine(outDir, $"full/{i}.txt"), text, new UTF8Encoding(false));
@@ -259,14 +259,16 @@ public static class HtmlReport
         return list;
     }
 
-    internal sealed record Condensed(List<(int Start, string Text)> Segments, int Kept, int Blocks, int ShownBlocks);
+    /// <param name="Cut">Something was left out (blocks, the head of a too-big block, long lines' tails): link the whole file.</param>
+    internal sealed record Condensed(List<(int Start, string Text)> Segments, int Kept, int Blocks, int ShownBlocks, bool Cut);
 
     /// <summary>
     /// The conflict blocks of a merged file (<c>&lt;&lt;&lt;&lt;&lt;&lt;&lt; v1</c> … <c>&gt;&gt;&gt;&gt;&gt;&gt;&gt; v2</c>) with
     /// <paramref name="context"/> lines around each, overlapping ranges joined, in file order until
-    /// <paramref name="maxLines"/> are kept (a block is never split). Segment starts are 1-based line numbers.
+    /// <paramref name="maxLines"/> lines or <paramref name="maxChars"/> are kept. Blocks are kept whole, except a first
+    /// block that alone is over the cap: its head is shown. Segment starts are 1-based line numbers.
     /// </summary>
-    internal static Condensed Condense(string[] lines, int total, int context, int maxLines)
+    internal static Condensed Condense(string[] lines, int total, int context, int maxLines, int maxChars = MaxChunkChars)
     {
         var blocks = new List<(int From, int To)>();
         for (int i = 0; i < total; i++)
@@ -277,23 +279,51 @@ public static class HtmlReport
             blocks.Add((i, end));
             i = end;
         }
-        if (blocks.Count == 0) // no markers: the file itself, capped
-            return new([(1, string.Join('\n', lines, 0, Math.Min(total, maxLines)) + "\n")], Math.Min(total, maxLines), 0, 0);
+        if (blocks.Count == 0) // no markers: the file itself, capped (and the whole file linked when it is)
+        {
+            int end = AgentViews.WindowEnd(lines, total, 1, maxLines, maxChars);
+            return new([(1, Window(lines, 1, end))], end, 0, 0, !AgentViews.Fits(lines, total, maxLines, maxChars));
+        }
 
         var ranges = new List<(int From, int To)>();
         int kept = 0, shown = 0;
+        long chars = 0;
+        bool cut = false;
         foreach (var (from, to) in blocks)
         {
             int a = Math.Max(0, from - context), b = Math.Min(total - 1, to + context);
-            int add = ranges.Count > 0 && a <= ranges[^1].To + 1 ? b - ranges[^1].To : b - a + 1;
-            if (shown > 0 && kept + add > maxLines) break;
-            if (ranges.Count > 0 && a <= ranges[^1].To + 1) ranges[^1] = (ranges[^1].From, b);
+            bool joins = ranges.Count > 0 && a <= ranges[^1].To + 1;
+            int first = joins ? ranges[^1].To + 1 : a;
+            int add = b - first + 1;
+            long addChars = 0;
+            for (int k = first; k <= b; k++) addChars += Math.Min(lines[k].Length, AgentViews.MaxLineChars) + 1;
+            if (shown > 0 && (kept + add > maxLines || chars + addChars > maxChars)) break;
+            if (shown == 0 && (add > maxLines || addChars > maxChars))
+            {
+                // One block alone is over the cap: show its head (the whole file is linked), never all of it.
+                int end = AgentViews.WindowEnd(lines, total, a + 1, maxLines, maxChars); // 1-based, inclusive
+                ranges.Add((a, end - 1));
+                kept = end - a;
+                shown = 1;
+                cut = true;
+                break;
+            }
+            if (joins) ranges[^1] = (ranges[^1].From, b);
             else ranges.Add((a, b));
             kept += add;
+            chars += addChars;
             shown++;
         }
-        var segs = ranges.Select(r => (r.From + 1, string.Join('\n', lines, r.From, r.To - r.From + 1) + "\n")).ToList();
-        return new(segs, kept, blocks.Count, shown);
+        var segs = ranges.Select(r => (r.From + 1, Window(lines, r.From + 1, r.To + 1))).ToList();
+        cut |= shown < blocks.Count || ranges.Any(r => Enumerable.Range(r.From, r.To - r.From + 1).Any(k => lines[k].Length > AgentViews.MaxLineChars));
+        return new(segs, kept, blocks.Count, shown, cut);
+    }
+
+    private static string Window(string[] lines, int startLine, int end)
+    {
+        var o = new StringBuilder();
+        AgentViews.AppendWindow(o, lines, startLine, end); // lines over the per-line cap are cut, as in get_file_diff
+        return o.ToString();
     }
 
     private static long Size(FileChange? c) => c is null ? 0 : Math.Max(c.LeftSize, c.RightSize);
@@ -336,6 +366,7 @@ public static class HtmlReport
                 if (r.LeftDroppedDirectories + r.RightDroppedDirectories > 0)
                     notes.Add($"Incomplete walk: {r.LeftDroppedDirectories} left / {r.RightDroppedDirectories} right director(ies) could not be listed — adds/removes under them may be listing failures.");
                 if (r.UnstableFiles > 0) notes.Add($"{r.UnstableFiles} file(s) changed while being read (a live writer) — compared as read.");
+                if (r.SkippedLinks > 0) notes.Add($"{r.SkippedLinks} symlink(s)/junction(s) not followed — nothing behind them is compared.");
                 if (r.UnreadableFiles > 0) notes.Add($"{r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown, shown as 'unreadable'.");
                 break;
             }
