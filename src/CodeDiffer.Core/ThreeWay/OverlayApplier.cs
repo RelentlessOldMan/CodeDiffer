@@ -11,8 +11,8 @@ public sealed record OverlayApplyResult(string Overlay, string Target, string? M
 
 /// <summary>
 /// Applies a merge overlay (<see cref="MergeOverlay"/>) to a tree — v1, or better a copy of it — the documented way:
-/// delete the paths in <c>deletes.txt</c>, then copy <c>files\</c> over it, then remove the directories those
-/// deletes left empty. Dry run unless <c>write</c>.
+/// delete the paths in <c>deletes.txt</c>, then remove the directories those deletes left empty (so a file v2 put
+/// where a directory was can land), then copy <c>files\</c> over it. Dry run unless <c>write</c>.
 /// <para>
 /// Like <see cref="ChangePorter"/> it is safe to stop: a cancel stops between files, each file is written whole
 /// (via <c>&lt;file&gt;.codediffer.tmp</c> and a rename), and running it again finishes the job — a path already
@@ -85,7 +85,11 @@ public static class OverlayApplier
             try
             {
                 if (Directory.Exists(p)) failed.Add((d, "to delete, but the target has a directory there; left alone"));
-                else if (!File.Exists(p)) gone++;
+                else if (!File.Exists(p))
+                {
+                    gone++;
+                    if (write) emptied.Add(Path.GetDirectoryName(p)!); // a stopped run may have deleted it and not the directory
+                }
                 else
                 {
                     if (write)
@@ -102,7 +106,24 @@ public static class OverlayApplier
             Step();
         }
 
-        // 2. Copy files\ over the target (concurrently: over SMB the reads and writes must overlap).
+        // 2. Remove the directories the deletes left empty (walking up, never the target itself) — before the copies,
+        //    so a file v2 put where a directory was lands in its place.
+        int removedDirs = 0;
+        if (write && !ct.IsCancellationRequested)
+            foreach (var start in emptied.OrderByDescending(d => d.Length))
+                for (var dir = start; dir.Length > target.Length && ResultStore.IsUnder(dir, target); dir = Path.GetDirectoryName(dir)!)
+                {
+                    try
+                    {
+                        if (!Directory.Exists(dir) || Directory.EnumerateFileSystemEntries(dir).Any()) break;
+                        Directory.Delete(dir);
+                        removedDirs++;
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { break; }
+                }
+
+        // 3. Copy files\ over the target (concurrently: over SMB the reads and writes must overlap).
+        var hitSet = hits.Select(h => Full(target, h)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         Parallel.ForEach(copies, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism) }, rel =>
         {
             if (ct.IsCancellationRequested) { Interlocked.Increment(ref notReached); return; }
@@ -111,7 +132,9 @@ public static class OverlayApplier
             var tmp = dest + ChangePorter.TempSuffix;
             try
             {
-                if (Directory.Exists(dest)) throw new IOException("the target has a directory there");
+                // A directory still there is one the deletes did not empty (on a dry run: one they would not empty).
+                if (Directory.Exists(dest) && (write || !Directory.EnumerateFiles(dest, "*", SearchOption.AllDirectories).All(hitSet.Contains)))
+                    throw new IOException("the target has a directory there that the deletes do not empty");
                 long len = new FileInfo(src).Length;
                 if (File.Exists(dest) && new FileInfo(dest).Length == len && File.ReadAllBytes(dest).AsSpan().SequenceEqual(File.ReadAllBytes(src)))
                     Interlocked.Increment(ref there);
@@ -135,21 +158,6 @@ public static class OverlayApplier
             }
             Step();
         });
-
-        // 3. Remove the directories the deletes left empty (walking up, never the target itself).
-        int removedDirs = 0;
-        if (write && !ct.IsCancellationRequested)
-            foreach (var start in emptied.OrderByDescending(d => d.Length))
-                for (var dir = start; dir.Length > target.Length && ResultStore.IsUnder(dir, target); dir = Path.GetDirectoryName(dir)!)
-                {
-                    try
-                    {
-                        if (!Directory.Exists(dir) || Directory.EnumerateFileSystemEntries(dir).Any()) break;
-                        Directory.Delete(dir);
-                        removedDirs++;
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { break; }
-                }
 
         bool cancelled = notReached > 0;
         var fails = failed.OrderBy(f => f.Item1, StringComparer.Ordinal).ToList();

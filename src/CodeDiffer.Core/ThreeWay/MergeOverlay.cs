@@ -20,8 +20,9 @@ public sealed record OverlayResult(string Dir, int FromV2, int Merged, int Marke
 ///   as one file (binary, large, modify/delete, rename/rename, path collision, encoding, line endings) with each side's file to choose from.</item>
 /// <item><c>OVERLAY.txt</c> — what this is and how to apply it.</item>
 /// </list>
-/// Applying it: delete the paths in <c>deletes.txt</c> from v1, then copy <c>files\</c> over v1 (deletes first, so a
-/// file v2 turned into a directory — or a case-only rename — lands right). Paths v1 alone changed need nothing. The
+/// Applying it: delete the paths in <c>deletes.txt</c> from v1, remove the directories that left empty, then copy
+/// <c>files\</c> over v1 (deletes first, so a file v2 turned into a directory, a directory v2 turned into a file, or a
+/// case-only rename lands right). Paths v1 alone changed need nothing. The
 /// unresolved conflicts keep v1's version until someone decides. While it is being written the directory holds
 /// <c>INCOMPLETE.txt</c>; one still there means the overlay was not finished and must not be applied.
 /// </summary>
@@ -171,8 +172,8 @@ public static class MergeOverlay
 
             To apply, in this order:
               1. delete the v1 paths listed in deletes.txt (one per line, relative to v1, '/' separated, UTF-8);
-              2. copy files\ over v1;
-              3. optionally remove directories the deletes left empty.
+              2. remove the directories the deletes left empty (needed where v2 put a file in a directory's place);
+              3. copy files\ over v1.
             Or let CodeDiffer do all three (dry run first; safe to stop and run again):
               codediffer apply-overlay "{dir}" <v1 or a copy of it> --write
             Paths only v1 changed need nothing (v1 already has them).

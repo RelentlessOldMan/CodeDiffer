@@ -212,8 +212,9 @@ public static class CodeDifferTools
     [McpServerTool(Name = "write_merge")]
     [Description("Write a finished compare3's merge as an overlay on v1: only the files the merge changes in v1 (v2's " +
                  "one-sided changes, clean merges, text conflicts with diff3 markers) plus deletes.txt and conflicts.txt " +
-                 "(binary/large/delete/rename conflicts with each side's file). Delete deletes.txt's paths from v1, then copy " +
-                 "files\\ over v1, to get the merged tree. Reads the changed files of the three trees.")]
+                 "(binary/large/delete/rename conflicts with each side's file). Delete deletes.txt's paths from v1, remove the " +
+                 "directories that left empty, then copy files\\ over v1, to get the merged tree (the CLI's apply-overlay " +
+                 "does all three). Reads the changed files of the three trees.")]
     public static string WriteMerge(
         [Description("compare3 id (default: the most recent).")] string? compare_id = null,
         [Description("A new or empty directory outside the three trees (default: merge\\ in the compare's result directory).")] string? out_dir = null)

@@ -34,7 +34,7 @@ public sealed class TreeWalker
     /// <param name="ct">Cancels the walk (throws <see cref="OperationCanceledException"/>).</param>
     public WalkResult WalkAll(string root, Action<int>? listed = null, CancellationToken ct = default)
     {
-        var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var rootFull = RootOf(root);
 
         var files = new ConcurrentBag<FileEntry>();
         int dropped = 0;
@@ -74,6 +74,10 @@ public sealed class TreeWalker
         list.Sort((a, b) => string.CompareOrdinal(a.RelativePath, b.RelativePath)); // deterministic order
         return new WalkResult(list, dropped);
     }
+
+    /// <summary>The full root path without a trailing separator — except a drive root keeps it: "Z:" alone means
+    /// the current directory on Z:, not its root.</summary>
+    internal static string RootOf(string root) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
 
     /// <summary>
     /// List one directory (size/mtime/ChangeTime/FileId straight off the listing). A failure is retried once

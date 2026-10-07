@@ -121,12 +121,13 @@ public sealed class MergeOverlayTests : IDisposable
         Assert.Contains("delete/modify  model.c", conflicts);
         Assert.Contains("    v1: (deleted)\n    v2: " + Path.Combine(_v2, "model.c"), conflicts);
         Assert.Contains("1. delete the v1 paths listed in deletes.txt", Read(outDir, "OVERLAY.txt"));
-        Assert.Contains("2. copy files\\ over v1", Read(outDir, "OVERLAY.txt"));
+        Assert.Contains("3. copy files\\ over v1", Read(outDir, "OVERLAY.txt"));
         Assert.False(File.Exists(Path.Combine(outDir, "INCOMPLETE.txt")));
         Assert.Empty(Directory.EnumerateFiles(outDir, "*.codediffer-tmp", SearchOption.AllDirectories));
     }
 
-    /// <summary>Apply the overlay to a fresh copy of v1 the documented way: deletes first, then copy files\.</summary>
+    /// <summary>Apply the overlay to a fresh copy of v1 the documented way: deletes first, then remove the directories
+    /// that left empty, then copy files\.</summary>
     private string Apply(string outDir)
     {
         var merged = Path.Combine(_dir, "M-" + Guid.NewGuid().ToString("N")[..6]);
@@ -136,6 +137,8 @@ public sealed class MergeOverlayTests : IDisposable
             var p = Path.Combine(merged, d);
             if (File.Exists(p)) File.Delete(p);
             else if (Directory.Exists(p)) Directory.Delete(p, true);
+            for (var dir = Path.GetDirectoryName(p)!; dir.Length > merged.Length && !Directory.EnumerateFileSystemEntries(dir).Any(); dir = Path.GetDirectoryName(dir)!)
+                Directory.Delete(dir);
         }
         CopyTree(Path.Combine(outDir, "files"), merged);
         return merged;
@@ -349,6 +352,50 @@ public sealed class MergeOverlayTests : IDisposable
         var r = OverlayApplier.Run(outDir, t, write: true);
         Assert.Contains(r.Failed, f => f.Path == "gone.c" && f.Why.Contains("directory"));
         Assert.Equal("mine\n", Read(t, "gone.c/keep.c"));
+    }
+
+    [Fact]
+    public void ApplyOverlay_ADirectoryV2TurnedIntoAFile_Lands_EvenOnADryRun()
+    {
+        foreach (var d in new[] { "B", "V1", "V2" })
+        {
+            Put($"{d}/pkg/x.c", "x one\n");
+            Put($"{d}/pkg/y.c", "y two\n");
+        }
+        Directory.Delete(Path.Combine(_v2, "pkg"), true);
+        Put("V2/pkg", "now a file\n");
+        var outDir = Overlay();
+        var t = CopyOfV1();
+
+        var dry = OverlayApplier.Run(outDir, t, write: false);
+        Assert.Empty(dry.Failed); // the deletes empty pkg\, so the file would land
+        var r = OverlayApplier.Run(outDir, t, write: true);
+        Assert.Empty(r.Failed);
+        Assert.Equal("now a file\n", Read(t, "pkg"));
+        Assert.Equal(Tree(Apply(outDir)), Tree(t));
+
+        // A directory the deletes do not empty is still refused, and left alone.
+        var t2 = CopyOfV1();
+        Put(Path.GetRelativePath(_dir, Path.Combine(t2, "pkg", "mine.c")), "mine\n");
+        Assert.Contains(OverlayApplier.Run(outDir, t2, write: false).Failed, f => f.Path == "pkg");
+        Assert.Contains(OverlayApplier.Run(outDir, t2, write: true).Failed, f => f.Path == "pkg");
+        Assert.Equal("mine\n", Read(t2, "pkg/mine.c"));
+    }
+
+    [Fact]
+    public void ApplyOverlay_StoppedAfterTheDeletes_RemovesTheEmptiedDirectoriesOnTheNextRun()
+    {
+        var outDir = Overlay();
+        var t = CopyOfV1();
+        using var stop = new CancellationTokenSource();
+        int deletes = File.ReadAllLines(Path.Combine(outDir, "deletes.txt")).Length;
+        OverlayApplier.Run(outDir, t, write: true, parallelism: 1, ct: stop.Token,
+            progress: new CodeDiffer.Core.Port.PortProgress { AfterFile = n => { if (n == deletes) stop.Cancel(); } });
+        Assert.True(Directory.Exists(Path.Combine(t, "old"))); // deleted old/moved.c, stopped before the directories
+
+        OverlayApplier.Run(outDir, t, write: true);
+        Assert.False(Directory.Exists(Path.Combine(t, "old")));
+        Assert.Equal(Tree(Apply(outDir)), Tree(t));
     }
 
     [Fact]

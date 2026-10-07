@@ -47,7 +47,12 @@ public static class HtmlReport
         var opt = options ?? new HtmlReportOptions();
         if (!s.IsDone || s.Error is not null) throw new InvalidOperationException($"compare {s.Id} has not finished successfully");
         var outDir = Path.GetFullPath(opt.OutDir ?? Path.Combine(AgentViews.OutDir(s), "report"));
-        Prepare(outDir);
+        Prepare(outDir, s switch
+        {
+            CompareSession c => new[] { c.Left, c.Right },
+            Compare3Session t => new[] { t.Base, t.V1, t.V2 },
+            _ => Array.Empty<string>(),
+        });
 
         var items = s switch
         {
@@ -165,7 +170,8 @@ public static class HtmlReport
                 ["ls"] = c.LeftSize,
                 ["rs"] = c.RightSize,
             };
-            if (c.Reason is { } rr) row["r"] = CanonicalTokens.Token(rr);
+            if (c.ReasonLabel is { } rr) row["r"] = rr;
+            if (c.Unreadable is { } why) row["n"] = $"could not be read during the compare: {why}";
             if (c.RenamedFrom is { } f) row["f"] = f;
             if (c.SimilarityMilli is { } sim) row["sim"] = sim;
             if (c.Status == ChangeStatus.Identical)
@@ -271,7 +277,7 @@ public static class HtmlReport
         ChangeStatus.Added => "added",
         ChangeStatus.Removed => "deleted",
         ChangeStatus.Renamed => $"renamed to {c.RelativePath}",
-        _ => c.Reason is { } r ? CanonicalTokens.Token(r) : "modified",
+        _ => c.ReasonLabel ?? "modified",
     };
 
     private static string Join(Dictionary<string, object?> row, string note)
@@ -304,6 +310,7 @@ public static class HtmlReport
                 if (r.LeftDroppedDirectories + r.RightDroppedDirectories > 0)
                     notes.Add($"Incomplete walk: {r.LeftDroppedDirectories} left / {r.RightDroppedDirectories} right director(ies) could not be listed — adds/removes under them may be listing failures.");
                 if (r.UnstableFiles > 0) notes.Add($"{r.UnstableFiles} file(s) changed while being read (a live writer) — compared as read.");
+                if (r.UnreadableFiles > 0) notes.Add($"{r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown, shown as 'unreadable'.");
                 break;
             }
             case Compare3Session t:
@@ -316,6 +323,8 @@ public static class HtmlReport
                 m["baseFiles"] = r.V1Report.Changes.Count(c => c.Status != ChangeStatus.Added);
                 if (r.DroppedDirectories > 0)
                     notes.Add($"Incomplete walk: {r.DroppedDirectories} director(ies) could not be listed — the verdicts under them may be wrong.");
+                if (r.UnreadableFiles > 0)
+                    notes.Add($"{r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown, shown as 'unreadable'.");
                 break;
             }
         }
@@ -327,18 +336,42 @@ public static class HtmlReport
 
     // ---- files ----
 
+    /// <summary>Written first into every report directory: a directory holding it is ours to replace, even one a
+    /// stopped writer left half done.</summary>
+    internal const string Marker = "CODEDIFFER-REPORT.txt";
+
     /// <summary>A fresh report directory. An old report is ours and derived, so it is replaced — but only a
-    /// directory that looks like one of our reports (or is empty) is ever deleted.</summary>
-    private static void Prepare(string outDir)
+    /// directory that is one of our reports (or is empty) is ever deleted, and never one inside a compared tree or
+    /// holding one.</summary>
+    private static void Prepare(string outDir, IEnumerable<string> trees)
     {
+        foreach (var tree in trees)
+            if (ResultStore.IsUnder(outDir, tree) || ResultStore.IsUnder(tree, outDir))
+                throw new IOException($"the report directory {outDir} and the compared tree {tree} overlap; write the report somewhere else");
         if (Directory.Exists(outDir))
         {
-            bool ours = File.Exists(Path.Combine(outDir, "data", "index.js")) || !Directory.EnumerateFileSystemEntries(outDir).Any();
-            if (!ours) throw new IOException($"{outDir} exists and is not a CodeDiffer report — refusing to overwrite it");
+            if (!IsOurs(outDir)) throw new IOException($"{outDir} exists and is not a CodeDiffer report — refusing to overwrite it");
             Directory.Delete(outDir, recursive: true);
         }
+        Directory.CreateDirectory(outDir);
+        File.WriteAllText(Path.Combine(outDir, Marker), "A CodeDiffer HTML report (open index.html). Writing a new report here replaces this directory.\n",
+            new UTF8Encoding(false));
         Directory.CreateDirectory(Path.Combine(outDir, "data", "d"));
         Directory.CreateDirectory(Path.Combine(outDir, "full"));
+    }
+
+    /// <summary>Empty, marked as ours, or a report from before the marker: nothing but index.html, data\ and full\,
+    /// with data\index.js as this writes it.</summary>
+    private static bool IsOurs(string dir)
+    {
+        var entries = Directory.EnumerateFileSystemEntries(dir).Select(Path.GetFileName).ToList();
+        if (entries.Count == 0 || entries.Contains(Marker, StringComparer.OrdinalIgnoreCase)) return true;
+        if (entries.Any(e => !(e is "index.html" or "data" or "full"))) return false;
+        var index = Path.Combine(dir, "data", "index.js");
+        if (!File.Exists(index)) return false;
+        using var reader = new StreamReader(index, Encoding.UTF8);
+        var head = new char[9];
+        return reader.ReadBlock(head) == head.Length && new string(head) == "CD.index(";
     }
 
     private static string Template()

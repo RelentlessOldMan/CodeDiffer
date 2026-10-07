@@ -22,8 +22,8 @@ public sealed class ReasonClassifier
     {
         // One open per side: a small file is read whole (its head is a prefix of it); a large one only its head.
         bool large = leftLength > _maxClassifyBytes || rightLength > _maxClassifyBytes;
-        var leftBytes = large ? TextInspector.ReadHead(leftPath) : File.ReadAllBytes(leftPath);
-        var rightBytes = large ? TextInspector.ReadHead(rightPath) : File.ReadAllBytes(rightPath);
+        var leftBytes = large ? TextInspector.ReadHead(leftPath) : TextInspector.ReadAll(leftPath);
+        var rightBytes = large ? TextInspector.ReadHead(rightPath) : TextInspector.ReadAll(rightPath);
 
         if (TextInspector.LooksBinary(Head(leftBytes)) || TextInspector.LooksBinary(Head(rightBytes)))
             return ChangeReason.Binary;

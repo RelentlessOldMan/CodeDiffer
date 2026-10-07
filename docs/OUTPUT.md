@@ -133,8 +133,9 @@ as an overlay on v1, never the whole tree: `files\` holds only what the merge ch
 changes, clean merges in the merged encoding and line endings, text conflicts with diff3 markers),
 `deletes.txt` the v1 paths to delete (v2's deletes, the old side of a move), `conflicts.txt` the conflicts
 with markers plus those that can't be one file (binary, large, modify/delete, rename/rename, path collision, encoding, line endings)
-with each side's file, and `OVERLAY.txt` how to apply it: delete the paths in `deletes.txt` from v1, then copy
-`files\` over v1 (deletes first, so a file v2 turned into a directory, or a case-only rename, lands right).
+with each side's file, and `OVERLAY.txt` how to apply it: delete the paths in `deletes.txt` from v1, remove the
+directories that left empty, then copy `files\` over v1 (deletes first, so a file v2 turned into a directory, a
+directory v2 turned into a file, or a case-only rename lands right).
 A move's old path is listed only once its new file is written, so a failed read never loses v1's copy. Each
 file is written beside its name and renamed into place (a failed write leaves nothing half-written), and a
 merge is checked against the compare as it is written: a file whose merge changed since (a tree edited in
@@ -142,7 +143,7 @@ between) is listed as not written instead. `INCOMPLETE.txt` is present until the
 Unlike `apply --write` (which skips any file with a conflict), conflicts land in the overlay with markers.
 
 `codediffer apply-overlay <overlay-dir> <target> [--write] [--again]` does those steps (on v1, or better a copy
-of it): the deletes, then `files\`, then the directories the deletes left empty. Dry run unless `--write`.
+of it): the deletes, then the directories the deletes left empty, then `files\`. Dry run unless `--write`.
 Before touching anything it refuses an unfinished overlay (`INCOMPLETE.txt`), a `deletes.txt` line that is not
 a plain path inside the target, and a target and overlay inside each other; it deletes files only, never a
 directory in a listed path's place. Like `apply`, Ctrl+C stops between files, each is written whole (temp +
@@ -200,6 +201,17 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - A `modified` **always** carries a reason; never "modified" with an empty diff (the prototype's
   headline bug: EOL/encoding-only changes reported as modified-with-nothing-to-show).
 - `identical` = compared-and-equal, distinct from `not compared` (skipped by a cap).
+- A file that can't be read (locked, gone since the walk, access denied) never stops the compare and is never
+  called identical: it is listed `[unreadable]` with why (a pair as modified with no reason, an add or remove
+  as itself, left out of rename matching), every summary warns, and the CLI exits 3. Files are opened so a
+  writer can keep writing (a log being appended to is still read), and the hashes read are kept even when a
+  compare fails.
+- Text that isn't valid UTF-8 (a cp1252 / Latin-1 file) is read byte for byte, never with U+FFFD in place of
+  the bad bytes: `25°C` → `25±C` is a `content` change, not "the same text, encoding changed".
+- A whole patch (`--patch`, `export_changeset`) is for `git apply`: what it can't carry — binary and large
+  files, text that isn't UTF-8, unreadable files, the eol/encoding-only notes — is described in `#` lines
+  outside any `diff --git` section, which git skips, so the rest still applies; the summary counts them as
+  NOT CARRIED. A byte-identical rename is a header-only rename, binary or not; a UTF-8 BOM is kept.
 - Deterministic output: two runs over the same inputs are byte-identical, so a diff of results is real.
 
 ## 7. Defaults (tunable)

@@ -36,6 +36,9 @@ public static class ThreeWayViews
         o.Append($"per side: v1 {SideCounts(r.V1Report)} · v2 {SideCounts(r.V2Report)}\n");
         if (r.DroppedDirectories > 0)
             o.Append($"WARNING: incomplete walk — {r.DroppedDirectories} director(ies) could not be listed; the verdicts under them may be wrong.\n");
+        if (r.UnreadableFiles > 0)
+            o.Append($"WARNING: {r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown " +
+                     "(shown as 'unreadable'); compare again once they can be read.\n");
         AgentViews.Saved(o, s);
         if (r.Entries.Count > 0)
             o.Append("next: list_files(status=conflict) · get_file_diff(path) shows the merge with conflict markers · write_report for HTML\n");
@@ -50,7 +53,8 @@ public static class ThreeWayViews
            $"  conflicts.txt {o.Markers:N0} with markers · {o.Unresolved - o.Failed:N0} not merged (v1's version stays until decided)\n" +
            (o.Failed > 0 ? $"  FAILED: {o.Failed:N0} file(s) could not be written (see conflicts.txt; v1's version stays)\n" : "") +
            (o.DroppedDirectories > 0 ? $"  INCOMPLETE: {o.DroppedDirectories:N0} director(ies) could not be read; changes under them are missing\n" : "") +
-           "  apply: delete the paths in deletes.txt from v1, then copy files\\ over v1 (OVERLAY.txt says the same),\n" +
+           "  apply: delete the paths in deletes.txt from v1, remove the directories that left empty, then copy files\\\n" +
+           "         over v1 (OVERLAY.txt says the same),\n" +
            $"         or: codediffer apply-overlay \"{o.Dir}\" <v1 or a copy of it> [--write]\n";
 
     public static string Stats(Compare3Session s)
@@ -190,7 +194,7 @@ public static class ThreeWayViews
             ChangeStatus.Added => "added",
             ChangeStatus.Removed => "deleted",
             ChangeStatus.Renamed => $"renamed->{c.RelativePath}",
-            _ => c.Reason is { } rr ? CanonicalTokens.Token(rr) : "modified",
+            _ => c.ReasonLabel ?? "modified",
         };
         var o = new StringBuilder($"{tag} {e.Path}  [v1 {Side(e.V1)} · v2 {Side(e.V2)}]");
         if (e.Outcome == Merge3Outcome.Conflict) o.Append($"  {e.ConflictKind}");

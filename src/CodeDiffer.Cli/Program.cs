@@ -97,8 +97,7 @@ static int Compare(string[] args)
         using var stdout = PatchStdout();
         var ps = PatchWriter.Write(stdout, report, args[1], args[2], popt);
         stdout.Flush();
-        info.WriteLine($"patch: {ps.TextFiles} text · {ps.BinaryFiles} binary · {ps.GiantFiles} large (block ranges) · {ps.NoteFiles} eol/encoding note(s)" +
-            (ps.CoarseFiles > 0 ? $" · {ps.CoarseFiles} coarse (edit-distance budget exceeded)" : ""));
+        info.WriteLine($"patch: {ps.Summary(popt.Literal)}");
     }
     else
     {
@@ -135,9 +134,11 @@ static int Compare(string[] args)
         Console.Error.WriteLine(
             $"WARNING: incomplete walk — {report.LeftDroppedDirectories} left / {report.RightDroppedDirectories} right " +
             "director(ies) could not be listed; adds/removes under them may be listing failures.");
-        return 3;
     }
-    return 0;
+    if (report.UnreadableFiles > 0)
+        Console.Error.WriteLine($"WARNING: {report.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict " +
+            "is unknown, listed as [unreadable] (a pair as modified, never identical); compare again once they can be read.");
+    return report.LeftDroppedDirectories + report.RightDroppedDirectories + report.UnreadableFiles > 0 ? 3 : 0;
 }
 
 /// <summary>Write the HTML report for a finished session; prints its path. Returns an exit code on failure, else null.</summary>
@@ -497,7 +498,7 @@ static void PrintChanges(CompareReport r)
             ChangeStatus.Renamed => "R",
             _ => "?",
         };
-        var reason = c.Reason is { } rr ? $" [{CanonicalTokens.Token(rr)}]" : "";
+        var reason = c.ReasonLabel is { } rr ? $" [{rr}]" : "";
         var from = c.RenamedFrom is { } f ? $"{f} -> " : "";
         Console.WriteLine($"    {tag} {from}{c.RelativePath}{reason}");
     }
@@ -578,6 +579,9 @@ static int Apply(string[] args)
             Console.Error.WriteLine("error: incomplete walk (unlistable directories) — refusing to port a partial change set");
             return 3;
         }
+        if (report.UnreadableFiles > 0)
+            Console.Error.WriteLine($"note: {report.UnreadableFiles} file(s) could not be read during the compare; each is tried again " +
+                "below and reported if it still can't be read");
         // Ctrl+C here stops between files (each is written whole); a second one still quits at once, and even then
         // no file is torn and running the apply again finishes it.
         bool write = args.Contains("--write");
@@ -701,7 +705,7 @@ static int Compare3(string[] args)
         }
     }
     if (failed is { } code) return code;
-    if (r.DroppedDirectories > 0) return 3;
+    if (r.DroppedDirectories + r.UnreadableFiles > 0) return 3;
     return r.Count(Merge3Outcome.Conflict) > 0 ? 1 : 0;
 }
 
@@ -733,7 +737,9 @@ static T Show<T>(Task<T> task, Func<string> line)
     var sw = System.Diagnostics.Stopwatch.StartNew();
     var logged = TimeSpan.Zero;
     int drawn = 0;
-    while (!task.Wait(console ? 500 : 1000))
+    // Wait on the handle, not task.Wait: that throws an AggregateException when the work fails within the first tick
+    // (a bad path, a refused argument), which no caller's catch matches — a stack trace instead of the error.
+    while (!((IAsyncResult)task).AsyncWaitHandle.WaitOne(console ? 500 : 1000))
     {
         var t = sw.Elapsed;
         var text = $"{(t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss"))}  {line()}";
@@ -794,7 +800,9 @@ static void PrintUsage()
           codediffer report <id|result-dir> [--large] [--include-identical] [--max-diffs N] [--out DIR]
                                        HTML report of a saved compare: folder tree, filters,
                                        each file's diff loaded on expand; opens from disk.
-                                       --large also block-diffs files over 16 MB.
+                                       --large also block-diffs files over 16 MB. --out must
+                                       be new, empty or an earlier report (it is replaced),
+                                       and outside the compared trees.
           codediffer results [--max N]   saved compares, newest first
           codediffer results --prune [--keep N] [--older-than DAYS] [--yes]
                                        delete all but the newest N (default 20) saved compares,
@@ -810,8 +818,8 @@ static void PrintUsage()
                                        again to finish (done files come out "already").
           codediffer apply-overlay <overlay-dir> <target> [--write] [--again]
                                        apply a compare3 --merge-out overlay to v1 (or a copy):
-                                       deletes.txt, then files\, then the directories the
-                                       deletes emptied. Dry run unless --write; Ctrl+C stops
+                                       deletes.txt, then the directories the deletes emptied,
+                                       then files\. Dry run unless --write; Ctrl+C stops
                                        between files, run again to finish. Refuses a second
                                        apply to the same target unless --again (it would
                                        overwrite conflicts resolved since).

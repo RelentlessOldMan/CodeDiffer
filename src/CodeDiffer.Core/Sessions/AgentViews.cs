@@ -120,7 +120,7 @@ public static class AgentViews
         if (found.Any(f => f.MayBeRename))
             o.Append("  (renames are matched at the end: an added and a removed file may still turn out to be one rename)\n");
         foreach (var f in found.Take(10)) o.Append("  ").Append(Tag(f.Change)).Append(' ').Append(f.Change.RelativePath)
-            .Append(f.Change.Reason is { } rr ? $"  [{CanonicalTokens.Token(rr)}]" : "").Append('\n');
+            .Append(f.Change.ReasonLabel is { } rr ? $"  [{rr}]" : "").Append('\n');
         if (found.Length > 10) o.Append($"  ... {found.Length - 10:N0} more (list_files)\n");
         o.Append("next: list_files and get_file_diff work on what is found so far · get_summary(wait_seconds=…) waits for the rest\n");
         return o.ToString();
@@ -210,7 +210,7 @@ public static class AgentViews
         foreach (var c in slice)
         {
             o.Append($"{Tag(c)} {Name(c)}");
-            if (c.Reason is { } rr) o.Append($"  [{CanonicalTokens.Token(rr)}]");
+            if (c.ReasonLabel is { } rr) o.Append($"  [{rr}]");
             o.Append(c.Status switch
             {
                 ChangeStatus.Added => $"  {Bytes(c.RightSize)}",
@@ -265,7 +265,7 @@ public static class AgentViews
         startLine = Math.Clamp(startLine, 1, Math.Max(1, total));
 
         var o = new StringBuilder();
-        o.Append($"{Tag(c)} {Name(c)}{(c.Reason is { } rr ? $"  [{CanonicalTokens.Token(rr)}]" : "")}  ");
+        o.Append($"{Tag(c)} {Name(c)}{(c.ReasonLabel is { } rr ? $"  [{rr}]" : "")}  ");
         o.Append(info.Kind == "text" ? $"+{info.AddedLines:N0} -{info.RemovedLines:N0} in {info.Hunks:N0} hunk(s)" : info.Kind);
         o.Append($" · {total:N0} patch line(s)\n");
         if (found is not null)
@@ -302,14 +302,22 @@ public static class AgentViews
         var file = string.IsNullOrWhiteSpace(outPath) ? Path.Combine(OutDir(s), "changeset.patch") : Path.GetFullPath(outPath);
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         PatchStats ps;
-        using (var w = new StreamWriter(file, false, new UTF8Encoding(false)) { NewLine = "\n" })
-            ps = PatchWriter.Write(w, r, s.Left, s.Right, new PatchOptions { Context = context, Literal = literal, Parallelism = s.Options.Parallelism });
+        var tmp = file + ".tmp";
+        try
+        {
+            // Written beside its name and moved into place: a failure never leaves a truncated patch behind.
+            using (var w = new StreamWriter(tmp, false, new UTF8Encoding(false)) { NewLine = "\n" })
+                ps = PatchWriter.Write(w, r, s.Left, s.Right, new PatchOptions { Context = context, Literal = literal, Parallelism = s.Options.Parallelism });
+            File.Move(tmp, file, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
         return $"changeset {s.Id}: {file}  ({Bytes(new FileInfo(file).Length)})\n" +
-               $"  {ps.TextFiles:N0} text · {ps.BinaryFiles:N0} binary · {ps.GiantFiles:N0} large (block ranges) · {ps.NoteFiles:N0} eol/encoding note(s)" +
-               (ps.CoarseFiles > 0 ? $" · {ps.CoarseFiles:N0} coarse" : "") + "\n" +
-               (literal ? "  literal: every changed byte is in the patch; `git apply` reproduces the right tree's text files exactly\n"
-                        : "  eol/encoding-only files are notes, not hunks; pass literal=true for a fully applicable patch\n") +
-               (ps.BinaryFiles + ps.GiantFiles > 0 ? "  binary and large files are described, not carried — copy those separately\n" : "");
+               $"  {ps.Summary(literal)}\n" +
+               "  `git apply` it: what it doesn't carry is described in '#' lines, which git skips\n";
     }
 
     /// <summary>
@@ -451,11 +459,15 @@ public static class AgentViews
                      "could not be listed; adds/removes under them may be listing failures.\n");
         if (r.UnstableFiles > 0)
             o.Append($"note: {r.UnstableFiles} file(s) changed while being read (live writer) — compared as read.\n");
+        if (r.UnreadableFiles > 0)
+            o.Append($"WARNING: {r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown, " +
+                     "listed as [unreadable] (a pair as modified, never identical); compare again once they can be read.\n");
     }
 
     private static string Reasons(CompareReport r) =>
-        string.Join(" · ", Enum.GetValues<ChangeReason>().Select(x => (x, n: r.ReasonCount(x))).Where(t => t.n > 0)
-            .Select(t => $"{CanonicalTokens.Token(t.x)} {t.n:N0}"));
+        string.Join(" · ", Enum.GetValues<ChangeReason>().Select(x => (k: CanonicalTokens.Token(x), n: r.ReasonCount(x)))
+            .Append((k: "unreadable", n: r.UnreadableFiles)).Where(t => t.n > 0)
+            .Select(t => $"{t.k} {t.n:N0}"));
 
     private static bool TryStatuses(string? status, out HashSet<ChangeStatus> set, out string error)
     {

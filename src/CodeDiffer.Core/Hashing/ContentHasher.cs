@@ -18,7 +18,7 @@ public static class ContentHasher
     public static string HashFile(string path, CancellationToken ct = default)
     {
         using var stream = new FileStream(
-            path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
             bufferSize: StreamBufferBytes, FileOptions.SequentialScan);
         return HashStream(stream, ct);
     }

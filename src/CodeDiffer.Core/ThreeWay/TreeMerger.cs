@@ -50,6 +50,8 @@ public sealed class ThreeWayReport
     public int Count(Merge3Outcome o) => Entries.Count(e => e.Outcome == o);
     public int DroppedDirectories => V1Report.LeftDroppedDirectories + V1Report.RightDroppedDirectories
                                    + V2Report.LeftDroppedDirectories + V2Report.RightDroppedDirectories;
+    /// <summary>Files either compare could not read: their verdict is unknown.</summary>
+    public int UnreadableFiles => V1Report.UnreadableFiles + V2Report.UnreadableFiles;
 }
 
 /// <summary>

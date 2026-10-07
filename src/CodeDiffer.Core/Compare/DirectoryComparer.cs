@@ -137,7 +137,11 @@ public sealed class DirectoryComparer
             var classified = new FileChange[sizeChanged.Count];
             Parallel.For(0, sizeChanged.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism, CancellationToken = ct }, i =>
             {
-                classified[i] = Modified(classifier, sizeChanged[i].L, sizeChanged[i].R);
+                try { classified[i] = Modified(classifier, sizeChanged[i].L, sizeChanged[i].R); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    classified[i] = Unknown(sizeChanged[i].L, sizeChanged[i].R, ex); // modified for sure; why is unknown
+                }
                 progress?.Add(classified[i]);
             });
             changes.AddRange(classified);
@@ -154,59 +158,74 @@ public sealed class DirectoryComparer
                 async (i, ct) =>
                 {
                     var (le, re) = sameSize[i];
-                    bool equal;
-                    long read = 0;
                     long streamed = 0; // this pair's bytes already shown by progress as they were read
                     Action<int, int>? onChunk = progress is null ? null : (advance, bytes) => { streamed += advance; progress.Streamed(advance, bytes); };
-                    ContentId cl = default;
-                    bool shared = reused is not null && sharedLeft!.Ids.TryGetValue(le.RelativePath, out cl);
-                    if (shared) Interlocked.Increment(ref reusedFiles);
-                    bool hasL = shared || leftCache.TryGet(le, out cl);
-                    bool hasR = rightCache.TryGet(re, out var cr);
-                    ContentId? provenL = hasL ? cl : null; // the left id this run established, passed on via shareIds
-                    bool? cached = hasL && hasR ? ContentId.Same(cl, cr) : null;
-                    if (cached is { } same)
+                    bool hasL = false, hasR = false;
+                    try
                     {
-                        equal = same; // both sides proven by trusted ledgers — no bytes cross the wire
+                        (verdicts[i], hasL, hasR) = await Pair(le, re, onChunk, ct).ConfigureAwait(false);
                     }
-                    else if (_options.Cache == CacheMode.Off)
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     {
-                        var r = await PairComparer.CompareAsync(le, re, hashes: false, ct, onChunk).ConfigureAwait(false);
-                        equal = r.Equal;
-                        read = 2 * le.Length; // upper bound (early exit on a difference)
+                        // Locked, vanished or denied: one file must not cost the whole compare. Never "identical".
+                        verdicts[i] = Unknown(le, re, ex);
                     }
-                    else if (hasL != hasR)
-                    {
-                        // One side cached: read only the other side, and compare hashes (SHA-256 when both have it).
-                        var (e, cache, known) = hasL ? (re, rightCache, cl) : (le, leftCache, cr);
-                        var h = await PairComparer.HashAsync(e, ct, onChunk).ConfigureAwait(false);
-                        cache.Record(e, h);
-                        equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
-                        if (!hasL && h.Stable) provenL = new ContentId(h.XxHash128, h.Sha256);
-                        read = e.Length;
-                    }
-                    else
-                    {
-                        // Neither usable: read both at once, compare bytes, and keep both hashes for next time.
-                        var r = await PairComparer.CompareAsync(le, re, hashes: true, ct, onChunk).ConfigureAwait(false);
-                        leftCache.Record(le, r.Left!);
-                        rightCache.Record(re, r.Right!);
-                        equal = r.Equal;
-                        if (r.Left!.Stable) provenL = new ContentId(r.Left.XxHash128, r.Left.Sha256);
-                        read = 2 * le.Length;
-                    }
-                    if (shareIds is not null && provenL is { } id) shareIds[le.RelativePath] = id;
-                    Interlocked.Add(ref bytesRead, read);
-                    verdicts[i] = equal
-                        ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
-                        : Modified(classifier, le, re);
                     if (progress is not null)
                     {
-                        if (!equal) progress.Add(verdicts[i]);
+                        if (verdicts[i].Status != ChangeStatus.Identical) progress.Add(verdicts[i]);
                         progress.PairChecked(le.Length - streamed, 0, (hasL ? 1 : 0) + (hasR ? 1 : 0));
                     }
                 }).GetAwaiter().GetResult();
             changes.AddRange(verdicts);
+
+            async Task<(FileChange Verdict, bool HasL, bool HasR)> Pair(FileEntry le, FileEntry re, Action<int, int>? onChunk, CancellationToken ct)
+            {
+                bool equal;
+                long read = 0;
+                ContentId cl = default;
+                bool shared = reused is not null && sharedLeft!.Ids.TryGetValue(le.RelativePath, out cl);
+                if (shared) Interlocked.Increment(ref reusedFiles);
+                bool hasL = shared || leftCache.TryGet(le, out cl);
+                bool hasR = rightCache.TryGet(re, out var cr);
+                ContentId? provenL = hasL ? cl : null; // the left id this run established, passed on via shareIds
+                bool? cached = hasL && hasR ? ContentId.Same(cl, cr) : null;
+                if (cached is { } same)
+                {
+                    equal = same; // both sides proven by trusted ledgers — no bytes cross the wire
+                }
+                else if (_options.Cache == CacheMode.Off)
+                {
+                    var r = await PairComparer.CompareAsync(le, re, hashes: false, ct, onChunk).ConfigureAwait(false);
+                    equal = r.Equal;
+                    read = 2 * le.Length; // upper bound (early exit on a difference)
+                }
+                else if (hasL != hasR)
+                {
+                    // One side cached: read only the other side, and compare hashes (SHA-256 when both have it).
+                    var (e, cache, known) = hasL ? (re, rightCache, cl) : (le, leftCache, cr);
+                    var h = await PairComparer.HashAsync(e, ct, onChunk).ConfigureAwait(false);
+                    cache.Record(e, h);
+                    equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
+                    if (!hasL && h.Stable) provenL = new ContentId(h.XxHash128, h.Sha256);
+                    read = e.Length;
+                }
+                else
+                {
+                    // Neither usable: read both at once, compare bytes, and keep both hashes for next time.
+                    var r = await PairComparer.CompareAsync(le, re, hashes: true, ct, onChunk).ConfigureAwait(false);
+                    leftCache.Record(le, r.Left!);
+                    rightCache.Record(re, r.Right!);
+                    equal = r.Equal;
+                    if (r.Left!.Stable) provenL = new ContentId(r.Left.XxHash128, r.Left.Sha256);
+                    read = 2 * le.Length;
+                }
+                if (shareIds is not null && provenL is { } id) shareIds[le.RelativePath] = id;
+                Interlocked.Add(ref bytesRead, read);
+                var verdict = equal
+                    ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
+                    : Modified(classifier, le, re);
+                return (verdict, hasL, hasR);
+            }
 
             Phase("same-size content");
             ct.ThrowIfCancellationRequested();
@@ -214,10 +233,10 @@ public sealed class DirectoryComparer
             AddResolvedAddsRemovesAndRenames(changes, removed, added, ct);
             Phase("renames");
         }
-        catch (OperationCanceledException)
+        catch (Exception)
         {
-            // Keep what was read: every hash recorded so far goes into the ledgers, so re-running a cancelled
-            // cold compare only reads what this one didn't get to.
+            // Keep what was read: every hash recorded so far goes into the ledgers, so re-running a cancelled (or
+            // failed) cold compare only reads what this one didn't get to.
             try { leftCache.Save(lw.Files); rightCache.Save(rw.Files); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             throw;
@@ -247,6 +266,10 @@ public sealed class DirectoryComparer
         => new(le.RelativePath, ChangeStatus.Modified,
             classifier.Classify(le.FullPath, le.Length, re.FullPath, re.Length), le.Length, re.Length);
 
+    /// <summary>A pair that could not be read: modified with no reason, and why.</summary>
+    private static FileChange Unknown(FileEntry le, FileEntry re, Exception ex)
+        => new(le.RelativePath, ChangeStatus.Modified, null, le.Length, re.Length, Unreadable: ex.Message);
+
     /// <summary>
     /// Turn the held-back left-only / right-only entries into Renamed changes (when enabled) plus the
     /// leftover Added / Removed. A rename's destination path is its RelativePath; its source rides in
@@ -256,12 +279,14 @@ public sealed class DirectoryComparer
     {
         IReadOnlyList<FileEntry> leftoverRemoved = removed;
         IReadOnlyList<FileEntry> leftoverAdded = added;
+        IReadOnlyDictionary<string, string>? unreadable = null;
 
         if (_options.DetectRenames)
         {
             var result = new RenameDetector(_options).Detect(removed, added, ct);
             leftoverRemoved = result.UnmatchedRemoved;
             leftoverAdded = result.UnmatchedAdded;
+            unreadable = result.Unreadable;
 
             var removedByPath = removed.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
             var addedByPath = added.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
@@ -273,9 +298,10 @@ public sealed class DirectoryComparer
             }
         }
 
+        string? Why(FileEntry e) => unreadable is not null && unreadable.TryGetValue(e.RelativePath, out var why) ? why : null;
         foreach (var e in leftoverRemoved)
-            changes.Add(new FileChange(e.RelativePath, ChangeStatus.Removed, null, e.Length, 0));
+            changes.Add(new FileChange(e.RelativePath, ChangeStatus.Removed, null, e.Length, 0, Unreadable: Why(e)));
         foreach (var e in leftoverAdded)
-            changes.Add(new FileChange(e.RelativePath, ChangeStatus.Added, null, 0, e.Length));
+            changes.Add(new FileChange(e.RelativePath, ChangeStatus.Added, null, 0, e.Length, Unreadable: Why(e)));
     }
 }

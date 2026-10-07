@@ -73,6 +73,57 @@ public class PatchTests : IDisposable
                 $"{rel} differs after git apply");
     }
 
+    private void PutBytes(string rel, byte[] bytes)
+    {
+        var p = Path.Combine(_dir, rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+        File.WriteAllBytes(p, bytes);
+    }
+
+    [Fact]
+    public void DefaultPatch_WithWhatItCannotCarry_StillAppliesByGit()
+    {
+        // Carried: a UTF-8 BOM file edited on line 1, a pure rename of a binary file, plain text.
+        PutBytes("L/bom.txt", [0xEF, 0xBB, 0xBF, .. "first\nsecond\n"u8]);
+        PutBytes("R/bom.txt", [0xEF, 0xBB, 0xBF, .. "FIRST\nsecond\n"u8]);
+        PutBytes("L/img/a.bin", [0, 1, 2, 3, 4, 5]);
+        PutBytes("R/img/b.bin", [0, 1, 2, 3, 4, 5]);
+        Put("L/plain.txt", Lines(1, 5));
+        Put("R/plain.txt", Lines(1, 4) + "five\n");
+        // Not carried (described in '#' lines): eol-only, a changed binary, cp1252 text, UTF-16 text.
+        Put("L/eol.txt", "a\nb\n");
+        Put("R/eol.txt", "a\r\nb\r\n");
+        PutBytes("L/blob.dat", [0, 9, 9]);
+        PutBytes("R/blob.dat", [0, 8, 8, 8]);
+        PutBytes("L/legacy.c", [.. "t = 25"u8, 0xB0, (byte)'\n']);
+        PutBytes("R/legacy.c", [.. "t = 26"u8, 0xB0, (byte)'\n']);
+        PutBytes("L/wide.txt", [0xFF, 0xFE, .. Encoding.Unicode.GetBytes("one\n")]);
+        PutBytes("R/wide.txt", [0xFF, 0xFE, .. Encoding.Unicode.GetBytes("two\n")]);
+
+        var left = Path.Combine(_dir, "L");
+        var right = Path.Combine(_dir, "R");
+        var report = new DirectoryComparer(new CompareOptions { Cache = CacheMode.Off }).Compare(left, right);
+        var sw = new StringWriter { NewLine = "\n" };
+        var stats = PatchWriter.Write(sw, report, left, right);
+        var patchText = sw.ToString();
+        Assert.Equal((1, 1, 2, 3), (stats.NoteFiles, stats.BinaryFiles, stats.OtherFiles, stats.NotCarried));
+        Assert.Contains("# Line endings differ: a/eol.txt", patchText);
+        Assert.Contains("# Binary files a/blob.dat and b/blob.dat differ", patchText);
+        Assert.Contains("# legacy.c: text that is not UTF-8", patchText);
+        Assert.Contains("NOT CARRIED", stats.Summary(literal: false));
+
+        var work = Path.Combine(_dir, "work");
+        CopyTree(left, work);
+        var patchFile = Path.Combine(_dir, "p.patch");
+        File.WriteAllBytes(patchFile, new UTF8Encoding(false).GetBytes(patchText));
+        var (code, output) = Git(work, "-c", "core.autocrlf=false", "apply", "--whitespace=nowarn", patchFile);
+        Assert.True(code == 0, $"git apply failed ({code}): {output}\n--- patch ---\n{patchText}");
+        foreach (var rel in new[] { "bom.txt", "img/b.bin", "plain.txt" })
+            Assert.Equal(File.ReadAllBytes(Path.Combine(right, rel)), File.ReadAllBytes(Path.Combine(work, rel)));
+        Assert.False(File.Exists(Path.Combine(work, "img", "a.bin")));
+        Assert.Equal(File.ReadAllBytes(Path.Combine(left, "legacy.c")), File.ReadAllBytes(Path.Combine(work, "legacy.c"))); // untouched
+    }
+
     [Fact]
     public void Rendering_MergesNearbyEdits_AndUsesGitRangeForm()
     {

@@ -445,6 +445,7 @@ public static class ResultStore
         w.WriteNumber("rightSize", c.RightSize);
         if (c.RenamedFrom is { } f) w.WriteString("from", f);
         if (c.SimilarityMilli is { } s) w.WriteNumber("similarity", s);
+        if (c.Unreadable is { } u) w.WriteString("unreadable", u);
         w.WriteEndObject();
     }
 
@@ -455,7 +456,8 @@ public static class ResultStore
         e.GetProperty("leftSize").GetInt64(),
         e.GetProperty("rightSize").GetInt64(),
         e.TryGetProperty("from", out var f) ? f.GetString() : null,
-        e.TryGetProperty("similarity", out var s) ? s.GetInt32() : null);
+        e.TryGetProperty("similarity", out var s) ? s.GetInt32() : null,
+        e.TryGetProperty("unreadable", out var u) ? u.GetString() : null);
 
     private static void WriteEntry(Utf8JsonWriter w, Merge3Entry e)
     {

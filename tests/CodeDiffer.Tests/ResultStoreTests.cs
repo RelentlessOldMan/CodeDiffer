@@ -177,6 +177,39 @@ public class ResultStoreTests : IDisposable
     }
 
     [Fact]
+    public void HtmlReport_NeverDeletesAProjectThatMerelyLooksLikeOne()
+    {
+        var s = Done(new SessionStore(resultsRoot: Results).Start(L, R, NoCache));
+        // A JS project with data\index.js of its own: not a report, so it is refused, not deleted.
+        Put("proj/data/index.js", "export default 1;\n");
+        Put("proj/src/precious.cs", "keep\n");
+        var proj = Path.Combine(_dir, "proj");
+        Assert.Throws<IOException>(() => HtmlReport.Write(s, new HtmlReportOptions { OutDir = proj }));
+        Assert.True(File.Exists(Path.Combine(proj, "src", "precious.cs")));
+        // Even one holding only index.html/data/full, unless data\index.js is ours.
+        File.Delete(Path.Combine(proj, "src", "precious.cs"));
+        Directory.Delete(Path.Combine(proj, "src"));
+        Put("proj/index.html", "<p>mine</p>\n");
+        Assert.Throws<IOException>(() => HtmlReport.Write(s, new HtmlReportOptions { OutDir = proj }));
+        Assert.True(File.Exists(Path.Combine(proj, "index.html")));
+
+        // Inside a compared tree, or holding one: refused before anything is touched.
+        Assert.Throws<IOException>(() => HtmlReport.Write(s, new HtmlReportOptions { OutDir = Path.Combine(R, "report") }));
+        Assert.False(Directory.Exists(Path.Combine(R, "report")));
+        Assert.Throws<IOException>(() => HtmlReport.Write(s, new HtmlReportOptions { OutDir = _dir }));
+        Assert.True(Directory.Exists(L));
+
+        // A report a stopped writer left half done (no data\index.js yet) is still ours to replace.
+        var out1 = Path.Combine(_dir, "rep");
+        HtmlReport.Write(s, new HtmlReportOptions { OutDir = out1 });
+        File.Delete(Path.Combine(out1, "data", "index.js"));
+        Assert.Equal(6, HtmlReport.Write(s, new HtmlReportOptions { OutDir = out1 }).Rendered);
+        // And a report from before the marker (index.html, data\, full\ only) is replaced too.
+        File.Delete(Path.Combine(out1, HtmlReport.Marker));
+        Assert.Equal(6, HtmlReport.Write(s, new HtmlReportOptions { OutDir = out1 }).Rendered);
+    }
+
+    [Fact]
     public void HtmlReport_DisclosesLimits()
     {
         var s = Done(new SessionStore(resultsRoot: Results).Start(L, R, NoCache));

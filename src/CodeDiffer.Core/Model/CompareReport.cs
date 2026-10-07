@@ -4,6 +4,9 @@ namespace CodeDiffer.Core.Model;
 /// One path's verdict in a 2-way compare. <see cref="Reason"/> is set only for Modified.
 /// For a <see cref="ChangeStatus.Renamed"/>, <see cref="RelativePath"/> is the destination (the "to"
 /// path), <see cref="RenamedFrom"/> is the source, and <see cref="SimilarityMilli"/> is round(sim*1000).
+/// <see cref="Unreadable"/>: why a side could not be read during the compare (locked, vanished, access denied).
+/// A pair that couldn't be read is listed as Modified with no reason — its verdict is unknown, so it is never
+/// called identical; an add or remove that couldn't be read keeps its status but was not considered for a rename.
 /// </summary>
 public sealed record FileChange(
     string RelativePath,
@@ -12,7 +15,12 @@ public sealed record FileChange(
     long LeftSize,
     long RightSize,
     string? RenamedFrom = null,
-    int? SimilarityMilli = null);
+    int? SimilarityMilli = null,
+    string? Unreadable = null)
+{
+    /// <summary>The reason token to show: the reason, "unreadable", or null.</summary>
+    public string? ReasonLabel => Reason is { } r ? CanonicalTokens.Token(r) : Unreadable is not null ? "unreadable" : null;
+}
 
 /// <summary>
 /// The result of a 2-way directory compare: every path's status (changes sorted by path, ordinal, so
@@ -57,4 +65,7 @@ public sealed class CompareReport
     public int Count(ChangeStatus status) => Changes.Count(c => c.Status == status);
 
     public int ReasonCount(ChangeReason reason) => Changes.Count(c => c.Reason == reason);
+
+    /// <summary>Paths a side of which could not be read: their verdict is unknown (see <see cref="FileChange.Unreadable"/>).</summary>
+    public int UnreadableFiles => Changes.Count(c => c.Unreadable is not null);
 }

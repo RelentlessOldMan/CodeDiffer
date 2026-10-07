@@ -33,7 +33,7 @@ public static class BlockIndex
 {
     public static IReadOnlyList<Chunk> Build(string path, ChunkerOptions? options = null)
     {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
             bufferSize: 1 << 16, FileOptions.SequentialScan);
         return Build(fs, options);
     }

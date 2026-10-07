@@ -123,6 +123,69 @@ public sealed class DirectoryComparerTests : IDisposable
     }
 
     [Fact]
+    public void ALegacyEncodedEdit_IsContent_NotEncoding()
+    {
+        // cp1252 / Latin-1: 0xB0 '°' → 0xB1 '±'. Both are invalid UTF-8; decoded leniently they'd be "the same text".
+        WriteLeft("temp.c", [.. "// 25"u8, 0xB0, .. "C\n"u8]);
+        WriteRight("temp.c", [.. "// 25"u8, 0xB1, .. "C\n"u8]);
+        // The same text in UTF-8 and in Latin-1 is an encoding change.
+        WriteLeft("e.txt", "caf\u00e9\n");
+        WriteRight("e.txt", [.. "caf"u8, 0xE9, (byte)'\n']);
+        var r = Run();
+        Assert.Equal(ChangeReason.Content, Change(r, "temp.c").Reason);
+        Assert.Equal(ChangeReason.Encoding, Change(r, "e.txt").Reason);
+    }
+
+    [Fact]
+    public void ALockedFile_IsUnreadable_AndTheCompareFinishes()
+    {
+        WriteLeft("locked.c", "same size\n");
+        WriteRight("locked.c", "SAME SIZE\n");
+        WriteLeft("grown.c", "short\n");
+        WriteRight("grown.c", "a bit longer\n");
+        WriteLeft("log.txt", "one\n");
+        WriteRight("log.txt", "one\ntwo\n");
+        WriteLeft("ok.c", "fine\n");
+        WriteRight("ok.c", "FINE\n");
+        using var locked = new FileStream(Path.Combine(_right, "locked.c"), FileMode.Open, FileAccess.Read, FileShare.None);
+        using var grown = new FileStream(Path.Combine(_right, "grown.c"), FileMode.Open, FileAccess.Read, FileShare.None);
+        // A log being appended to (writer allows readers and writers) must still be readable.
+        using var log = new FileStream(Path.Combine(_right, "log.txt"), FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+
+        var r = Run();
+        var l = Change(r, "locked.c");
+        Assert.Equal((ChangeStatus.Modified, null, "unreadable"), (l.Status, l.Reason, l.ReasonLabel));
+        Assert.NotNull(l.Unreadable);
+        Assert.Equal("unreadable", Change(r, "grown.c").ReasonLabel);
+        Assert.Equal(ChangeReason.Content, Change(r, "log.txt").Reason);
+        Assert.Equal(ChangeReason.Content, Change(r, "ok.c").Reason);
+        Assert.Equal(2, r.UnreadableFiles);
+    }
+
+    [Fact]
+    public void EmptyFiles_AreNeverPairedAsARename_AndTheSameNameWinsAmongIdenticals()
+    {
+        WriteLeft("pkgA/__init__.py", "");
+        WriteRight("pkgZ/__init__.py", "");
+        WriteLeft("src/util.c", "shared body\n");
+        WriteRight("lib/aaa.c", "shared body\n");   // first by path, but another name
+        WriteRight("lib/util.c", "shared body\n");  // same name: this is the rename
+        var r = Run();
+        Assert.Equal(ChangeStatus.Removed, Change(r, "pkgA/__init__.py").Status);
+        Assert.Equal(ChangeStatus.Added, Change(r, "pkgZ/__init__.py").Status);
+        Assert.Equal("src/util.c", Change(r, "lib/util.c").RenamedFrom);
+        Assert.Equal(ChangeStatus.Added, Change(r, "lib/aaa.c").Status);
+    }
+
+    [Fact]
+    public void ADriveRoot_KeepsItsSeparator()
+    {
+        var drive = Path.GetPathRoot(_left)!; // e.g. C:\ — "C:" alone would mean the current directory on C:
+        Assert.Equal(drive, CodeDiffer.Core.Walk.TreeWalker.RootOf(drive));
+        Assert.Equal(_left, CodeDiffer.Core.Walk.TreeWalker.RootOf(_left + Path.DirectorySeparatorChar));
+    }
+
+    [Fact]
     public void Changes_AreSortedByPathOrdinal()
     {
         WriteLeft("b.txt", "1\n");
