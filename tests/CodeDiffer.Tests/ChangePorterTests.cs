@@ -168,6 +168,92 @@ public class ChangePorterTests : IDisposable
     }
 
     [Fact]
+    public void Cancel_StopsBetweenFiles_AndRunningAgainFinishes()
+    {
+        for (int i = 0; i < 20; i++)
+        {
+            Put($"L/f{i:00}.c", Lines(1, 10));
+            Put($"R/f{i:00}.c", Lines(1, 9) + $"ten {i}\n");
+            Put($"C/f{i:00}.c", Lines(1, 10));
+        }
+        var report = new DirectoryComparer(new CompareOptions { Cache = CacheMode.Off }).Compare(L, R);
+        using var stop = new CancellationTokenSource();
+        var progress = new PortProgress { AfterFile = n => { if (n == 5) stop.Cancel(); } };
+
+        var r = ChangePorter.Run(report, L, R, C, write: true, parallelism: 1, ct: stop.Token, progress: progress);
+        Assert.True(r.Cancelled);
+        Assert.Equal(5, r.Count(PortStatus.Clean));
+        Assert.Equal(15, r.Count(PortStatus.NotReached));
+        foreach (var f in r.Files) // each file is either fully written or untouched
+            Assert.Equal(f.Status == PortStatus.Clean ? File.ReadAllText(Path.Combine(R, f.Path)) : Lines(1, 10), Read("C/" + f.Path));
+        var text = AgentViews.PortText(r, "L -> R", null);
+        Assert.Contains("CANCELLED part applied", text);
+        Assert.Contains("15 not reached", text);
+        Assert.Contains("run the same apply again", text);
+
+        var again = ChangePorter.Run(report, L, R, C, write: true, parallelism: 1);
+        Assert.False(again.Cancelled);
+        Assert.Equal(5, again.Count(PortStatus.Already));
+        Assert.Equal(15, again.Count(PortStatus.Clean));
+        foreach (var f in again.Files) Assert.Equal(File.ReadAllText(Path.Combine(R, f.Path)), Read("C/" + f.Path));
+    }
+
+    [Fact]
+    public void ARenameStoppedHalfway_IsFinishedByTheNextRun()
+    {
+        Put("L/sub/m.c", Lines(1, 40, "mv"));
+        Put("R/sub/n.c", Lines(1, 39, "mv") + "tail\n");
+        Put("C/sub/m.c", "top\n" + Lines(1, 40, "mv"));
+        Port(write: true);
+        Put("C/sub/m.c", "top\n" + Lines(1, 40, "mv")); // as if killed after writing n.c, before deleting m.c
+
+        var dry = F(Port(write: false), "sub/n.c");
+        Assert.Equal(PortStatus.Clean, dry.Status);
+        Assert.Contains("finishes an interrupted rename", dry.Note);
+        Assert.True(File.Exists(Path.Combine(C, "sub", "m.c")));
+
+        Port(write: true);
+        Assert.False(File.Exists(Path.Combine(C, "sub", "m.c")));
+        Assert.Equal("top\n" + Lines(1, 39, "mv") + "tail\n", Read("C/sub/n.c"));
+    }
+
+    [Fact]
+    public void ADifferentFileAtTheRenameTarget_IsStillAConflict()
+    {
+        Put("L/m.c", Lines(1, 40, "mv"));
+        Put("R/n.c", Lines(1, 39, "mv") + "tail\n");
+        Put("C/m.c", Lines(1, 40, "mv"));
+        Put("C/n.c", "someone else's n.c\n");
+        var f = F(Port(write: true), "n.c");
+        Assert.Equal(PortStatus.Conflict, f.Status);
+        Assert.Equal(Lines(1, 40, "mv"), Read("C/m.c"));
+        Assert.Equal("someone else's n.c\n", Read("C/n.c"));
+    }
+
+    [Fact]
+    public void AKilledRunsTempFile_IsReusedAndGone()
+    {
+        Put("L/a.c", Lines(1, 10));
+        Put("R/a.c", Lines(1, 9) + "ten\n");
+        Put("C/a.c", Lines(1, 10));
+        Put("C/a.c" + ChangePorter.TempSuffix, "half a fi"); // what a run killed mid-write leaves
+        Port(write: true);
+        Assert.Equal(Lines(1, 9) + "ten\n", Read("C/a.c"));
+        Assert.Equal(["a.c"], Directory.GetFiles(C).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public void ACaseOnlyRename_NeverDeletesTheFile()
+    {
+        Put("L/Name.c", Lines(1, 20));
+        Put("R/name.c", Lines(1, 20));
+        Put("C/Name.c", Lines(1, 20));
+        Port(write: true);
+        var left = Assert.Single(Directory.GetFiles(C));
+        Assert.Equal(Lines(1, 20), File.ReadAllText(left));
+    }
+
+    [Fact]
     public void AgentView_ReportsTotals_AndDryRunHint()
     {
         Put("L/a.c", Lines(1, 10));

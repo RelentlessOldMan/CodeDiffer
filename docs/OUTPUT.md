@@ -83,6 +83,11 @@ merger the 3-way contract verifies. Per region applied | fuzzy (shifted line) | 
 strict: a change touching a target edit conflicts, like git). A file with any conflict is never written;
 others are replaced atomically. Binary / EOL- or encoding-only / >16 MB / non-round-trippable files apply
 only when C equals the base byte for byte.
+Stopping `apply --write` part way is safe: Ctrl+C stops between files (the report says how many were written
+and how many were not reached), each file is written whole via `<file>.codediffer.tmp` and a rename, and
+running the same apply again finishes the job — what is done comes out "already", a rename stopped between
+writing the new path and deleting the old one is completed, and a killed run's temp file is reused. A
+case-only rename is left as a conflict (on Windows it is the same file).
 
 **Progress and partial answers (built):** while a compare runs, `get_summary` says what it is doing (listing
 files with counts per side · checking contents N/M files, GB read as they stream and MB/s · a rough time

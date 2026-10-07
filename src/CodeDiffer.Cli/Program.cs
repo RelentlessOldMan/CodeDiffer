@@ -576,7 +576,12 @@ static int Apply(string[] args)
             Console.Error.WriteLine("error: incomplete walk (unlistable directories) — refusing to port a partial change set");
             return 3;
         }
-        result = ChangePorter.Run(report, args[1], args[2], args[3], args.Contains("--write"), parallelism: threads);
+        // Ctrl+C here stops between files (each is written whole); a second one still quits at once, and even then
+        // no file is torn and running the apply again finishes it.
+        bool write = args.Contains("--write");
+        var port = new PortProgress();
+        result = WithProgress(() => ChangePorter.Run(report, args[1], args[2], args[3], write, parallelism: threads, ct: stop.Token, progress: port),
+            () => $"{(write ? "applying" : "checking")}: {port.Done:N0} / {port.Total:N0} changed files", stop.Cancel);
     }
     catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
     {
@@ -585,7 +590,7 @@ static int Apply(string[] args)
     }
     catch (OperationCanceledException) { return Cancelled(sw.Elapsed, options.Cache); }
     Console.Write(AgentViews.PortText(result, $"{args[1]} -> {args[2]}", null, maxFiles: int.MaxValue, writeHint: "run again with --write"));
-    return result.Count(PortStatus.Conflict) > 0 ? 1 : 0;
+    return result.Cancelled ? 130 : result.Count(PortStatus.Conflict) > 0 ? 1 : 0;
 }
 
 /// <summary>compare3: base vs v1 vs v2. Exit 1 when anything conflicts, 3 on an incomplete walk.</summary>
@@ -763,6 +768,8 @@ static void PrintUsage()
                                        port the left->right changes onto target by 3-way
                                        merge; per hunk applied|fuzzy|already|conflict.
                                        Dry run unless --write (conflicted files untouched).
+                                       Ctrl+C during --write stops between files; run it
+                                       again to finish (done files come out "already").
           codediffer blockdiff <a> <b>         content-defined block diff of two large files
                                                (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]

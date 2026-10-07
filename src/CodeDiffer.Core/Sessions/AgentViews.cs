@@ -329,9 +329,12 @@ public static class AgentViews
                                   string writeHint = "call again with write=true")
     {
         var o = new StringBuilder();
-        o.Append($"{(r.Written ? "APPLIED" : "dry run")} · {label} onto {r.Target}\n");
+        o.Append($"{(r.Cancelled ? "CANCELLED " : "")}{(r.Written ? r.Cancelled ? "part applied" : "APPLIED" : "dry run")} · {label} onto {r.Target}\n");
         o.Append($"files: {r.Count(PortStatus.Clean):N0} {(r.Written ? "written" : "would apply")} · {r.Count(PortStatus.Already):N0} already there · " +
-                 $"{r.Count(PortStatus.Conflict):N0} conflict{(r.Written ? " (left untouched)" : "")}\n");
+                 $"{r.Count(PortStatus.Conflict):N0} conflict{(r.Written ? " (left untouched)" : "")}" +
+                 (r.Cancelled ? $" · {r.Count(PortStatus.NotReached):N0} not reached" : "") + "\n");
+        if (r.Cancelled && r.Written)
+            o.Append("  every file written is whole; the rest are untouched — run the same apply again to finish (what is done comes out \"already\")\n");
         o.Append($"hunks: {r.Count(HunkOutcome.Applied):N0} applied · {r.Count(HunkOutcome.Fuzzy):N0} fuzzy (shifted) · " +
                  $"{r.Count(HunkOutcome.Already):N0} already · {r.Count(HunkOutcome.Conflict):N0} conflict\n");
 
@@ -348,7 +351,7 @@ public static class AgentViews
         {
             Directory.CreateDirectory(Path.GetDirectoryName(reportFile)!);
             var full = new StringBuilder(o.ToString()).Append("\nall files:\n");
-            foreach (var f in r.Files)
+            foreach (var f in r.Files.Where(f => f.Status != PortStatus.NotReached))
             {
                 full.Append(FileLine(f)).Append('\n');
                 foreach (var h in f.Hunks.Where(h => h.BaseLine > 0 || h.TargetLine > 0))
@@ -358,7 +361,7 @@ public static class AgentViews
             File.WriteAllText(reportFile, full.ToString(), new UTF8Encoding(false));
             o.Append($"full report: {reportFile}\n");
         }
-        if (!r.Written && r.Count(PortStatus.Clean) > 0) o.Append($"nothing was written — {writeHint} to apply the clean files\n");
+        if (!r.Written && !r.Cancelled && r.Count(PortStatus.Clean) > 0) o.Append($"nothing was written — {writeHint} to apply the clean files\n");
         return o.ToString();
     }
 
