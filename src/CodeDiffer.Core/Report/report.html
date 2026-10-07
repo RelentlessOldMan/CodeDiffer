@@ -391,7 +391,7 @@ var CD = (function () {
       if (f.r) bits.push(f.r);
       if (f.a !== undefined) bits.push("+" + fmt(f.a) + " −" + fmt(f.x));
       else if (f.k && f.k !== "text") bits.push(f.k);
-      if (f.sim !== undefined) bits.push(Math.floor(f.sim / 10) + "% similar");
+      if (f.sim !== undefined) bits.push(Math.floor(f.sim / 10) + "% similar" + (f.ed && f.sim >= 995 ? " (but edited)" : ""));
       bits.push(f.t === "A" ? bytes(f.rs) : f.t === "D" ? bytes(f.ls) : f.ls === f.rs ? bytes(f.rs) : bytes(f.ls) + " → " + bytes(f.rs));
     }
     if (f.n) bits.push("ⓘ");

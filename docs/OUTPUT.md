@@ -160,9 +160,10 @@ Unlike `apply --write` (which skips any file with a conflict), conflicts land in
 
 `codediffer apply-overlay <overlay-dir> <target> [--write] [--again]` does those steps (on v1, or better a copy
 of it): the deletes, then the directories the deletes left empty, then `files\`. Dry run unless `--write`.
-Before touching anything it refuses an unfinished overlay (`INCOMPLETE.txt`), a `deletes.txt` line that is not
-a plain path inside the target, and a target and overlay inside each other; it deletes files only, never a
-directory in a listed path's place. Like `apply`, Ctrl+C stops between files, each is written whole (temp +
+Before touching anything it refuses an unfinished overlay (`INCOMPLETE.txt`), one written from an incomplete
+compare, a `deletes.txt` line that is not a plain path inside the target, and a target and overlay inside each
+other; it deletes files only, never a directory in a listed path's place, and never writes or deletes through a
+symlink / junction in the target (that file is listed as failed). Like `apply`, Ctrl+C stops between files, each is written whole (temp +
 rename), and running it again finishes the job (a path already deleted, or already holding the overlay's
 bytes, comes out "already" — a case-only rename already done, and a file v2 turned into a directory already in
 place, too). The overlay holds `APPLYING.txt` while it runs and `APPLIED.txt` (target, time)
@@ -229,9 +230,19 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   writer can keep writing (a log being appended to is still read), and the hashes read are kept even when a
   compare fails.
 - Symlinks and junctions are not followed (one can point outside the tree, or back into it); each skipped one
-  is counted and the summary says how many. Other reparse points — OneDrive / cloud placeholders, deduplicated
+  is counted and every summary says how many (compare3's too, per side). A file one tree has where the other
+  has a link is not "added" or "removed" but unknown — `[unreadable]`, a `behind a link` conflict in compare3,
+  never ported or written as a delete. Other reparse points — OneDrive / cloud placeholders, deduplicated
   files — are ordinary files and directories and are compared. Paths past 260 characters are listed and
-  checked like any other.
+  checked like any other; a name ending in '.' or ' ' (which Windows' path API opens as another file) is
+  skipped and said, and a timestamp past year 9999 counts as unknown (the file just isn't cached).
+- An incomplete compare (a directory that couldn't be listed) is never acted on: `apply`, `apply_changeset`
+  and the merge overlay refuse it, since every file under that directory would look deleted.
+- Names that differ only in case are one file on Windows: a remove and an add like that (`Foo.c` → an unrelated
+  `foo.c`) are left to do by hand by `apply`, and in compare3 a v2 file landing on a name a conflict keeps in v1
+  is a `path collision`, never written over v1's file.
+- A hash ledger that can't be saved after the compare (disk full, a file held open) is a note, never a lost
+  result: the next compare reads those files again.
 - A command given an option it doesn't take (`--no-chache`), an extra word, or a flag without its value stops
   at once with the usage (exit 64), instead of running an hour without it.
 - Text that isn't valid UTF-8 (a cp1252 / Latin-1 file) is read byte for byte, never with U+FFFD in place of
@@ -239,7 +250,9 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - A whole patch (`--patch`, `export_changeset`) is for `git apply`: what it can't carry — binary and large
   files, text that isn't UTF-8, unreadable files, the eol/encoding-only notes — is described in `#` lines
   outside any `diff --git` section, which git skips, so the rest still applies; the summary counts them as
-  NOT CARRIED. A byte-identical rename is a header-only rename, binary or not; a UTF-8 BOM is kept.
+  NOT CARRIED. A byte-identical rename is a header-only rename, binary or not; a UTF-8 BOM is kept. A rename
+  found by line similarity always carries its diff, even at "100% similar" (one line in 2,001, reordered lines,
+  line endings only): the list says "(but edited)", and it never counts as pure.
 - A file over 8 MB is not decoded whole to find its reason: up to 64 MB it is compared streamed, as bytes
   (BOM, ASCII whitespace and line endings normalized byte by byte, stopping at the first real difference), so
   a large LF→CRLF change is still `eol`; past 64 MB, or in UTF-16/32, a difference is `content` unchecked.

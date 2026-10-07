@@ -200,6 +200,7 @@ public static class HtmlReport
             if (c.Unreadable is { } why) row["n"] = $"could not be read during the compare: {why}";
             if (c.RenamedFrom is { } f) row["f"] = f;
             if (c.SimilarityMilli is { } sim) row["sim"] = sim;
+            if (c.EditedRename) row["ed"] = 1; // its bytes differ, even at "100% similar"
             if (c.Status == ChangeStatus.Identical)
             {
                 list.Add(new Item(row, false, false, null));
@@ -365,8 +366,7 @@ public static class HtmlReport
                 m["identicalListed"] = opt.IncludeIdentical;
                 if (r.LeftDroppedDirectories + r.RightDroppedDirectories > 0)
                     notes.Add($"Incomplete walk: {r.LeftDroppedDirectories} left / {r.RightDroppedDirectories} right director(ies) could not be listed — adds/removes under them may be listing failures.");
-                if (r.UnstableFiles > 0) notes.Add($"{r.UnstableFiles} file(s) changed while being read (a live writer) — compared as read.");
-                if (r.SkippedLinks > 0) notes.Add($"{r.SkippedLinks} symlink(s)/junction(s) not followed — nothing behind them is compared.");
+                notes.AddRange(AgentViews.Notes(r));
                 if (r.UnreadableFiles > 0) notes.Add($"{r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown, shown as 'unreadable'.");
                 break;
             }
@@ -382,6 +382,8 @@ public static class HtmlReport
                     notes.Add($"Incomplete walk: {r.DroppedDirectories} director(ies) could not be listed — the verdicts under them may be wrong.");
                 if (r.UnreadableFiles > 0)
                     notes.Add($"{r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown, shown as 'unreadable'.");
+                notes.AddRange(AgentViews.Notes(r.V1Report, "base->v1"));
+                notes.AddRange(AgentViews.Notes(r.V2Report, "base->v2"));
                 break;
             }
         }

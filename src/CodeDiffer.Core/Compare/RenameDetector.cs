@@ -8,13 +8,15 @@ namespace CodeDiffer.Core.Compare;
 
 /// <summary>A resolved rename plus the add/remove sets left over after pairing. <paramref name="Unreadable"/>:
 /// relative path → why, for files that could not be read (left out of the pairing). <paramref name="BytesRead"/>:
-/// what the pairing read (ledger hits read nothing).</summary>
+/// what the pairing read (ledger hits read nothing). <paramref name="Edited"/>: the destination paths of the renames the
+/// similarity pass found (their bytes differ, whatever the similarity rounds to).</summary>
 public sealed record RenameResult(
     IReadOnlyList<RenameOp> Renames,
     IReadOnlyList<FileEntry> UnmatchedRemoved,
     IReadOnlyList<FileEntry> UnmatchedAdded,
     IReadOnlyDictionary<string, string>? Unreadable = null,
-    long BytesRead = 0);
+    long BytesRead = 0,
+    IReadOnlySet<string>? Edited = null);
 
 /// <summary>
 /// Resolves renames out of a 2-way compare's left-only (removed) and right-only (added) sets, matching
@@ -54,6 +56,7 @@ public sealed class RenameDetector
             return new RenameResult([], removed, added);
 
         var renames = new List<RenameOp>();
+        var edited = new HashSet<string>(StringComparer.Ordinal);
         var removedLeft = new List<FileEntry>(removed);
         var addedLeft = new List<FileEntry>(added);
         var unreadable = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
@@ -61,10 +64,10 @@ public sealed class RenameDetector
 
         PairPureRenames(removedLeft, addedLeft, leftCache, rightCache, renames, unreadable, ref bytesRead, ct);
         if (removedLeft.Count > 0 && addedLeft.Count > 0)
-            PairEditedRenames(removedLeft, addedLeft, renames, unreadable, ref bytesRead, ct);
+            PairEditedRenames(removedLeft, addedLeft, renames, edited, unreadable, ref bytesRead, ct);
 
         return new RenameResult(renames, removedLeft, addedLeft,
-            new Dictionary<string, string>(unreadable, StringComparer.Ordinal), bytesRead);
+            new Dictionary<string, string>(unreadable, StringComparer.Ordinal), bytesRead, edited);
     }
 
     /// <summary>
@@ -159,7 +162,7 @@ public sealed class RenameDetector
     }
 
     /// <summary>Pass 2: score remaining text pairs and assign greedily by descending similarity.</summary>
-    private void PairEditedRenames(List<FileEntry> removed, List<FileEntry> added, List<RenameOp> renames,
+    private void PairEditedRenames(List<FileEntry> removed, List<FileEntry> added, List<RenameOp> renames, HashSet<string> edited,
         ConcurrentDictionary<string, string> unreadable, ref long bytesRead, CancellationToken ct)
     {
         // Read + EOL-normalize + count each candidate's lines once; skip binary / oversized (line metric needs text).
@@ -206,6 +209,7 @@ public sealed class RenameDetector
             if (usedR[ri] || usedA[ai]) continue;
             usedR[ri] = usedA[ai] = true;
             renames.Add(new RenameOp(removed[ri].RelativePath, added[ai].RelativePath, milli));
+            edited.Add(added[ai].RelativePath);
             pairedR.Add(removed[ri].RelativePath);
             pairedA.Add(added[ai].RelativePath);
         }

@@ -405,6 +405,9 @@ public static class ResultStore
         w.WriteNumber("leftDroppedDirectories", r.LeftDroppedDirectories);
         w.WriteNumber("rightDroppedDirectories", r.RightDroppedDirectories);
         w.WriteNumber("skippedLinks", r.SkippedLinks);
+        Skipped(w, "leftSkipped", r.LeftSkipped);
+        Skipped(w, "rightSkipped", r.RightSkipped);
+        if (r.CacheSaveError is { } se) w.WriteString("cacheSaveError", se);
         Timings(w, r.Timings);
         w.WriteEndObject();
     }
@@ -421,6 +424,28 @@ public static class ResultStore
         }
         w.WriteEndArray();
     }
+
+    private static void Skipped(Utf8JsonWriter w, string name, IReadOnlyList<CodeDiffer.Core.Walk.SkippedPath> skipped)
+    {
+        if (skipped.Count == 0) return;
+        w.WriteStartArray(name);
+        foreach (var s in skipped)
+        {
+            w.WriteStartObject();
+            WritePath(w, "path", s.Path);
+            w.WriteString("kind", s.Kind == CodeDiffer.Core.Walk.SkipKind.Link ? "link" : "name");
+            if (s.IsDirectory) w.WriteBoolean("dir", true);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static List<CodeDiffer.Core.Walk.SkippedPath> ReadSkipped(JsonElement stats, string name)
+        => stats.TryGetProperty(name, out var a)
+            ? a.EnumerateArray().Select(x => new CodeDiffer.Core.Walk.SkippedPath(PathOf(x, "path"),
+                Str(x, "kind") == "link" ? CodeDiffer.Core.Walk.SkipKind.Link : CodeDiffer.Core.Walk.SkipKind.Name,
+                x.TryGetProperty("dir", out var d) && d.GetBoolean())).ToList()
+            : [];
 
     private static List<(string, TimeSpan)> ReadTimings(JsonElement e)
         => e.TryGetProperty("timings", out var t)
@@ -439,6 +464,9 @@ public static class ResultStore
             PendingFiles = stats.GetProperty("pendingFiles").GetInt32(),
             BytesRead = stats.GetProperty("bytesRead").GetInt64(),
             SkippedLinks = stats.TryGetProperty("skippedLinks", out var links) ? links.GetInt32() : 0, // absent before 2026-10-07
+            LeftSkipped = ReadSkipped(stats, "leftSkipped"), // absent before 2026-10-08
+            RightSkipped = ReadSkipped(stats, "rightSkipped"),
+            CacheSaveError = stats.TryGetProperty("cacheSaveError", out var cse) ? cse.GetString() : null,
             Timings = ReadTimings(stats),
         };
 
@@ -487,6 +515,8 @@ public static class ResultStore
         if (c.RenamedFrom is { } f) WritePath(w, "from", f);
         if (c.SimilarityMilli is { } s) w.WriteNumber("similarity", s);
         if (c.Unreadable is { } u) w.WriteString("unreadable", u);
+        if (c.EditedRename) w.WriteBoolean("edited", true);
+        if (c.BehindLink) w.WriteBoolean("behindLink", true);
         w.WriteEndObject();
     }
 
@@ -498,7 +528,9 @@ public static class ResultStore
         e.GetProperty("rightSize").GetInt64(),
         e.TryGetProperty("from", out _) ? PathOf(e, "from") : null,
         e.TryGetProperty("similarity", out var s) ? s.GetInt32() : null,
-        e.TryGetProperty("unreadable", out var u) ? u.GetString() : null);
+        e.TryGetProperty("unreadable", out var u) ? u.GetString() : null,
+        e.TryGetProperty("edited", out var ed) && ed.GetBoolean(),
+        e.TryGetProperty("behindLink", out var bl) && bl.GetBoolean());
 
     private static void WriteEntry(Utf8JsonWriter w, Merge3Entry e)
     {

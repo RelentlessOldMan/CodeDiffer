@@ -82,7 +82,7 @@ public static class AgentViews
         o.Append($"  added     {r.Count(ChangeStatus.Added),8:N0}\n");
         o.Append($"  removed   {r.Count(ChangeStatus.Removed),8:N0}\n");
         int renamed = r.Count(ChangeStatus.Renamed);
-        int pure = r.Changes.Count(c => c.Status == ChangeStatus.Renamed && c.SimilarityMilli == 1000);
+        int pure = r.Changes.Count(c => c.PureRename);
         o.Append($"  renamed   {renamed,8:N0}    ({pure:N0} pure, {renamed - pure:N0} rename+edit)\n");
 
         var changed = r.Changes.Where(c => c.Status != ChangeStatus.Identical).ToList();
@@ -215,7 +215,7 @@ public static class AgentViews
             {
                 ChangeStatus.Added => $"  {Bytes(c.RightSize)}",
                 ChangeStatus.Removed => $"  {Bytes(c.LeftSize)}",
-                ChangeStatus.Renamed => $"  {(c.SimilarityMilli ?? 0) / 10}% similar",
+                ChangeStatus.Renamed => $"  {(c.SimilarityMilli ?? 0) / 10}% similar" + (c.EditedRename && c.SimilarityMilli >= 995 ? " (but edited)" : ""),
                 _ => c.LeftSize == c.RightSize ? $"  {Bytes(c.RightSize)}" : $"  {Bytes(c.LeftSize)} -> {Bytes(c.RightSize)}",
             });
             if (s.DiffInfo.TryGetValue(c.RelativePath, out var i))
@@ -390,7 +390,7 @@ public static class AgentViews
     {
         if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
         var r = ChangePorter.Run(s.Report!, s.Left, s.Right, target, write, parallelism: s.Options.Parallelism);
-        return PortText(r, $"compare {s.Id}", Path.Combine(OutDir(s), $"apply-{(write ? "written" : "dryrun")}-{DateTime.Now:HHmmss}.txt"), maxFiles);
+        return PortText(r, $"compare {s.Id}", Path.Combine(OutDir(s), $"apply-{(write ? "written" : "dryrun")}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt"), maxFiles);
     }
 
     /// <summary>The bounded port report (also used by the CLI); the full detail goes to <paramref name="reportFile"/>.</summary>
@@ -513,15 +513,36 @@ public static class AgentViews
         else if (s.ResultDir is { } dir) o.Append($"saved: {dir}  (reopen later by id {s.Id})\n");
     }
 
+    /// <summary>
+    /// What a compare left out or couldn't keep, beyond the warnings: links not followed, names Windows can't open by
+    /// path, files that changed while read, a hash cache that couldn't be saved. Shared by every view (2-way, 3-way per
+    /// side, HTML, CLI) so none of them leaves one out.
+    /// </summary>
+    public static IEnumerable<string> Notes(CompareReport r, string? side = null)
+    {
+        var pre = side is null ? "" : side + ": ";
+        static string Some(IEnumerable<string> paths)
+        {
+            var list = paths.Take(4).ToList();
+            return list.Count == 0 ? "" : " (" + string.Join(", ", list.Take(3)) + (list.Count > 3 ? ", …" : "") + ")";
+        }
+        var skipped = r.LeftSkipped.Select(x => (x, "left")).Concat(r.RightSkipped.Select(x => (x, "right"))).ToList();
+        if (r.UnstableFiles > 0) yield return $"{pre}{r.UnstableFiles:N0} file(s) changed while being read (live writer) — compared as read, not cached.";
+        if (r.SkippedLinks > 0)
+            yield return $"{pre}{r.SkippedLinks:N0} symlink(s)/junction(s) not followed — nothing behind them is compared" +
+                         Some(skipped.Where(t => t.x.Kind == Walk.SkipKind.Link).Select(t => $"{t.Item2} {t.x.Path}"));
+        if (r.SkippedNames > 0)
+            yield return $"{pre}{r.SkippedNames:N0} name(s) ending in '.' or ' ' skipped — Windows opens another file by that path" +
+                         Some(skipped.Where(t => t.x.Kind == Walk.SkipKind.Name).Select(t => $"{t.Item2} {t.x.Path}"));
+        if (r.CacheSaveError is { } e) yield return $"{pre}the hash cache could not be saved ({e}) — the result stands; the next compare reads those files again.";
+    }
+
     private static void Warnings(StringBuilder o, CompareReport r)
     {
         if (r.LeftDroppedDirectories + r.RightDroppedDirectories > 0)
             o.Append($"WARNING: incomplete walk — {r.LeftDroppedDirectories} left / {r.RightDroppedDirectories} right director(ies) " +
                      "could not be listed; adds/removes under them may be listing failures.\n");
-        if (r.UnstableFiles > 0)
-            o.Append($"note: {r.UnstableFiles} file(s) changed while being read (live writer) — compared as read.\n");
-        if (r.SkippedLinks > 0)
-            o.Append($"note: {r.SkippedLinks} symlink(s)/junction(s) not followed — nothing behind them is compared.\n");
+        foreach (var n in Notes(r)) o.Append("note: ").Append(n).Append('\n');
         if (r.UnreadableFiles > 0)
             o.Append($"WARNING: {r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown, " +
                      "listed as [unreadable] (a pair as modified, never identical); compare again once they can be read.\n");

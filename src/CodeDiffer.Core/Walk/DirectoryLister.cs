@@ -124,5 +124,7 @@ internal static class DirectoryLister
 
     /// <summary>FILETIME (100 ns since 1601 UTC) → DateTime UTC ticks; 0 stays 0 (unknown).</summary>
     internal static long FileTimeToUtcTicks(long fileTime)
-        => fileTime <= 0 ? 0 : DateTime.FromFileTimeUtc(fileTime).Ticks;
+        => fileTime <= 0 || fileTime > MaxFileTime ? 0 : DateTime.FromFileTimeUtc(fileTime).Ticks; // past year 9999: unknown, not a crash
+
+    private static readonly long MaxFileTime = DateTime.MaxValue.ToFileTimeUtc();
 }

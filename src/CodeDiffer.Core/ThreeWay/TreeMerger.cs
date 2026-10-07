@@ -103,12 +103,16 @@ public static class TreeMerger
 
         // Two different files landing on one destination (a rename on one side, an add or another rename on
         // the other) can't both be kept: flag every entry involved — a content conflict too, or its marker file
-        // would overwrite the other one. On Windows a destination differing only in case is the same file.
-        var collide = entries.Where(e => e.MergedPath is not null)
-            .GroupBy(e => e.MergedPath!, PathComparer).Where(g => g.Count() > 1).SelectMany(g => g).ToHashSet();
+        // would overwrite the other one. On Windows a destination differing only in case is the same file. A
+        // conflict left unresolved keeps v1's file where v1 has it, so that path is taken too (v1 edits Foo.c, v2
+        // deletes it and adds an unrelated foo.c: writing foo.c would overwrite v1's edit on Windows).
+        var collide = entries.Select(e => (E: e, At: Occupies(e))).Where(t => t.At is not null)
+            .GroupBy(t => t.At!, PathComparer).Where(g => g.Count() > 1).SelectMany(g => g.Select(t => t.E)).ToHashSet();
         for (int i = 0; i < entries.Length; i++)
             if (collide.Contains(entries[i]))
-                entries[i] = entries[i] with { Outcome = Merge3Outcome.Conflict, ConflictKind = "path collision", Note = $"another change also lands on {entries[i].MergedPath}" };
+                entries[i] = entries[i].MergedPath is null
+                    ? entries[i] with { Note = (entries[i].Note is { } n ? n + "; " : "") + $"another change lands on {Occupies(entries[i])} too" }
+                    : entries[i] with { Outcome = Merge3Outcome.Conflict, ConflictKind = "path collision", Note = $"another change also lands on {entries[i].MergedPath}" };
 
         timings.Add(("classify + merge", sw.Elapsed));
         return new ThreeWayReport { V1Report = r1, V2Report = r2, Entries = entries, Timings = timings };
@@ -135,8 +139,20 @@ public static class TreeMerger
 
     private static string? Dest(FileChange c) => c.Status == ChangeStatus.Removed ? null : c.RelativePath;
 
+    /// <summary>The path an entry's file has in the merged tree: where the merge puts it, or — for a conflict left
+    /// unresolved, which keeps v1's version — where v1 has it (none when v1 deleted it).</summary>
+    private static string? Occupies(Merge3Entry e)
+    {
+        if (e.MergedPath is not null) return e.MergedPath;
+        if (e.Outcome != Merge3Outcome.Conflict) return null;
+        return e.V1 is null ? e.Path : e.V1.Status == ChangeStatus.Removed ? null : e.V1.RelativePath;
+    }
+
     private static Merge3Entry Classify(string path, FileChange? c1, FileChange? c2, string b, string v1, string v2, long maxText, CancellationToken ct)
     {
+        // Behind a link one tree has in its place (not followed): whether it changed there is unknown — never merged.
+        if ((c1?.BehindLink ?? false) || (c2?.BehindLink ?? false))
+            return new(path, c1, c2, Merge3Outcome.Conflict, "behind a link", 0, 0, null, (c1?.BehindLink ?? false) ? c1!.Unreadable : c2!.Unreadable);
         if (c2 is null) return new(path, c1, null, Merge3Outcome.V1Only, null, 0, 0, Dest(c1!), null);
         if (c1 is null) return new(path, null, c2, Merge3Outcome.V2Only, null, 0, 0, Dest(c2), null);
 

@@ -39,6 +39,8 @@ public static class ThreeWayViews
         if (r.UnreadableFiles > 0)
             o.Append($"WARNING: {r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown " +
                      "(shown as 'unreadable'); compare again once they can be read.\n");
+        foreach (var n in AgentViews.Notes(r.V1Report, "base->v1").Concat(AgentViews.Notes(r.V2Report, "base->v2")))
+            o.Append("note: ").Append(n).Append('\n');
         AgentViews.Saved(o, s);
         if (r.Entries.Count > 0)
             o.Append("next: list_files(status=conflict) · get_file_diff(path) shows the merge with conflict markers · write_report for HTML\n");

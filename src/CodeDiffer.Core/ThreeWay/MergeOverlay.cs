@@ -49,6 +49,11 @@ public static class MergeOverlay
     {
         dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
         CheckDir(dir, baseDir, v1, v2);
+        // A directory that couldn't be listed makes every file under it look deleted (or added) by that side: the
+        // overlay would delete v1's real files. Refused, never written.
+        if (r.DroppedDirectories > 0)
+            throw new ArgumentException($"the compare is incomplete ({r.DroppedDirectories} director(ies) could not be listed): files under them " +
+                                        "would look deleted — refusing to write an overlay from it; compare again");
         Directory.CreateDirectory(dir);
         // Claim the directory: a second writer racing past the empty check fails here instead of mixing two overlays.
         try

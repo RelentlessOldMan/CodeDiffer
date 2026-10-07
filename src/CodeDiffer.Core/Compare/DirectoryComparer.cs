@@ -108,15 +108,31 @@ public sealed class DirectoryComparer
         var changes = new List<FileChange>(paths.Count);
         var removed = new List<FileEntry>();
         var added = new List<FileEntry>();
+        var behindLink = new List<FileChange>();
         var sameSize = new List<(FileEntry L, FileEntry R)>();
         var sizeChanged = new List<(FileEntry L, FileEntry R)>();
         try
         {
+            // A path behind a link the other tree has in its place (not followed) is not known to be added or removed.
+            var leftLinks = lw.SkippedPaths.Where(s => s.Kind == SkipKind.Link).Select(s => s.Path).ToHashSet(StringComparer.Ordinal);
+            var rightLinks = rw.SkippedPaths.Where(s => s.Kind == SkipKind.Link).Select(s => s.Path).ToHashSet(StringComparer.Ordinal);
             foreach (var path in paths)
             {
                 bool inLeft = leftMap.TryGetValue(path, out var le);
                 bool inRight = rightMap.TryGetValue(path, out var re);
 
+                if (inLeft && !inRight && BehindLink(path, rightLinks) is { } rl)
+                {
+                    behindLink.Add(new FileChange(path, ChangeStatus.Removed, null, le.Length, 0, BehindLink: true,
+                        Unreadable: $"the right tree has a symlink/junction at {rl} (not followed): whether it was removed is unknown"));
+                    continue;
+                }
+                if (!inLeft && inRight && BehindLink(path, leftLinks) is { } ll)
+                {
+                    behindLink.Add(new FileChange(path, ChangeStatus.Added, null, 0, re.Length, BehindLink: true,
+                        Unreadable: $"the left tree has a symlink/junction at {ll} (not followed): whether it was added is unknown"));
+                    continue;
+                }
                 if (inLeft && !inRight) { removed.Add(le); continue; } // held back — may resolve into a rename
                 if (!inLeft && inRight) { added.Add(re); continue; }
 
@@ -131,7 +147,9 @@ public sealed class DirectoryComparer
                 progress.Paired(paths.Count, sameSize.Count, sameSize.Sum(p => p.L.Length));
                 foreach (var e in removed) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Removed, null, e.Length, 0), _options.DetectRenames);
                 foreach (var e in added) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Added, null, 0, e.Length), _options.DetectRenames);
+                foreach (var c in behindLink) progress.Add(c);
             }
+            changes.AddRange(behindLink);
 
             // Classify the size-changed pairs concurrently: each is a couple of opens/reads, and over SMB those
             // round-trips must overlap, not stack (serially, ~33 files cost ~10 s against a real share).
@@ -247,14 +265,24 @@ public sealed class DirectoryComparer
 
         changes.Sort((a, b) => string.CompareOrdinal(a.RelativePath, b.RelativePath));
         progress?.SetPhase(ComparePhase.Saving);
-        leftCache.Save(lw.Files);
-        rightCache.Save(rw.Files);
+        // The verdicts are done: a ledger that can't be saved (disk full, a file held by antivirus, no rights) costs the
+        // next run a re-read, never this result.
+        string? saveError = null;
+        try
+        {
+            leftCache.Save(lw.Files);
+            rightCache.Save(rw.Files);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { saveError = ex.Message; }
         Phase("ledger save");
         progress?.SetPhase(ComparePhase.Done);
 
         return new CompareReport(changes, lw.DroppedDirectories, rw.DroppedDirectories)
         {
             SkippedLinks = lw.SkippedLinks + rw.SkippedLinks,
+            LeftSkipped = lw.SkippedPaths,
+            RightSkipped = rw.SkippedPaths,
+            CacheSaveError = saveError,
             CacheHits = leftCache.Hits + rightCache.Hits,
             CodeCompassHits = leftCache.CodeCompassHits + rightCache.CodeCompassHits,
             ReusedLeftFiles = reusedFiles,
@@ -264,6 +292,17 @@ public sealed class DirectoryComparer
             BytesRead = bytesRead,
             Timings = timings,
         };
+    }
+
+    /// <summary>The link (one of <paramref name="links"/>) that <paramref name="path"/> is at or under, or null.</summary>
+    private static string? BehindLink(string path, HashSet<string> links)
+    {
+        if (links.Count == 0) return null;
+        for (var p = path; ; p = p[..p.LastIndexOf('/')])
+        {
+            if (links.Contains(p)) return p;
+            if (p.LastIndexOf('/') < 0) return null;
+        }
     }
 
     private static FileChange Modified(ReasonClassifier classifier, FileEntry le, FileEntry re)
@@ -302,7 +341,8 @@ public sealed class DirectoryComparer
             {
                 long fromSize = removedByPath.TryGetValue(r.From, out var fe) ? fe.Length : 0;
                 long toSize = addedByPath.TryGetValue(r.To, out var te) ? te.Length : 0;
-                changes.Add(new FileChange(r.To, ChangeStatus.Renamed, null, fromSize, toSize, r.From, r.SimilarityMilli));
+                changes.Add(new FileChange(r.To, ChangeStatus.Renamed, null, fromSize, toSize, r.From, r.SimilarityMilli,
+                    EditedRename: result.Edited?.Contains(r.To) ?? false));
             }
         }
 

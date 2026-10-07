@@ -3,6 +3,7 @@ using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Diff;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.ThreeWay;
+using CodeDiffer.Core.Walk;
 
 namespace CodeDiffer.Core.Port;
 
@@ -87,9 +88,22 @@ public static class ChangePorter
     {
         target = Path.GetFullPath(target);
         if (!Directory.Exists(target)) throw new DirectoryNotFoundException($"target directory not found: {target}");
+        // A directory that couldn't be listed makes every file under it look removed (or added): porting that would
+        // delete real files. Refused whole, for every caller (the CLI, the MCP server).
+        if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
+            throw new ArgumentException($"the compare is incomplete ({report.LeftDroppedDirectories} left / {report.RightDroppedDirectories} right " +
+                                        "director(ies) could not be listed): its adds and removes there may be listing failures — refusing to port it; compare again");
         var changed = report.Changes.Where(c => c.Status != ChangeStatus.Identical).ToList();
         var files = new PortFile[changed.Count];
         if (progress is not null) progress.Total = changed.Count;
+        var links = new LinkGuard(target);
+        // Two changes whose target paths differ only in case (Foo.c removed, foo.c added: a case-only rename too
+        // different to pair) are one file on Windows: run in parallel, the add would see the old file and the delete
+        // would then remove it — leaving neither. Both are left to do by hand.
+        var caseClash = changed.SelectMany((c, i) => (c.RenamedFrom is { } f ? new[] { c.RelativePath, f } : [c.RelativePath]).Select(p => (p, i)))
+            .GroupBy(t => t.p, TreeMerger.PathComparer)
+            .Where(g => g.Select(t => t.i).Distinct().Count() > 1 && g.Select(t => t.p).Distinct(StringComparer.Ordinal).Count() > 1)
+            .SelectMany(g => g.Select(t => t.p)).ToHashSet(StringComparer.Ordinal);
         Parallel.For(0, changed.Count, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism) }, i =>
         {
             var c = changed[i];
@@ -98,7 +112,18 @@ public static class ChangePorter
                 files[i] = new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.NotReached, "none", [], null);
                 return;
             }
-            try { files[i] = One(c, leftRoot, rightRoot, target, write, maxTextBytes); }
+            try
+            {
+                files[i] = c.BehindLink
+                    ? new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Conflict, "none", [], $"not ported: {c.Unreadable}")
+                    : caseClash.Contains(c.RelativePath) || (c.RenamedFrom is { } rf && caseClash.Contains(rf))
+                    ? new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Conflict, "none", [],
+                        $"another change's path differs from {c.RelativePath} only in case (one file on Windows) — do these by hand")
+                    : LinkIn(c, target, links) is { } link
+                    ? new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Conflict, "none", [],
+                        $"the target has a symlink/junction at {link} — never written or deleted through")
+                    : One(c, leftRoot, rightRoot, target, write, maxTextBytes);
+            }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 files[i] = new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Conflict, "none", [], $"I/O error: {ex.Message}");
@@ -111,6 +136,10 @@ public static class ChangePorter
         });
         return new PortResult { Target = target, Written = write, Files = files, Cancelled = files.Any(f => f.Status == PortStatus.NotReached) };
     }
+
+    /// <summary>A link on the way to either of the change's target paths, or null.</summary>
+    private static string? LinkIn(FileChange c, string target, LinkGuard links)
+        => links.LinkOnTheWay(Full(target, c.RelativePath)) ?? (c.RenamedFrom is { } f ? links.LinkOnTheWay(Full(target, f)) : null);
 
     private static PortFile One(FileChange c, string leftRoot, string rightRoot, string target, bool write, long maxText)
     {

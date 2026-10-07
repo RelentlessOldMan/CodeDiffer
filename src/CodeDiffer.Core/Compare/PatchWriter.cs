@@ -143,7 +143,7 @@ public static class PatchWriter
                 break;
             case ChangeStatus.Renamed:
                 var header = $"similarity index {(c.SimilarityMilli ?? 0) / 10}%\nrename from {c.RenamedFrom}\nrename to {c.RelativePath}\n";
-                if (c.SimilarityMilli == 1000)
+                if (c.PureRename)
                 {
                     // Byte-identical: the header alone moves it — for binary and large files too, and nothing is read.
                     w.Write($"diff --git a/{c.RenamedFrom} b/{c.RelativePath}\n{header}");

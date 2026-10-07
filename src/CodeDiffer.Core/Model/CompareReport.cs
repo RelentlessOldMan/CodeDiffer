@@ -1,3 +1,5 @@
+using CodeDiffer.Core.Walk;
+
 namespace CodeDiffer.Core.Model;
 
 /// <summary>
@@ -7,6 +9,10 @@ namespace CodeDiffer.Core.Model;
 /// <see cref="Unreadable"/>: why a side could not be read during the compare (locked, vanished, access denied).
 /// A pair that couldn't be read is listed as Modified with no reason — its verdict is unknown, so it is never
 /// called identical; an add or remove that couldn't be read keeps its status but was not considered for a rename.
+/// <see cref="EditedRename"/>: a rename found by line similarity — its bytes differ even when the similarity rounds
+/// to 1000 (one line in 2,001 changed, lines reordered, line endings only). Only a rename without it is byte-identical.
+/// <see cref="BehindLink"/>: an add or remove whose path is behind a symlink / junction the OTHER tree has there (not
+/// followed), so whether it really changed is unknown — never acted on as a delete or an add (it is also Unreadable).
 /// </summary>
 public sealed record FileChange(
     string RelativePath,
@@ -16,10 +22,15 @@ public sealed record FileChange(
     long RightSize,
     string? RenamedFrom = null,
     int? SimilarityMilli = null,
-    string? Unreadable = null)
+    string? Unreadable = null,
+    bool EditedRename = false,
+    bool BehindLink = false)
 {
     /// <summary>The reason token to show: the reason, "unreadable", or null.</summary>
     public string? ReasonLabel => Reason is { } r ? CanonicalTokens.Token(r) : Unreadable is not null ? "unreadable" : null;
+
+    /// <summary>A byte-identical rename: the header alone moves it, nothing to diff.</summary>
+    public bool PureRename => Status == ChangeStatus.Renamed && SimilarityMilli == 1000 && !EditedRename;
 }
 
 /// <summary>
@@ -38,6 +49,13 @@ public sealed class CompareReport
 
     /// <summary>Symlinks and junctions found in either tree and not followed (said, so nothing under one is assumed compared).</summary>
     public int SkippedLinks { get; init; }
+    /// <summary>What each walk skipped (links, names Windows can't open by path). Empty for a result saved before 2026-10-08.</summary>
+    public IReadOnlyList<SkippedPath> LeftSkipped { get; init; } = [];
+    public IReadOnlyList<SkippedPath> RightSkipped { get; init; } = [];
+    /// <summary>Names ending in '.' or ' ' (unopenable by path on Windows) skipped in either tree.</summary>
+    public int SkippedNames => LeftSkipped.Concat(RightSkipped).Count(s => s.Kind == SkipKind.Name);
+    /// <summary>Why the hash ledgers could not be saved after the compare (the result stands; the next run reads again).</summary>
+    public string? CacheSaveError { get; init; }
 
     /// <summary>Same-size pairs that needed a content verdict (the only ones that can cost a read).</summary>
     public int ComparedPairs { get; init; }

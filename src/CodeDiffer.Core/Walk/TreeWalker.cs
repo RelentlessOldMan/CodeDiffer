@@ -1,10 +1,21 @@
 using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 
 namespace CodeDiffer.Core.Walk;
 
-/// <summary>A completed walk: every file found, how many directories could not be listed, and how many symlinks /
-/// junctions were skipped (never followed: a link can point outside the tree or back into it).</summary>
-public sealed record WalkResult(IReadOnlyList<FileEntry> Files, int DroppedDirectories, int SkippedLinks = 0);
+/// <summary>What a walk skipped on purpose: a symlink / junction (never followed: it can point outside the tree or back
+/// into it), or a name Windows can't open by path (ending in '.' or ' ' — the path API would open another file).</summary>
+public enum SkipKind { Link, Name }
+
+/// <summary>A path the walk skipped, relative to the root ('/' separated), file or directory.</summary>
+public readonly record struct SkippedPath(string Path, SkipKind Kind, bool IsDirectory);
+
+/// <summary>A completed walk: every file found, how many directories could not be listed, and what was skipped.</summary>
+public sealed record WalkResult(IReadOnlyList<FileEntry> Files, int DroppedDirectories, IReadOnlyList<SkippedPath>? Skipped = null)
+{
+    public IReadOnlyList<SkippedPath> SkippedPaths => Skipped ?? [];
+    public int SkippedLinks => SkippedPaths.Count(s => s.Kind == SkipKind.Link);
+}
 
 /// <summary>
 /// Walks a tree and yields every file as a <see cref="FileEntry"/>, reading size/mtime/ChangeTime/FileId
@@ -38,43 +49,63 @@ public sealed class TreeWalker
         var rootFull = RootOf(root);
 
         var files = new ConcurrentBag<FileEntry>();
-        int dropped = 0, links = 0;
+        var skipped = new ConcurrentBag<SkippedPath>();
+        int dropped = 0;
         var frontier = new List<string> { rootFull };
         while (frontier.Count > 0)
         {
             var next = new ConcurrentBag<string>();
-            Parallel.ForEach(frontier, new ParallelOptions { MaxDegreeOfParallelism = _parallelism, CancellationToken = ct }, dir =>
+            try
             {
-                var rows = ListWithRetry(dir, dir == rootFull);
-                if (rows is null)
+                Parallel.ForEach(frontier, new ParallelOptions { MaxDegreeOfParallelism = _parallelism, CancellationToken = ct }, dir =>
                 {
-                    Interlocked.Increment(ref dropped);
-                    return;
-                }
-                int found = 0;
-                foreach (var row in rows)
-                {
-                    if (row.IsLink) { Interlocked.Increment(ref links); continue; } // symlinks/junctions: not followed, counted
-                    var full = Path.Combine(dir, row.Name);
-                    if (row.IsDirectory)
+                    var rows = ListWithRetry(dir, dir == rootFull);
+                    if (rows is null)
                     {
-                        if (!_ignoredDirs.Contains(row.Name)) next.Add(full);
-                        continue;
+                        Interlocked.Increment(ref dropped);
+                        return;
                     }
-                    var rel = Path.GetRelativePath(rootFull, full).Replace('\\', '/');
-                    files.Add(new FileEntry(rel, full, row.Length, new DateTime(row.LastWriteUtcTicks, DateTimeKind.Utc),
-                        row.ChangeUtcTicks, row.FileId));
-                    found++;
-                }
-                listed?.Invoke(found);
-            });
+                    int found = 0;
+                    foreach (var row in rows)
+                    {
+                        var full = dir + (dir.EndsWith(Path.DirectorySeparatorChar) ? "" : Path.DirectorySeparatorChar.ToString()) + row.Name;
+                        string Rel() => full[(rootFull.Length + (rootFull.EndsWith(Path.DirectorySeparatorChar) ? 0 : 1))..].Replace('\\', '/');
+                        if (row.IsLink) { skipped.Add(new SkippedPath(Rel(), SkipKind.Link, row.IsDirectory)); continue; } // not followed
+                        if (!UsableName(row.Name)) { skipped.Add(new SkippedPath(Rel(), SkipKind.Name, row.IsDirectory)); continue; }
+                        if (row.IsDirectory)
+                        {
+                            if (!_ignoredDirs.Contains(row.Name)) next.Add(full);
+                            continue;
+                        }
+                        files.Add(new FileEntry(Rel(), full, row.Length, new DateTime(row.LastWriteUtcTicks, DateTimeKind.Utc),
+                            row.ChangeUtcTicks, row.FileId));
+                        found++;
+                    }
+                    listed?.Invoke(found);
+                });
+            }
+            catch (AggregateException ae) when (ae.InnerExceptions.Count == 1)
+            {
+                ExceptionDispatchInfo.Capture(ae.InnerExceptions[0]).Throw(); // the root's own error, not a wrapper
+                throw;
+            }
             frontier = [.. next];
         }
 
         var list = files.ToList();
         list.Sort((a, b) => string.CompareOrdinal(a.RelativePath, b.RelativePath)); // deterministic order
-        return new WalkResult(list, dropped, links);
+        var skips = skipped.ToList();
+        skips.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path));
+        return new WalkResult(list, dropped, skips);
     }
+
+    /// <summary>
+    /// Can the file be opened by its plain path? On Windows the path API drops a trailing '.' or ' ' ("a." opens "a"),
+    /// so such a name (legal on NTFS through \\?\, common on Samba shares written from Linux) would read another file
+    /// or none — and "a" next to "a." would be one path twice. Skipped and said instead.
+    /// </summary>
+    internal static bool UsableName(string name)
+        => !OperatingSystem.IsWindows() || name.Length == 0 || (name[^1] != '.' && name[^1] != ' ');
 
     /// <summary>The full root path without a trailing separator — except a drive root keeps it: "Z:" alone means
     /// the current directory on Z:, not its root.</summary>

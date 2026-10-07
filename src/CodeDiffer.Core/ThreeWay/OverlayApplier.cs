@@ -40,6 +40,11 @@ public static class OverlayApplier
             throw new ArgumentException($"{overlay} is not a merge overlay (no OVERLAY.txt, deletes.txt and files\\)");
         if (File.Exists(Path.Combine(overlay, "INCOMPLETE.txt")))
             throw new ArgumentException($"{overlay} was not finished (INCOMPLETE.txt): write the overlay again, don't apply this one");
+        // Written from a compare that couldn't list a directory (CodeDiffer 1.0.36 and before still wrote one): its
+        // deletes may be listing failures.
+        if (File.ReadAllText(Path.Combine(overlay, "OVERLAY.txt")).Contains("INCOMPLETE COMPARE", StringComparison.Ordinal))
+            throw new ArgumentException($"{overlay} was written from an incomplete compare (see OVERLAY.txt): its deletes may be listing " +
+                                        "failures — compare again and write a new overlay");
         if (!Directory.Exists(target)) throw new DirectoryNotFoundException($"target directory not found: {target}");
         if (ResultStore.IsUnder(target, overlay) || ResultStore.IsUnder(overlay, target))
             throw new ArgumentException($"the target {target} and the overlay {overlay} must not be inside each other");
@@ -87,6 +92,9 @@ public static class OverlayApplier
             copyByCase.TryGetValue(d, out var to) && !string.Equals(to.Replace('\\', '/'), d, StringComparison.Ordinal)
             && NameOnDisk(p) == Path.GetFileName(to);
 
+        var links = new CodeDiffer.Core.Walk.LinkGuard(target);
+        string? Link(string full) => links.LinkOnTheWay(full) is { } l ? $"the target has a symlink/junction at {l} — never written or deleted through" : null;
+
         // 1. Deletes first, so a file v2 turned into a directory, or a case-only rename, lands right.
         foreach (var d in deletes)
         {
@@ -94,6 +102,7 @@ public static class OverlayApplier
             var p = Full(target, d);
             try
             {
+                if (Link(p) is { } why) { failed.Add((d, why)); Step(); continue; }
                 // A directory where files\ has one too: v2 turned the file into a directory, and a run already did it.
                 if (Directory.Exists(p) && Directory.Exists(Full(files, d))) gone++;
                 else if (Directory.Exists(p)) failed.Add((d, "to delete, but the target has a directory there; left alone"));
@@ -144,6 +153,7 @@ public static class OverlayApplier
             var tmp = dest + ChangePorter.TempSuffix;
             try
             {
+                if (Link(dest) is { } why) throw new IOException(why);
                 // A directory still there is one the deletes did not empty (on a dry run: one they would not empty).
                 if (Directory.Exists(dest) && (write || !Directory.EnumerateFiles(dest, "*", SearchOption.AllDirectories).All(hitSet.Contains)))
                     throw new IOException("the target has a directory there that the deletes do not empty");

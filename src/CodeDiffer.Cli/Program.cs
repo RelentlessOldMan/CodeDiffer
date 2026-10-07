@@ -116,10 +116,7 @@ static int Compare(string[] args)
         (report.CodeCompassHits > 0 ? $" ({report.CodeCompassHits} via CodeCompass)" : "") +
         $" · {report.BytesRead / (1024.0 * 1024 * 1024):F1} GB read" +
         (report.PendingFiles > 0 ? $" · {report.PendingFiles} too recently modified to cache yet" : ""));
-    if (report.UnstableFiles > 0)
-        Console.Error.WriteLine($"note: {report.UnstableFiles} file(s) changed while being read (live writer) — compared as read, not cached.");
-    if (report.SkippedLinks > 0)
-        Console.Error.WriteLine($"note: {report.SkippedLinks} symlink(s)/junction(s) not followed — nothing behind them is compared.");
+    foreach (var n in AgentViews.Notes(report)) Console.Error.WriteLine("note: " + n);
 
     int? htmlCode = null; // a failed or stopped report: its exit code, but only after the warnings below
     if (!args.Contains("--no-save"))
