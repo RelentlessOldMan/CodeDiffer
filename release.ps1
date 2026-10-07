@@ -26,24 +26,34 @@ Set-Location $root
 # error even on exit 0. Run natives under Continue and decide on the exit code.
 function Native {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$a)
+    if (-not (Get-Command $a[0] -ErrorAction SilentlyContinue)) { throw "$($a[0]) is not on PATH" }
     $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    try { $o = & $a[0] @($a | Select-Object -Skip 1) 2>$null; $code = $LASTEXITCODE }
+    $errFile = [System.IO.Path]::GetTempFileName()
+    try { $global:LASTEXITCODE = 0; $o = & $a[0] @($a | Select-Object -Skip 1) 2>$errFile; $code = $LASTEXITCODE }
     finally { $ErrorActionPreference = $prev }
-    if ($code -ne 0) { throw "$($a -join ' ') failed (exit $code)" }
+    $err = (Get-Content -Raw $errFile -ErrorAction SilentlyContinue); Remove-Item $errFile -ErrorAction SilentlyContinue
+    if ($code -ne 0) { throw "$($a -join ' ') failed (exit $code): $err" }
     return $o
 }
 
-# 1) A clean tree whose HEAD is on origin/main.
+# Text files that ship: UTF-8 without a BOM, CRLF, whichever PowerShell runs this.
+function Write-Text([string]$path, [string]$text) {
+    [System.IO.File]::WriteAllText($path, ($text -replace "`r?`n", "`r`n"), [System.Text.UTF8Encoding]::new($false))
+}
+
+# 1) A clean tree whose HEAD is origin/main, a full clone (the version is the commit count), and gh ready.
+if ($Publish) {
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "-Publish needs the GitHub CLI (gh) on PATH" }
+    Native gh auth status | Out-Null
+}
 $dirty = git status --porcelain
 if ($dirty) { throw "working tree has uncommitted changes - commit them first:`n$($dirty -join "`n")" }
+if ((Native git rev-parse --is-shallow-repository).Trim() -eq 'true') { throw "shallow clone: the version (commit count) would be wrong - git fetch --unshallow first" }
 $sha = (Native git rev-parse HEAD).Trim()
 Native git fetch origin main --quiet | Out-Null
-$prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-git merge-base --is-ancestor $sha origin/main 2>$null
-$pushed = $LASTEXITCODE -eq 0
-$ErrorActionPreference = $prev
-if (-not $pushed) { throw "HEAD ($($sha.Substring(0, 9))) is not on origin/main - push it first (git push origin main)." }
-Write-Host "OK: $($sha.Substring(0, 9)) is on origin/main." -ForegroundColor Green
+$remote = (Native git rev-parse origin/main).Trim()
+if ($remote -ne $sha) { throw "HEAD ($($sha.Substring(0, 9))) is not origin/main ($($remote.Substring(0, 9))) - push it, or pull first." }
+Write-Host "OK: $($sha.Substring(0, 9)) is origin/main." -ForegroundColor Green
 
 # 2) Tests.
 if ($SkipTests) { Write-Warning "SkipTests: not running the unit suite." }
@@ -64,7 +74,10 @@ foreach ($proj in @('CodeDiffer.Cli', 'CodeDiffer.Mcp')) {
     if ($LASTEXITCODE -ne 0) { throw "publish of $proj failed" }
 }
 $extra = @(Get-ChildItem $stage -File | Where-Object { $_.Name -notin @('CodeDiffer.Cli.exe', 'CodeDiffer.Mcp.exe') })
-if ($extra.Count) { $extra | Remove-Item -Force }   # stray config/pdb files; the exes are self-contained
+if ($extra.Count) {   # stray config/pdb files; the exes are self-contained
+    Write-Host "  not shipping: $(($extra | ForEach-Object Name) -join ', ')"
+    $extra | Remove-Item -Force
+}
 if (git status --porcelain) { throw "publishing changed tracked files - not packaging:`n$(git status --porcelain)" }
 
 # The version the shipped CLI reports, e.g. "codediffer 1.0.36+8d5e88b" -> 1.0.36. Its commit must be HEAD.
@@ -98,10 +111,17 @@ try {
     }
     $mcp.StandardInput.Close()
     if (-not $mcp.WaitForExit(15000)) { $mcp.Kill() }
-    foreach ($tool in @('start_compare', 'start_compare3', 'get_summary', 'apply_changeset')) {
-        if ($out -notmatch "`"$tool`"") { throw "MCP smoke FAILED: tools/list has no $tool. stderr:`n$($errTask.Result)" }
-    }
-    Write-Host "  PASS  the server answers and lists its tools." -ForegroundColor Green
+    # Every tool the source declares must be listed (read from the source, so the list never goes stale).
+    $expected = @(Select-String -Path (Join-Path $root 'src\CodeDiffer.Mcp\*.cs') -Pattern 'McpServerTool\(Name = "([a-z0-9_]+)"' -AllMatches |
+        ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+    $reply = $out -split "`n" | Where-Object { $_ -match '"id"\s*:\s*2\b' } | Select-Object -First 1
+    if (-not $reply) { throw "MCP smoke FAILED: no tools/list reply. stderr:`n$($errTask.Result)" }
+    $listed = @((ConvertFrom-Json $reply).result.tools | ForEach-Object { $_.name })
+    $missing = @($expected | Where-Object { $listed -notcontains $_ })
+    if ($expected.Count -eq 0 -or $missing.Count) { throw "MCP smoke FAILED: tools/list is missing $($missing -join ', '). stderr:`n$($errTask.Result)" }
+    $unknown = @($listed | Where-Object { $expected -notcontains $_ })
+    if ($unknown.Count) { Write-Warning "tools/list has tools the source scan didn't find: $($unknown -join ', ')" }
+    Write-Host "  PASS  the server answers and lists all $($expected.Count) tools." -ForegroundColor Green
 }
 finally {
     try { if (-not $mcp.HasExited) { $mcp.Kill() } } catch {}
@@ -112,8 +132,8 @@ finally {
 foreach ($f in @('README.md', 'LICENSE')) { Copy-Item (Join-Path $root $f) $stage }
 New-Item -ItemType Directory -Force (Join-Path $stage 'docs') | Out-Null
 Copy-Item (Join-Path $root 'docs\OUTPUT.md') (Join-Path $stage 'docs')
-"CodeDiffer $version`ncommit $sha`nbuilt  $(Get-Date -Format o)" | Set-Content -Encoding UTF8 (Join-Path $stage 'RELEASE.txt')
-@"
+Write-Text (Join-Path $stage 'RELEASE.txt') "CodeDiffer $version`ncommit $sha`nbuilt  $(Get-Date -Format o)`n"
+Write-Text (Join-Path $stage 'INSTALL.txt') @"
 CodeDiffer $version - Windows x64, self-contained (no .NET needed)
 =================================================================
 
@@ -123,16 +143,17 @@ CodeDiffer.Mcp.exe   the MCP server for agents
 Put this folder somewhere stable OUTSIDE any build tree (a running MCP server locks its exe), e.g.
 %LOCALAPPDATA%\CodeDiffer\bin, then register the server with Claude Code:
 
-    claude mcp add --scope user codediffer -- "%LOCALAPPDATA%\CodeDiffer\bin\CodeDiffer.Mcp.exe"
+    PowerShell:  claude mcp add --scope user codediffer -- "`$env:LOCALAPPDATA\CodeDiffer\bin\CodeDiffer.Mcp.exe"
+    cmd.exe:     claude mcp add --scope user codediffer -- "%LOCALAPPDATA%\CodeDiffer\bin\CodeDiffer.Mcp.exe"
 
-and check it with  claude mcp list  (or /mcp in a session).
+(or give the full path of wherever you put it), and check it with  claude mcp list  (or /mcp in a session).
 
 Updating while sessions are running the server: rename the old CodeDiffer.Mcp.exe aside (Windows allows
 renaming a running exe), copy the new one in, and /mcp reconnect. Delete the renamed file later.
 
 Compares are saved under %LOCALAPPDATA%\CodeDiffer\results (CODEDIFFER_RESULTS_DIR overrides).
 Docs: README.md and docs\OUTPUT.md here, or https://github.com/RelentlessOldMan/CodeDiffer
-"@ | Set-Content -Encoding UTF8 (Join-Path $stage 'INSTALL.txt')
+"@
 
 # 5) Zip with '/' entry names, then check it.
 $zip = Join-Path $root "dist\codediffer-$version-win-x64.zip"
@@ -149,7 +170,7 @@ try {
 finally { $zw.Dispose() }
 $za = [System.IO.Compression.ZipFile]::OpenRead($zip)
 try { $names = @($za.Entries | ForEach-Object { $_.FullName }) } finally { $za.Dispose() }
-foreach ($must in @('CodeDiffer.Cli.exe', 'CodeDiffer.Mcp.exe', 'INSTALL.txt', 'README.md', 'LICENSE', 'docs/OUTPUT.md')) {
+foreach ($must in @('CodeDiffer.Cli.exe', 'CodeDiffer.Mcp.exe', 'INSTALL.txt', 'RELEASE.txt', 'README.md', 'LICENSE', 'docs/OUTPUT.md')) {
     if ($names -notcontains $must) { Remove-Item -Force $zip; throw "zip is missing '$must' - not packaging" }
 }
 Remove-Item -Recurse -Force $stage
@@ -173,12 +194,17 @@ INSTALL.txt in the zip has the details; ``CodeDiffer.Cli.exe help`` lists the co
 Built from commit $sha.
 SHA256 (codediffer-$version-win-x64.zip): $hash
 "@
+# Never replace a published zip (its SHA256 is in the notes), and never let a stray tag pick the commit.
 $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+$global:LASTEXITCODE = 0
 gh release view $tag 2>$null 1>$null
 $exists = $LASTEXITCODE -eq 0
-if ($exists) { gh release upload $tag $zip --clobber }
-else { gh release create $tag $zip --title "CodeDiffer $version" --notes $notes --target $sha }
-$code = $LASTEXITCODE
 $ErrorActionPreference = $prev
-if ($code -ne 0) { throw "gh release failed" }
+if ($exists) { throw "release $tag already exists - commit something new for a new version (a published zip is never replaced)" }
+$tagAt = (Native git ls-remote origin "refs/tags/$tag") -split '\s+' | Select-Object -First 1
+if ($tagAt -and $tagAt -ne $sha) { throw "tag $tag already exists on origin at $tagAt, not $sha - delete it first if it is stale" }
+$notesFile = Join-Path $root "dist\release-notes-$version.md"
+Write-Text $notesFile $notes
+try { Native gh release create $tag $zip --title "CodeDiffer $version" --notes-file $notesFile --target $sha | Out-Null }
+finally { Remove-Item $notesFile -ErrorAction SilentlyContinue }
 Write-Host "Published $tag." -ForegroundColor Green

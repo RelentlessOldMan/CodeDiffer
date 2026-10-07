@@ -81,4 +81,64 @@ public sealed class PruneTests : IDisposable
         Assert.Throws<ArgumentException>(() => ResultStore.Delete(Path.Combine(_root, "elsewhere"), c));
         Assert.True(Directory.Exists(dir));
     }
+
+    [Fact]
+    public void Delete_RemovesReadOnlyFiles_AndDoesNotFollowALink()
+    {
+        var dir = Saved("eee1", 3);
+        var ro = Path.Combine(dir, "merge", "files", "locked.c");
+        Directory.CreateDirectory(Path.GetDirectoryName(ro)!);
+        File.WriteAllText(ro, "read-only, as copied from a Perforce checkout");
+        File.SetAttributes(ro, FileAttributes.ReadOnly);
+        var outside = Path.Combine(_root, "..", "cd-prune-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "keep.txt"), "must survive");
+        try
+        {
+            bool linked = TryLink(Path.Combine(dir, "link"), outside);
+            ResultStore.Delete(_root, ResultStore.List(_root).Single());
+            Assert.False(Directory.Exists(dir));
+            Assert.True(File.Exists(Path.Combine(outside, "keep.txt")), linked ? "followed the link" : "no link made");
+        }
+        finally { Directory.Delete(outside, true); }
+    }
+
+    /// <summary>A directory symlink (needs no admin in developer mode); false when the box won't make one.</summary>
+    private static bool TryLink(string link, string target)
+    {
+        try { Directory.CreateSymbolicLink(link, target); return true; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    [Fact]
+    public void Delete_ThatFailsPartWay_LeavesAResultStillListed()
+    {
+        var dir = Saved("fff1", 3);
+        var held = Path.Combine(dir, "report", "index.html");
+        Directory.CreateDirectory(Path.GetDirectoryName(held)!);
+        File.WriteAllText(held, "open in a browser");
+        using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.ThrowsAny<IOException>(() => ResultStore.Delete(_root, ResultStore.List(_root).Single()));
+        }
+        // compare.json goes last, so the half-deleted result is still there to prune again.
+        Assert.Equal("fff1", ResultStore.List(_root).Single().Id);
+        ResultStore.Delete(_root, ResultStore.List(_root).Single());
+        Assert.False(Directory.Exists(dir));
+    }
+
+    [Fact]
+    public void NewestIsByStartTime_AndRenamedResultsAreLeftAlone()
+    {
+        var a = Saved("abc1", 5);
+        Saved("abc2", 1);
+        // A newer compare whose directory name sorts first (a clock/time-zone mismatch): start time decides.
+        var odd = Path.Combine(_root, "19990101-000000-abc3");
+        Directory.Move(Saved("abc3", 0.5), odd);
+        // A result the user renamed to keep it: never a candidate.
+        Directory.Move(a, Path.Combine(_root, "baseline"));
+        Saved("abc4", 9);
+
+        Assert.Equal(["abc2", "abc4"], Ids(null, keep: 1));
+    }
 }

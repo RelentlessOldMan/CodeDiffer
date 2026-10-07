@@ -96,8 +96,8 @@ draws the same line on stderr (redrawn in place, or a line every 30 s when stder
 base→v1, warm: all 1,561 differences listed at 0:30 of a 1:40 run; "about 1:20 left" at 0:30 (actual 1:18).
 
 **Cancel (built):** `cancel_compare(id)` stops a running compare or compare3; in the CLI the first Ctrl+C does
-the same (a second one quits at once; exit 130). It stops within a chunk per file in flight (death, cold,
-25 s in: stopped in 0.1 s), saves the hashes it already read to the ledgers, and is saved as state
+the same (a second one quits at once; exit 130). It stops within a chunk per file in flight, in every phase
+including rename detection and compare3's merge (death, cold, 25 s in: stopped in 0.1 s), saves the hashes it already read to the ledgers, and is saved as state
 `cancelled`. So a cancelled cold run is not wasted: the next run of the same compare reads only the rest.
 
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
@@ -124,8 +124,12 @@ as an overlay on v1, never the whole tree: `files\` holds only what the merge ch
 changes, clean merges in v1's encoding and line endings, text conflicts with diff3 markers),
 `deletes.txt` the v1 paths to delete (v2's deletes, the old side of a move), `conflicts.txt` the conflicts
 with markers plus those that can't be one file (binary, large, modify/delete, rename/rename, path collision)
-with each side's file, and `OVERLAY.txt` how to apply it: copy `files\` over v1, then delete `deletes.txt`.
-A move's old path is listed only once its new file is written, so a failed read never loses v1's copy.
+with each side's file, and `OVERLAY.txt` how to apply it: delete the paths in `deletes.txt` from v1, then copy
+`files\` over v1 (deletes first, so a file v2 turned into a directory, or a case-only rename, lands right).
+A move's old path is listed only once its new file is written, so a failed read never loses v1's copy. Each
+file is written beside its name and renamed into place (a failed write leaves nothing half-written), and a
+merge is checked against the compare as it is written: a file whose merge changed since (a tree edited in
+between) is listed as not written instead. `INCOMPLETE.txt` is present until the overlay is finished.
 Unlike `apply --write` (which skips any file with a conflict), conflicts land in the overlay with markers.
 
 Full-scale check (2026-10-05, CodeSpawner `death` 1.0.9 base / v1 / v2 on `\\IRISH\TestHole`, 68,661 base

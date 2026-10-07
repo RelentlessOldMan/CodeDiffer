@@ -32,7 +32,8 @@ public sealed class RenameDetector
 
     public RenameDetector(CompareOptions options) => _options = options;
 
-    public RenameResult Detect(IReadOnlyList<FileEntry> removed, IReadOnlyList<FileEntry> added)
+    /// <param name="ct">Checked per file and per 1 MB chunk: this pass reads every added and removed file.</param>
+    public RenameResult Detect(IReadOnlyList<FileEntry> removed, IReadOnlyList<FileEntry> added, CancellationToken ct = default)
     {
         if (removed.Count == 0 || added.Count == 0)
             return new RenameResult([], removed, added);
@@ -41,21 +42,21 @@ public sealed class RenameDetector
         var removedLeft = new List<FileEntry>(removed);
         var addedLeft = new List<FileEntry>(added);
 
-        PairPureRenames(removedLeft, addedLeft, renames);
+        PairPureRenames(removedLeft, addedLeft, renames, ct);
         if (removedLeft.Count > 0 && addedLeft.Count > 0)
-            PairEditedRenames(removedLeft, addedLeft, renames);
+            PairEditedRenames(removedLeft, addedLeft, renames, ct);
 
         return new RenameResult(renames, removedLeft, addedLeft);
     }
 
     /// <summary>Pass 1: pair byte-identical files (same SHA-256). Consumes matched entries from both lists.</summary>
-    private static void PairPureRenames(List<FileEntry> removed, List<FileEntry> added, List<RenameOp> renames)
+    private static void PairPureRenames(List<FileEntry> removed, List<FileEntry> added, List<RenameOp> renames, CancellationToken ct)
     {
         // Index adds by SHA; multiple adds can share a SHA, so keep a queue and pop as we pair.
         var addsBySha = new Dictionary<string, Queue<FileEntry>>(StringComparer.Ordinal);
         foreach (var a in added)
         {
-            var sha = ContentHasher.HashFile(a.FullPath);
+            var sha = ContentHasher.HashFile(a.FullPath, ct);
             if (!addsBySha.TryGetValue(sha, out var q)) addsBySha[sha] = q = new Queue<FileEntry>();
             q.Enqueue(a);
         }
@@ -64,7 +65,7 @@ public sealed class RenameDetector
         var stillRemoved = new List<FileEntry>(removed.Count);
         foreach (var r in removed)
         {
-            var sha = ContentHasher.HashFile(r.FullPath);
+            var sha = ContentHasher.HashFile(r.FullPath, ct);
             if (addsBySha.TryGetValue(sha, out var q) && q.Count > 0)
             {
                 var a = q.Dequeue();
@@ -83,15 +84,16 @@ public sealed class RenameDetector
     }
 
     /// <summary>Pass 2: score remaining text pairs and assign greedily by descending similarity.</summary>
-    private void PairEditedRenames(List<FileEntry> removed, List<FileEntry> added, List<RenameOp> renames)
+    private void PairEditedRenames(List<FileEntry> removed, List<FileEntry> added, List<RenameOp> renames, CancellationToken ct)
     {
         // Read + EOL-normalize + split each candidate once; skip binary / oversized (line metric needs text).
-        var removedLines = ReadLines(removed);
-        var addedLines = ReadLines(added);
+        var removedLines = ReadLines(removed, ct);
+        var addedLines = ReadLines(added, ct);
 
         var scored = new List<(int milli, int ri, int ai)>();
         for (int ri = 0; ri < removed.Count; ri++)
         {
+            ct.ThrowIfCancellationRequested();
             if (removedLines[ri] is not { } rl) continue;
             for (int ai = 0; ai < added.Count; ai++)
             {
@@ -130,11 +132,12 @@ public sealed class RenameDetector
     }
 
     /// <summary>Line arrays for each entry, or null where the file is binary or past the read cap.</summary>
-    private string[]?[] ReadLines(IReadOnlyList<FileEntry> entries)
+    private string[]?[] ReadLines(IReadOnlyList<FileEntry> entries, CancellationToken ct)
     {
         var result = new string[]?[entries.Count];
         for (int i = 0; i < entries.Count; i++)
         {
+            ct.ThrowIfCancellationRequested();
             var e = entries[i];
             if (e.Length > _options.MaxClassifyBytes) { result[i] = null; continue; }
 

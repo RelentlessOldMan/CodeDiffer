@@ -103,6 +103,9 @@ public sealed class HashCache
     private readonly bool _strict;
     private readonly string _ownDir;
     private readonly LedgerSnapshot? _own;
+    // Rehash: the old ledger, never trusted for a lookup, but kept by Save for files this run didn't read
+    // (a cancelled rehash, or compare3's second pass over the base) — so a rehash never loses hashes.
+    private LedgerSnapshot? _prior;
     private readonly LedgerSnapshot? _codeCompass;
     private readonly string _ccPrefix; // root's path under the CodeCompass-indexed ancestor ("" = same root)
     private readonly TrustTiming _timing;
@@ -135,12 +138,14 @@ public sealed class HashCache
         var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         var ownDir = Path.Combine(cacheBaseDir ?? DefaultBaseDir("CODEDIFFER_CACHE_DIR", "CodeDiffer"), LedgerFormat.RootKey(rootFull));
         var t = timing ?? TrustTiming.For(rootFull);
-        if (mode != CacheMode.On)
+        if (mode == CacheMode.Off)
             return new HashCache(mode, strict, ownDir, null, null, "", t);
 
         var own = LedgerFormat.TryRead(ownDir);
         if (own is not null && !File.Exists(Path.Combine(ownDir, RuleMarkerName)))
             own = Rejudge(own, t);
+        if (mode == CacheMode.Rehash)
+            return new HashCache(mode, strict, ownDir, null, null, "", t) { _prior = own };
         var (cc, prefix) = FindCodeCompassLedger(rootFull, codeCompassBaseDir ?? DefaultBaseDir("CODECOMPASS_CACHE_DIR", "CodeCompass"));
         return new HashCache(mode, strict, ownDir, own, cc, prefix, t);
     }
@@ -211,12 +216,13 @@ public sealed class HashCache
             try { lockFile = new FileStream(Path.Combine(_ownDir, "ledger.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
             catch (IOException) { return; } // another CodeDiffer is writing this ledger — keep theirs
 
+            var old = _own ?? _prior;
             var keep = new List<KeyValuePair<string, LedgerEntry>>();
             foreach (var e in walked)
             {
                 if (_fresh.TryGetValue(e.RelativePath, out var f) && Identity(e, f))
                     keep.Add(new(e.RelativePath, f));
-                else if (_own is not null && _own.Entries.TryGetValue(e.RelativePath, out var o) && Identity(e, o) && o.ChangeTicks != 0)
+                else if (old is not null && old.Entries.TryGetValue(e.RelativePath, out var o) && Identity(e, o) && o.ChangeTicks != 0)
                     keep.Add(new(e.RelativePath, o));
             }
             LedgerFormat.Write(_ownDir, keep);

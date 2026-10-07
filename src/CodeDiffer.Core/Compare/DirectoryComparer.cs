@@ -41,6 +41,9 @@ public sealed class CompareOptions
 
     /// <summary>Override for the ledger's trust margins (tests); default 3 s local / 1 h share, 3 s settle.</summary>
     internal TrustTiming? Timing { get; init; }
+
+    /// <summary>Tests: called after each content pair a session's compare checks (to cancel at a known point).</summary>
+    internal Action<long>? AfterPairChecked { get; init; }
 }
 
 /// <summary>
@@ -208,7 +211,7 @@ public sealed class DirectoryComparer
             Phase("same-size content");
             ct.ThrowIfCancellationRequested();
             progress?.SetPhase(ComparePhase.Renames);
-            AddResolvedAddsRemovesAndRenames(changes, removed, added);
+            AddResolvedAddsRemovesAndRenames(changes, removed, added, ct);
             Phase("renames");
         }
         catch (OperationCanceledException)
@@ -249,14 +252,14 @@ public sealed class DirectoryComparer
     /// leftover Added / Removed. A rename's destination path is its RelativePath; its source rides in
     /// RenamedFrom. Left/right sizes are carried so the summary can show both ends of a move.
     /// </summary>
-    private void AddResolvedAddsRemovesAndRenames(List<FileChange> changes, List<FileEntry> removed, List<FileEntry> added)
+    private void AddResolvedAddsRemovesAndRenames(List<FileChange> changes, List<FileEntry> removed, List<FileEntry> added, CancellationToken ct)
     {
         IReadOnlyList<FileEntry> leftoverRemoved = removed;
         IReadOnlyList<FileEntry> leftoverAdded = added;
 
         if (_options.DetectRenames)
         {
-            var result = new RenameDetector(_options).Detect(removed, added);
+            var result = new RenameDetector(_options).Detect(removed, added, ct);
             leftoverRemoved = result.UnmatchedRemoved;
             leftoverAdded = result.UnmatchedAdded;
 

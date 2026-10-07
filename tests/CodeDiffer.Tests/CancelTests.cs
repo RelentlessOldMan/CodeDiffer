@@ -40,9 +40,12 @@ public sealed class CancelTests : IDisposable
         File.WriteAllBytes(p, new UTF8Encoding(false).GetBytes(text));
     }
 
-    private CompareOptions Cached => new()
+    private CompareOptions Cached => Opts();
+
+    private CompareOptions Opts(CacheMode cache = CacheMode.On, Action<long>? afterPair = null) => new()
     {
-        Cache = CacheMode.On,
+        Cache = cache,
+        AfterPairChecked = afterPair,
         Parallelism = 1,
         CacheBaseDir = Path.Combine(_dir, "cache"),
         CodeCompassBaseDir = Path.Combine(_dir, "no-compass"),
@@ -75,28 +78,62 @@ public sealed class CancelTests : IDisposable
     [Fact]
     public void Session_Cancel_IsReportedAndSavedAsCancelled()
     {
+        // The compare holds at its 5th pair until the cancel has been asked for: always cancelled mid-run.
+        using var reached = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var options = Opts(afterPair: done => { if (done == 5) { reached.Set(); release.Wait(30_000); } });
         var store = new SessionStore(resultsRoot: Path.Combine(_dir, "results"));
-        var s = store.Start(_left, _right, Cached);
-        bool cancelled = s.Cancel();
+        var s = store.Start(_left, _right, options);
+        Assert.True(reached.Wait(30_000));
+        Assert.True(s.Cancel());
+        release.Set();
         s.Wait(TimeSpan.FromSeconds(30));
-        Assert.True(s.IsDone);
 
-        if (cancelled && s.Cancelled)
-        {
-            Assert.Equal("cancelled", s.Error);
-            Assert.Contains("CANCELLED after ", AgentViews.Summary(s));
-            Assert.Contains("CANCELLED", AgentViews.ListFiles(s));
-            // The continuation that records the state runs as the task completes.
-            Assert.True(SpinWait.SpinUntil(() => ResultStore.List(store.ResultsRoot!).Single().State == "cancelled", 5000));
-            var ex = Assert.Throws<InvalidDataException>(() => ResultStore.Load(s.ResultDir!));
-            Assert.Contains("was cancelled", ex.Message);
-        }
-        else
-        {
-            // It finished first: a cancel after the end changes nothing.
-            Assert.False(s.Cancel());
-            Assert.Null(s.Error);
-        }
-        Assert.False(s.Cancel()); // finished one way or the other: nothing left to cancel
+        Assert.True(s.IsDone);
+        Assert.True(s.Cancelled);
+        Assert.Equal("cancelled", s.Error);
+        Assert.Contains("CANCELLED after ", AgentViews.Summary(s));
+        Assert.Contains("CANCELLED", AgentViews.ListFiles(s));
+        // The continuation that records the state runs as the task completes.
+        Assert.True(SpinWait.SpinUntil(() => ResultStore.List(store.ResultsRoot!).Single().State == "cancelled", 5000));
+        var ex = Assert.Throws<InvalidDataException>(() => ResultStore.Load(s.ResultDir!));
+        Assert.Contains("was cancelled", ex.Message);
+        Assert.False(s.Cancel()); // finished: nothing left to cancel
+    }
+
+    [Fact]
+    public void CancelledRehash_KeepsTheLedgerItDidNotGetTo()
+    {
+        Assert.Equal(0, new DirectoryComparer(Cached).Compare(_left, _right).CacheHits); // cold: hashes all 60 pairs
+
+        using var stop = new CancellationTokenSource();
+        var p = new CompareProgress { AfterPairChecked = done => { if (done == 20) stop.Cancel(); } };
+        var rehash = Opts(CacheMode.Rehash);
+        Assert.ThrowsAny<OperationCanceledException>(() => new DirectoryComparer(rehash).Compare(_left, _right, p, ct: stop.Token));
+
+        // The 20 it re-read are fresh; the 40 it didn't get to keep their old entries — nothing is lost.
+        Assert.Equal(2 * Files, new DirectoryComparer(Cached).Compare(_left, _right).CacheHits);
+    }
+
+    [Fact]
+    public void Compare3Rehash_KeepsTheBaseLedger()
+    {
+        var v2 = Path.Combine(_dir, "V2");
+        for (int i = 0; i < Files; i++) Put($"V2/f{i:D3}.c", $"file {i:D3}\n");
+        var rehash = Opts(CacheMode.Rehash);
+        CodeDiffer.Core.ThreeWay.TreeMerger.Run(_left, _right, v2, rehash);
+        // The base->v2 pass reuses base ids (reads no base file) but must not shrink the base ledger base->v1 wrote.
+        var warm = CodeDiffer.Core.ThreeWay.TreeMerger.Run(_left, _right, v2, Cached);
+        Assert.Equal(2 * Files, warm.V1Report.CacheHits);
+    }
+
+    [Fact]
+    public void RenameDetection_SeesACancel()
+    {
+        using var stop = new CancellationTokenSource();
+        stop.Cancel();
+        var gone = new CodeDiffer.Core.Walk.TreeWalker([".git"], 1).WalkAll(_left).Files;
+        var added = new CodeDiffer.Core.Walk.TreeWalker([".git"], 1).WalkAll(_right).Files;
+        Assert.ThrowsAny<OperationCanceledException>(() => new RenameDetector(new CompareOptions()).Detect(gone, added, stop.Token));
     }
 }

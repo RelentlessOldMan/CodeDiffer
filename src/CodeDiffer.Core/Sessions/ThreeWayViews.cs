@@ -47,8 +47,10 @@ public static class ThreeWayViews
         => $"merge overlay: {o.Dir}\n" +
            $"  files\\       {o.FromV2:N0} from v2 · {o.Merged:N0} merged · {o.Markers:N0} with conflict markers · {o.Moved:N0} moved ({AgentViews.Bytes(o.Bytes)})\n" +
            $"  deletes.txt  {o.Deletes:N0} path(s)\n" +
-           $"  conflicts.txt {o.Markers:N0} with markers · {o.Unresolved:N0} not written (v1's version stays until decided)\n" +
-           "  apply: copy files\\ over v1, then delete the paths in deletes.txt (OVERLAY.txt says the same)\n";
+           $"  conflicts.txt {o.Markers:N0} with markers · {o.Unresolved - o.Failed:N0} not merged (v1's version stays until decided)\n" +
+           (o.Failed > 0 ? $"  FAILED: {o.Failed:N0} file(s) could not be written (see conflicts.txt; v1's version stays)\n" : "") +
+           (o.DroppedDirectories > 0 ? $"  INCOMPLETE: {o.DroppedDirectories:N0} director(ies) could not be read; changes under them are missing\n" : "") +
+           "  apply: delete the paths in deletes.txt from v1, then copy files\\ over v1 (OVERLAY.txt says the same)\n";
 
     public static string Stats(Compare3Session s)
     {

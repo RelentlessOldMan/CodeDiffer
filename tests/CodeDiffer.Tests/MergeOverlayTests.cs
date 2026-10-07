@@ -97,12 +97,7 @@ public sealed class MergeOverlayTests : IDisposable
         Assert.Equal(2, o.Unresolved); // blob.bin, model.c
         Assert.False(File.Exists(Path.Combine(outDir, "files", "v1only.c"))); // v1 already has it
 
-        // Apply: copy files\ over a copy of v1, then the deletes.
-        var merged = Path.Combine(_dir, "M");
-        CopyTree(_v1, merged);
-        CopyTree(Path.Combine(outDir, "files"), merged);
-        foreach (var d in File.ReadAllLines(Path.Combine(outDir, "deletes.txt")))
-            File.Delete(Path.Combine(merged, d));
+        var merged = Apply(outDir);
 
         Assert.Equal("untouched\n", Read(merged, "same.c"));
         Assert.Equal("A from v1\n", Read(merged, "v1only.c"));
@@ -125,8 +120,101 @@ public sealed class MergeOverlayTests : IDisposable
         Assert.Contains("binary  blob.bin", conflicts);
         Assert.Contains("delete/modify  model.c", conflicts);
         Assert.Contains("    v1: (deleted)\n    v2: " + Path.Combine(_v2, "model.c"), conflicts);
-        Assert.Contains("copy files\\ over v1", Read(outDir, "OVERLAY.txt"));
+        Assert.Contains("1. delete the v1 paths listed in deletes.txt", Read(outDir, "OVERLAY.txt"));
+        Assert.Contains("2. copy files\\ over v1", Read(outDir, "OVERLAY.txt"));
+        Assert.False(File.Exists(Path.Combine(outDir, "INCOMPLETE.txt")));
+        Assert.Empty(Directory.EnumerateFiles(outDir, "*.codediffer-tmp", SearchOption.AllDirectories));
     }
+
+    /// <summary>Apply the overlay to a fresh copy of v1 the documented way: deletes first, then copy files\.</summary>
+    private string Apply(string outDir)
+    {
+        var merged = Path.Combine(_dir, "M-" + Guid.NewGuid().ToString("N")[..6]);
+        CopyTree(_v1, merged);
+        foreach (var d in File.ReadAllLines(Path.Combine(outDir, "deletes.txt")))
+        {
+            var p = Path.Combine(merged, d);
+            if (File.Exists(p)) File.Delete(p);
+            else if (Directory.Exists(p)) Directory.Delete(p, true);
+        }
+        CopyTree(Path.Combine(outDir, "files"), merged);
+        return merged;
+    }
+
+    [Fact]
+    public void AConflictLandingOnAFileV1Added_IsACollision_NotAnOverwrite()
+    {
+        // v2 renames clash.c -> q.c (the edit conflicts with v1's), and v1 independently adds q.c.
+        Move(_v2, "clash.c", "q.c");
+        Put("V1/q.c", "v1's own q\n");
+        var r = TreeMerger.Run(_b, _v1, _v2, NoCache);
+        Assert.All(r.Entries.Where(e => e.MergedPath == "q.c"), e => Assert.Equal("path collision", e.ConflictKind));
+
+        var outDir = Path.Combine(_dir, "overlay");
+        MergeOverlay.Write(r, _b, _v1, _v2, outDir);
+        Assert.False(File.Exists(Path.Combine(outDir, "files", "q.c")));
+        Assert.Equal("v1's own q\n", Read(Apply(outDir), "q.c"));
+        var conflicts = Read(outDir, "conflicts.txt");
+        Assert.Contains("path collision  q.c", conflicts);
+        // Neither side deleted anything here: a side that didn't touch the path shows its unchanged file.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(conflicts, @"\(deleted\)")); // only model.c, which v1 did delete
+        Assert.Contains($"    v2: {Path.Combine(_v2, "q.c")} (unchanged)", conflicts);
+    }
+
+    [Fact]
+    public void ACaseOnlyRename_EndsUpUnderTheNewName()
+    {
+        Move(_v2, "same.c", "SAME.c.tmp"); // two steps: a case-only rename in place is a no-op on some APIs
+        File.Move(Path.Combine(_v2, "SAME.c.tmp"), Path.Combine(_v2, "Same.c"));
+        var r = TreeMerger.Run(_b, _v1, _v2, NoCache);
+        var outDir = Path.Combine(_dir, "overlay");
+        MergeOverlay.Write(r, _b, _v1, _v2, outDir);
+
+        var merged = Apply(outDir);
+        var names = Directory.EnumerateFiles(merged).Select(Path.GetFileName).ToList();
+        Assert.Contains("Same.c", names);
+        Assert.DoesNotContain("same.c", names);
+        Assert.Equal("untouched\n", Read(merged, "Same.c"));
+    }
+
+    [Fact]
+    public void AFileV2TurnedIntoADirectory_Applies()
+    {
+        File.Delete(Path.Combine(_v2, "v2only.c"));
+        Put("V2/v2only.c/inner.c", "now a directory\n");
+        var r = TreeMerger.Run(_b, _v1, _v2, NoCache);
+        var outDir = Path.Combine(_dir, "overlay");
+        MergeOverlay.Write(r, _b, _v1, _v2, outDir);
+        Assert.Equal("now a directory\n", Read(Apply(outDir), "v2only.c/inner.c"));
+    }
+
+    [Fact]
+    public void AMergeThatChangedSinceTheCompare_IsNotWritten()
+    {
+        var r = TreeMerger.Run(_b, _v1, _v2, NoCache);
+        Put("V2/both.c", Ten.Replace("line 2\n", "line 2 v2 now clashes\n")); // after the compare: both.c now conflicts
+        var outDir = Path.Combine(_dir, "overlay");
+        var o = MergeOverlay.Write(r, _b, _v1, _v2, outDir);
+
+        Assert.Equal(1, o.Failed);
+        Assert.False(File.Exists(Path.Combine(outDir, "files", "both.c")));
+        Assert.Contains("not written: changed since the compare", Read(outDir, "conflicts.txt"));
+        Assert.Contains("1 FAILED to write", Read(outDir, "OVERLAY.txt"));
+    }
+
+    [Fact]
+    public void CrlfConflictMarkers_UseCrlf()
+    {
+        Put("V1/crlf.c", Ten.Replace("line 5\n", "five v1\n").Replace("\n", "\r\n"));
+        Put("V2/crlf.c", Ten.Replace("line 5\n", "five v2\n").Replace("\n", "\r\n"));
+        var r = TreeMerger.Run(_b, _v1, _v2, NoCache);
+        var outDir = Path.Combine(_dir, "overlay");
+        MergeOverlay.Write(r, _b, _v1, _v2, outDir);
+        var text = Read(Path.Combine(outDir, "files"), "crlf.c");
+        Assert.Contains("<<<<<<< v1 (crlf.c:5)\r\nfive v1\r\n||||||| base", text);
+        Assert.DoesNotMatch("[^\r]\n", text);
+    }
+
 
     [Fact]
     public void RefusesANonEmptyDirectory_OrOneInsideATree()
@@ -136,5 +224,27 @@ public sealed class MergeOverlayTests : IDisposable
         Put("busy/x.txt", "x");
         Assert.Contains("not empty", Assert.Throws<ArgumentException>(() => MergeOverlay.Write(r, _b, _v1, _v2, busy)).Message);
         Assert.Contains("inside the v1 tree", Assert.Throws<ArgumentException>(() => MergeOverlay.Write(r, _b, _v1, _v2, Path.Combine(_v1, "out"))).Message);
+    }
+
+    [Fact]
+    public void LargeFilesBothChanged_AreHashedNotLoaded_SameIsAgreed_DifferentIsALargeConflict()
+    {
+        Put("V1/clash.c", Ten.Replace("line 5\n", "five SAME\n"));   // both sides made the same edit
+        Put("V2/clash.c", Ten.Replace("line 5\n", "five SAME\n"));
+        var small = new CompareOptions { Cache = CacheMode.Off, MaxClassifyBytes = 16 }; // every file counts as large
+        var r = TreeMerger.Run(_b, _v1, _v2, small);
+        Assert.Equal(Merge3Outcome.Agreed, r.Entries.Single(e => e.Path == "clash.c").Outcome);
+        var both = r.Entries.Single(e => e.Path == "both.c");
+        Assert.Equal(Merge3Outcome.Conflict, both.Outcome);
+        Assert.Equal("large", both.ConflictKind);
+    }
+
+    [Fact]
+    public void IsUnder_HandlesADriveRoot()
+    {
+        var drive = Path.GetPathRoot(_dir)!; // e.g. C:\
+        Assert.True(CodeDiffer.Core.Sessions.ResultStore.IsUnder(Path.Combine(drive, "merge"), drive));
+        Assert.True(CodeDiffer.Core.Sessions.ResultStore.IsUnder(_v1 + Path.DirectorySeparatorChar, _v1));
+        Assert.False(CodeDiffer.Core.Sessions.ResultStore.IsUnder(_v1 + "x", _v1));
     }
 }

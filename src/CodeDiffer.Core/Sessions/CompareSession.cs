@@ -142,7 +142,7 @@ public sealed class CompareSession : Session
     {
         Left = left;
         Right = right;
-        Progress = new CompareProgress();
+        Progress = new CompareProgress { AfterPairChecked = options.AfterPairChecked };
         _task = Run(() => new DirectoryComparer(options).Compare(left, right, Progress, ct: Token));
     }
 

@@ -168,7 +168,8 @@ public static class ResultStore
                 list.Add(new SavedCompare(dir, Str(m, "id"), Str(m, "kind"), Str(m, "state"), Started(m), Elapsed(m), roots, counts,
                     m.TryGetProperty("error", out var e) ? e.GetString() : null));
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or KeyNotFoundException or InvalidOperationException) { }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException
+                                           or KeyNotFoundException or InvalidOperationException or FormatException) { }
         }
         return list;
     }
@@ -184,18 +185,32 @@ public static class ResultStore
     /// <see cref="RunningGrace"/> is never picked (it may still be running elsewhere). Only directories that hold a
     /// CodeDiffer compare.json are considered, so nothing else under the root is ever touched.
     /// </summary>
+    /// <remarks>Newest by start time (not by directory name, which is local time); only directories named the way a
+    /// compare names them count, so renaming one (e.g. <c>baseline</c>) keeps it out of pruning.</remarks>
     public static IReadOnlyList<SavedCompare> PruneCandidates(string root, int keep, TimeSpan? olderThan, DateTime nowUtc)
         => List(root, int.MaxValue)
+            .Where(c => Regex.IsMatch(Path.GetFileName(c.Dir), @"^\d{8}-\d{6}-[0-9a-f]{4}(-\d+)?$", RegexOptions.IgnoreCase))
+            .OrderByDescending(c => c.StartedUtc).ThenByDescending(c => Path.GetFileName(c.Dir), StringComparer.Ordinal)
             .Skip(Math.Max(0, keep))
             .Where(c => olderThan is not { } age || c.StartedUtc < nowUtc - age)
             .Where(c => c.State != "running" || c.StartedUtc < nowUtc - RunningGrace)
             .ToList();
 
-    /// <summary>Bytes on disk under a result directory (its patches and report included).</summary>
+    /// <summary>Bytes on disk under a result directory (its patches and report included; links not followed), or -1
+    /// when it can't be read.</summary>
     public static long SizeOf(string dir)
-        => new DirectoryInfo(dir).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
+    {
+        try
+        {
+            var opt = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
+            return new DirectoryInfo(dir).EnumerateFiles("*", opt).Sum(f => f.Length);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return -1; }
+    }
 
-    /// <summary>Delete one saved compare. Refuses anything that is not a CodeDiffer result directly under <paramref name="root"/>.</summary>
+    /// <summary>Delete one saved compare. Refuses anything that is not a CodeDiffer result directly under <paramref name="root"/>.
+    /// Read-only files go too; a link inside is removed, never followed. <see cref="MetaName"/> goes last, so a delete
+    /// that fails part way (a file held open) leaves a result that is still listed and pruned next time.</summary>
     public static void Delete(string root, SavedCompare c)
     {
         var dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(c.Dir));
@@ -203,7 +218,29 @@ public static class ResultStore
         if (!string.Equals(parent, Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException($"{dir} is not directly under the results directory {root}");
         using (ReadMeta(dir)) { } // throws unless it is a CodeDiffer result
-        Directory.Delete(dir, recursive: true);
+        DeleteContents(new DirectoryInfo(dir), keep: MetaName);
+        var meta = new FileInfo(Path.Combine(dir, MetaName));
+        if (meta.Exists)
+        {
+            meta.Attributes &= ~FileAttributes.ReadOnly;
+            meta.Delete();
+        }
+        Directory.Delete(dir);
+    }
+
+    private static void DeleteContents(DirectoryInfo d, string? keep)
+    {
+        foreach (var e in d.EnumerateFileSystemInfos())
+        {
+            if (keep is not null && string.Equals(e.Name, keep, StringComparison.OrdinalIgnoreCase)) continue;
+            if (e.Attributes.HasFlag(FileAttributes.ReadOnly)) e.Attributes &= ~FileAttributes.ReadOnly;
+            if (e is DirectoryInfo sub && !sub.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                DeleteContents(sub, null);
+                sub.Delete();
+            }
+            else e.Delete(); // a file, or a junction/symlink (the link itself)
+        }
     }
 
     /// <summary>Reopen a finished compare. Throws <see cref="InvalidDataException"/> if it is not a finished
@@ -481,8 +518,11 @@ public static class ResultStore
     internal static bool IsUnder(string path, string tree)
     {
         var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var p = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)) + Path.DirectorySeparatorChar;
-        var t = Path.TrimEndingDirectorySeparator(Path.GetFullPath(tree)) + Path.DirectorySeparatorChar;
-        return p.StartsWith(t, cmp);
+        static string Dir(string d) // a drive root (C:\) keeps its separator when trimmed: add one only if missing
+        {
+            d = Path.TrimEndingDirectorySeparator(Path.GetFullPath(d));
+            return Path.EndsInDirectorySeparator(d) ? d : d + Path.DirectorySeparatorChar;
+        }
+        return Dir(path).StartsWith(Dir(tree), cmp);
     }
 }

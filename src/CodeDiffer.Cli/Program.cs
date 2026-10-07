@@ -227,6 +227,15 @@ static int Results(string[] args)
 /// <summary>results --prune [--keep N] [--older-than DAYS] [--yes]: delete all but the newest N saved compares.</summary>
 static int Prune(string[] args)
 {
+    // Strict: this deletes, so a misspelled or valueless flag is an error, never a silently wider prune.
+    for (int i = 1; i < args.Length; i++)
+    {
+        if (args[i] is "--prune" or "--yes") continue;
+        if (args[i] is "--keep" or "--older-than" && i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal)) { i++; continue; }
+        Console.Error.WriteLine($"error: {(args[i] is "--keep" or "--older-than" ? $"{args[i]} needs a value" : $"unknown argument '{args[i]}'")}");
+        Console.Error.WriteLine("usage: codediffer results --prune [--keep N] [--older-than DAYS] [--yes]");
+        return 64;
+    }
     int keep = 20;
     if (FlagValue(args, "--keep", from: 1) is { } k && (!int.TryParse(k, out keep) || keep < 0))
     {
@@ -236,42 +245,46 @@ static int Prune(string[] args)
     TimeSpan? olderThan = null;
     if (FlagValue(args, "--older-than", from: 1) is { } d)
     {
-        if (!double.TryParse(d, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var days) || days < 0)
+        if (!double.TryParse(d, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var days)
+            || !double.IsFinite(days) || days < 0 || days > 36500)
         {
-            Console.Error.WriteLine("error: --older-than needs a number of days");
+            Console.Error.WriteLine("error: --older-than needs a number of days (0 to 36500)");
             return 64;
         }
         olderThan = TimeSpan.FromDays(days);
     }
     bool yes = args.Contains("--yes");
-    var root = ResultStore.DefaultRoot;
+    var root = Path.GetFullPath(ResultStore.DefaultRoot);
     var doomed = ResultStore.PruneCandidates(root, keep, olderThan, DateTime.UtcNow);
-    var rule = $"all but the newest {keep}" + (olderThan is { } o ? $", started over {o.TotalDays:0.#} day(s) ago" : "");
+    var rule = $"all but the newest {keep}" + (olderThan is { } o ? $", started over {o.TotalDays:0.###} day(s) ago" : "");
     if (doomed.Count == 0)
     {
         Console.WriteLine($"nothing to prune in {root} ({rule})");
         return 0;
     }
-    long total = 0;
+    long total = 0, freed = 0;
     int deleted = 0;
     Console.WriteLine($"{(yes ? "deleting" : "would delete")} {doomed.Count} saved compare(s) in {root} ({rule}):");
     foreach (var c in doomed)
     {
         long size = ResultStore.SizeOf(c.Dir);
-        total += size;
-        Console.WriteLine($"  {c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.State,-9} {AgentViews.Bytes(size),9}  {Path.GetFileName(c.Dir)}");
+        total += Math.Max(0, size);
+        Console.WriteLine($"  {c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.State,-9} {(size < 0 ? "?" : AgentViews.Bytes(size)),9}  {Path.GetFileName(c.Dir)}");
         if (!yes) continue;
         try
         {
             ResultStore.Delete(root, c);
             deleted++;
+            freed += Math.Max(0, size);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException
+                                       or System.Text.Json.JsonException or FormatException)
         {
             Console.Error.WriteLine($"    not deleted: {ex.Message}");
         }
     }
-    Console.WriteLine(yes ? $"deleted {deleted} of {doomed.Count} ({AgentViews.Bytes(total)})"
+    Console.WriteLine(yes ? $"deleted {deleted} of {doomed.Count} ({AgentViews.Bytes(freed)} freed" +
+                            (deleted < doomed.Count ? $"; {AgentViews.Bytes(total - freed)} left, prune again to retry)" : ")")
                           : $"{AgentViews.Bytes(total)} in all; run again with --yes to delete them");
     return deleted == doomed.Count || !yes ? 0 : 1;
 }
@@ -591,8 +604,13 @@ static int Compare3(string[] args)
     }
     var options = new CompareOptions { Parallelism = threads, Cache = args.Contains("--no-cache") ? CacheMode.Off : CacheMode.On };
     var store = new SessionStore(save: !args.Contains("--no-save"));
+    var outDir = FlagValue(args, "--merge-out", from: 4);
     Compare3Session s;
-    try { s = store.Start3(args[1], args[2], args[3], options); }
+    try
+    {
+        if (outDir is not null) MergeOverlay.CheckDir(outDir, args[1], args[2], args[3]); // before a compare that may take an hour
+        s = store.Start3(args[1], args[2], args[3], options);
+    }
     catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException or IOException or UnauthorizedAccessException)
     {
         Console.Error.WriteLine($"error: {ex.Message}");
@@ -615,20 +633,31 @@ static int Compare3(string[] args)
         if (all || e.Outcome is not (Merge3Outcome.V1Only or Merge3Outcome.V2Only))
             Console.WriteLine("  " + ThreeWayViews.Line(e));
     Console.Write(ThreeWayViews.Stats(s));
+    int? failed = null;
     if (args.Contains("--html"))
     {
         if (s.ResultDir is null || s.SaveError is not null) Console.Error.WriteLine("note: --html needs a saved result; drop --no-save");
-        else if (WriteHtml(s, args, Console.Out) is { } bad) return bad;
+        else failed = WriteHtml(s, args, Console.Out);
     }
-    if (FlagValue(args, "--merge-out", from: 4) is { } outDir)
+    if (outDir is not null)
     {
-        try { Console.Write(ThreeWayViews.OverlayText(MergeOverlay.Write(r, s.Base, s.V1, s.V2, outDir, threads))); }
+        try
+        {
+            var o = MergeOverlay.Write(r, s.Base, s.V1, s.V2, outDir, threads);
+            Console.Write(ThreeWayViews.OverlayText(o));
+            if (o.Failed > 0)
+            {
+                Console.Error.WriteLine($"error: merge overlay: {o.Failed:N0} file(s) could not be written (listed in conflicts.txt)");
+                failed = 2;
+            }
+        }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
             Console.Error.WriteLine($"error: merge overlay: {ex.Message}");
-            return 2;
+            failed = 2;
         }
     }
+    if (failed is { } code) return code;
     if (r.DroppedDirectories > 0) return 3;
     return r.Count(Merge3Outcome.Conflict) > 0 ? 1 : 0;
 }
@@ -716,8 +745,9 @@ static void PrintUsage()
                               [--merge-out DIR]
                                        3-way: v1 only | v2 only | agreed | merged | conflict
                                        --merge-out writes the merge as an overlay on v1 (new or
-                                       empty DIR): files\ to copy over v1 (text conflicts with
-                                       diff3 markers), deletes.txt, conflicts.txt, OVERLAY.txt.
+                                       empty DIR): deletes.txt to apply to v1 first, then files\
+                                       to copy over it (text conflicts with diff3 markers),
+                                       conflicts.txt, OVERLAY.txt.
           codediffer report <id|result-dir> [--large] [--include-identical] [--max-diffs N] [--out DIR]
                                        HTML report of a saved compare: folder tree, filters,
                                        each file's diff loaded on expand; opens from disk.
