@@ -239,6 +239,118 @@ public sealed class MergeOverlayTests : IDisposable
         Assert.Equal("large", both.ConflictKind);
     }
 
+    // ---- apply-overlay ----
+
+    private string Overlay()
+    {
+        var outDir = Path.Combine(_dir, "overlay");
+        MergeOverlay.Write(TreeMerger.Run(_b, _v1, _v2, NoCache), _b, _v1, _v2, outDir);
+        return outDir;
+    }
+
+    private string CopyOfV1()
+    {
+        var t = Path.Combine(_dir, "T-" + Guid.NewGuid().ToString("N")[..6]);
+        CopyTree(_v1, t);
+        return t;
+    }
+
+    /// <summary>Every file, by exact (case-sensitive) relative name, with its bytes.</summary>
+    private static Dictionary<string, string> Tree(string root) =>
+        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .ToDictionary(f => Path.GetRelativePath(root, f).Replace('\\', '/'), f => Convert.ToHexString(File.ReadAllBytes(f)));
+
+    [Fact]
+    public void ApplyOverlay_GivesWhatTheManualStepsGive_AndADryRunChangesNothing()
+    {
+        Move(_v2, "same.c", "SAME.c.tmp"); // a case-only rename and a file turned directory ride along
+        File.Move(Path.Combine(_v2, "SAME.c.tmp"), Path.Combine(_v2, "Same.c"));
+        File.Delete(Path.Combine(_v2, "v2only.c"));
+        Put("V2/v2only.c/inner.c", "now a directory\n");
+        var outDir = Overlay();
+        var t = CopyOfV1();
+
+        var dry = OverlayApplier.Run(outDir, t, write: false);
+        Assert.Equal(Tree(_v1), Tree(t));
+        Assert.Contains("old/moved.c", dry.Deletes);
+        Assert.Contains("nothing was changed", OverlayApplier.Text(dry));
+
+        var r = OverlayApplier.Run(outDir, t, write: true);
+        Assert.Empty(r.Failed);
+        Assert.Equal(Tree(Apply(outDir)), Tree(t));
+        Assert.False(Directory.Exists(Path.Combine(t, "old"))); // emptied by the deletes: removed
+        Assert.Contains(t, File.ReadAllText(Path.Combine(outDir, OverlayApplier.AppliedName)));
+        Assert.False(File.Exists(Path.Combine(outDir, OverlayApplier.ApplyingName)));
+        Assert.Contains("written for v1", OverlayApplier.Text(r)); // a copy, not v1 itself
+    }
+
+    [Fact]
+    public void ApplyOverlay_Stopped_FinishesOnTheNextRun()
+    {
+        for (int i = 0; i < 12; i++) Put($"V2/many/m{i:00}.c", $"new {i}\n");
+        var outDir = Overlay();
+        var t = CopyOfV1();
+        using var stop = new CancellationTokenSource();
+        var r = OverlayApplier.Run(outDir, t, write: true, parallelism: 1, ct: stop.Token,
+            progress: new CodeDiffer.Core.Port.PortProgress { AfterFile = n => { if (n == 6) stop.Cancel(); } });
+        Assert.True(r.Cancelled);
+        Assert.True(r.NotReached > 0);
+        Assert.Contains("run the same apply-overlay again", OverlayApplier.Text(r));
+        Assert.True(File.Exists(Path.Combine(outDir, OverlayApplier.ApplyingName)));
+        Assert.False(File.Exists(Path.Combine(outDir, OverlayApplier.AppliedName)));
+        Assert.Empty(Directory.EnumerateFiles(t, "*.codediffer.tmp", SearchOption.AllDirectories));
+
+        var again = OverlayApplier.Run(outDir, t, write: true); // not refused: the first never finished
+        Assert.False(again.Cancelled);
+        Assert.True(again.AlreadyThere > 0);
+        Assert.Equal(Tree(Apply(outDir)), Tree(t));
+    }
+
+    [Fact]
+    public void ApplyOverlay_Twice_IsRefusedUnlessAgain()
+    {
+        var outDir = Overlay();
+        var t = CopyOfV1();
+        OverlayApplier.Run(outDir, t, write: true);
+        File.WriteAllText(Path.Combine(t, "clash.c"), "resolved by hand\n");
+        Assert.Contains("already applied", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(outDir, t, write: true)).Message);
+        Assert.Equal("resolved by hand\n", Read(t, "clash.c"));
+        OverlayApplier.Run(outDir, t, write: false); // a dry run is always allowed
+        OverlayApplier.Run(outDir, t, write: true, again: true);
+        Assert.Contains("<<<<<<< v1", Read(t, "clash.c"));
+    }
+
+    [Fact]
+    public void ApplyOverlay_RefusesAnUnfinishedOverlay_ABadDeletesLine_AndATargetInside()
+    {
+        var outDir = Overlay();
+        var t = CopyOfV1();
+        File.WriteAllText(Path.Combine(outDir, "INCOMPLETE.txt"), "");
+        Assert.Contains("not finished", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(outDir, t, write: true)).Message);
+        File.Delete(Path.Combine(outDir, "INCOMPLETE.txt"));
+
+        File.AppendAllText(Path.Combine(outDir, "deletes.txt"), "../outside.c\n");
+        var before = Tree(t);
+        Assert.Contains("not a plain relative path", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(outDir, t, write: true)).Message);
+        Assert.Equal(before, Tree(t)); // refused before touching anything
+
+        Assert.Contains("inside each other", Assert.Throws<ArgumentException>(
+            () => OverlayApplier.Run(outDir, Path.Combine(outDir, "files"), write: false)).Message);
+        Assert.Contains("not a merge overlay", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(t, outDir, write: false)).Message);
+    }
+
+    [Fact]
+    public void ApplyOverlay_NeverDeletesADirectory()
+    {
+        var outDir = Overlay();
+        var t = CopyOfV1();
+        File.Delete(Path.Combine(t, "gone.c"));
+        Put(Path.GetRelativePath(_dir, Path.Combine(t, "gone.c", "keep.c")), "mine\n"); // the target has a directory there
+        var r = OverlayApplier.Run(outDir, t, write: true);
+        Assert.Contains(r.Failed, f => f.Path == "gone.c" && f.Why.Contains("directory"));
+        Assert.Equal("mine\n", Read(t, "gone.c/keep.c"));
+    }
+
     [Fact]
     public void IsUnder_HandlesADriveRoot()
     {

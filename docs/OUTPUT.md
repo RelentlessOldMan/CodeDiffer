@@ -141,6 +141,16 @@ merge is checked against the compare as it is written: a file whose merge change
 between) is listed as not written instead. `INCOMPLETE.txt` is present until the overlay is finished.
 Unlike `apply --write` (which skips any file with a conflict), conflicts land in the overlay with markers.
 
+`codediffer apply-overlay <overlay-dir> <target> [--write] [--again]` does those steps (on v1, or better a copy
+of it): the deletes, then `files\`, then the directories the deletes left empty. Dry run unless `--write`.
+Before touching anything it refuses an unfinished overlay (`INCOMPLETE.txt`), a `deletes.txt` line that is not
+a plain path inside the target, and a target and overlay inside each other; it deletes files only, never a
+directory in a listed path's place. Like `apply`, Ctrl+C stops between files, each is written whole (temp +
+rename), and running it again finishes the job (a path already deleted, or already holding the overlay's
+bytes, comes out "already"). The overlay holds `APPLYING.txt` while it runs and `APPLIED.txt` (target, time)
+once done; a second apply to the same target is refused unless `--again`, since it would overwrite conflicts
+resolved since. On death the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
+
 Full-scale check (2026-10-05, CodeSpawner `death` 1.0.9 base / v1 / v2 on `\\IRISH\TestHole`, 68,661 base
 files, `--threads 4`, warm hash cache): `compare3` in 3:59 (base→v1 124 s, base→v2 109 s, merge 5 s; 0 bytes
 re-hashed), 1,723 touched paths → 369 v1 only · 162 v2 only · 251 merged · 941 conflict, 11,371 conflict

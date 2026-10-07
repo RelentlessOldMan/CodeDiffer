@@ -52,7 +52,8 @@ Windows x64 zip (no .NET needed; `INSTALL.txt` inside); `release.ps1` builds it 
 
 - **`CodeDiffer.Cli.exe`** — `compare <left> <right>` (status + reason per file; `--patch` for a
   `git apply`-able patch), `compare3 <base> <v1> <v2>` (3-way: v1 only · v2 only · agreed · merged ·
-  conflict), `apply <left> <right> <target> [--write]` (port a change set onto a third tree), `diff <a> <b>`,
+  conflict; `--merge-out DIR` writes the merge as an overlay on v1), `apply-overlay <dir> <target> [--write]`
+  (apply that overlay), `apply <left> <right> <target> [--write]` (port a change set onto a third tree), `diff <a> <b>`,
   `blockdiff`, `verify`, `report <id>` (HTML report of a saved compare; or `--html` on `compare`/`compare3`),
   `results` (saved compares; `--prune` deletes all but the newest N, a dry run unless `--yes`). `help` lists the flags.
 - **`CodeDiffer.Mcp.exe`** — the stdio MCP server for agents. Publish it outside the build tree (a running

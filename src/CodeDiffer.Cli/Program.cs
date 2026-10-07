@@ -28,6 +28,8 @@ static int Run(string[] args)
             return DiffFiles(args);
         case "apply":
             return Apply(args);
+        case "apply-overlay":
+            return ApplyOverlay(args);
         case "compare3":
             return Compare3(args);
         case "verify":
@@ -593,6 +595,42 @@ static int Apply(string[] args)
     return result.Cancelled ? 130 : result.Count(PortStatus.Conflict) > 0 ? 1 : 0;
 }
 
+/// <summary>apply-overlay: apply a compare3 --merge-out overlay to v1 (dry run unless --write). Exit 1 when a file failed.</summary>
+static int ApplyOverlay(string[] args)
+{
+    bool bad = args.Length < 3 || args[1].StartsWith("--") || args[2].StartsWith("--");
+    for (int i = 3; i < args.Length && !bad; i++)
+        if (args[i] == "--threads") i++; // its value is checked below
+        else bad = args[i] is not ("--write" or "--again");
+    if (bad)
+    {
+        Console.Error.WriteLine("usage: codediffer apply-overlay <overlay-dir> <target> [--write] [--again] [--threads N]");
+        return 64;
+    }
+    int threads = new CompareOptions().Parallelism;
+    if (FlagValue(args, "--threads", from: 3) is { } t && (!int.TryParse(t, out threads) || threads < 1))
+    {
+        Console.Error.WriteLine("error: --threads needs a positive integer");
+        return 64;
+    }
+    bool write = args.Contains("--write");
+    var progress = new PortProgress();
+    using var stop = new CancellationTokenSource();
+    OverlayApplyResult r;
+    try
+    {
+        r = WithProgress(() => OverlayApplier.Run(args[1], args[2], write, args.Contains("--again"), threads, stop.Token, progress),
+            () => $"{(write ? "applying" : "checking")}: {progress.Done:N0} / {progress.Total:N0}", stop.Cancel);
+    }
+    catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException or IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 2;
+    }
+    Console.Write(OverlayApplier.Text(r));
+    return r.Cancelled ? 130 : r.Failed.Count > 0 ? 1 : 0;
+}
+
 /// <summary>compare3: base vs v1 vs v2. Exit 1 when anything conflicts, 3 on an incomplete walk.</summary>
 static int Compare3(string[] args)
 {
@@ -770,6 +808,13 @@ static void PrintUsage()
                                        Dry run unless --write (conflicted files untouched).
                                        Ctrl+C during --write stops between files; run it
                                        again to finish (done files come out "already").
+          codediffer apply-overlay <overlay-dir> <target> [--write] [--again]
+                                       apply a compare3 --merge-out overlay to v1 (or a copy):
+                                       deletes.txt, then files\, then the directories the
+                                       deletes emptied. Dry run unless --write; Ctrl+C stops
+                                       between files, run again to finish. Refuses a second
+                                       apply to the same target unless --again (it would
+                                       overwrite conflicts resolved since).
           codediffer blockdiff <a> <b>         content-defined block diff of two large files
                                                (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]

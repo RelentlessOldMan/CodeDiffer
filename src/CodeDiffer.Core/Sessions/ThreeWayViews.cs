@@ -50,7 +50,8 @@ public static class ThreeWayViews
            $"  conflicts.txt {o.Markers:N0} with markers · {o.Unresolved - o.Failed:N0} not merged (v1's version stays until decided)\n" +
            (o.Failed > 0 ? $"  FAILED: {o.Failed:N0} file(s) could not be written (see conflicts.txt; v1's version stays)\n" : "") +
            (o.DroppedDirectories > 0 ? $"  INCOMPLETE: {o.DroppedDirectories:N0} director(ies) could not be read; changes under them are missing\n" : "") +
-           "  apply: delete the paths in deletes.txt from v1, then copy files\\ over v1 (OVERLAY.txt says the same)\n";
+           "  apply: delete the paths in deletes.txt from v1, then copy files\\ over v1 (OVERLAY.txt says the same),\n" +
+           $"         or: codediffer apply-overlay \"{o.Dir}\" <v1 or a copy of it> [--write]\n";
 
     public static string Stats(Compare3Session s)
     {

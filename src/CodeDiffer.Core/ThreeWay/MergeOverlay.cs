@@ -173,6 +173,8 @@ public static class MergeOverlay
               1. delete the v1 paths listed in deletes.txt (one per line, relative to v1, '/' separated, UTF-8);
               2. copy files\ over v1;
               3. optionally remove directories the deletes left empty.
+            Or let CodeDiffer do all three (dry run first; safe to stop and run again):
+              codediffer apply-overlay "{dir}" <v1 or a copy of it> --write
             Paths only v1 changed need nothing (v1 already has them).
 
               files\       {result.FromV2:N0} from v2 (only v2 changed them) · {result.Merged:N0} merged cleanly · {result.Markers:N0} with conflict markers · {result.Moved:N0} moved by v2's rename ({Bytes(bytes)})
