@@ -14,7 +14,10 @@ public static class ConflictManifestParser
 {
     public static ConflictManifest ParseFile(string path) => Parse(File.ReadAllText(path));
 
-    public static ConflictManifest Parse(string json)
+    /// <exception cref="FormatException">The JSON is not a conflict manifest (a field missing or of the wrong kind).</exception>
+    public static ConflictManifest Parse(string json) => Malformed(() => ParseCore(json), "conflict manifest");
+
+    private static ConflictManifest ParseCore(string json)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -32,24 +35,41 @@ public static class ConflictManifestParser
                 var v1 = c.GetProperty("v1");
                 var v2 = c.GetProperty("v2");
                 conflicts.Add(new Conflict(
-                    c.GetProperty("path").GetString()!,
+                    Req(c, "path"),
                     c.GetProperty("baseStart").GetInt32(),
                     c.GetProperty("baseLines").GetInt32(),
-                    CanonicalTokens.Op(v1.GetProperty("op").GetString()!), v1.GetProperty("newStart").GetInt32(), v1.GetProperty("newLines").GetInt32(),
-                    CanonicalTokens.Op(v2.GetProperty("op").GetString()!), v2.GetProperty("newStart").GetInt32(), v2.GetProperty("newLines").GetInt32()));
+                    CanonicalTokens.Op(Req(v1, "op")), v1.GetProperty("newStart").GetInt32(), v1.GetProperty("newLines").GetInt32(),
+                    CanonicalTokens.Op(Req(v2, "op")), v2.GetProperty("newStart").GetInt32(), v2.GetProperty("newLines").GetInt32()));
             }
 
         var clean = new List<CleanMerge>();
         if (root.TryGetProperty("mergedClean", out var ms) && ms.ValueKind == JsonValueKind.Array)
             foreach (var m in ms.EnumerateArray())
                 clean.Add(new CleanMerge(
-                    m.GetProperty("path").GetString()!,
-                    m.GetProperty("side").GetString()!,
-                    CanonicalTokens.Op(m.GetProperty("op").GetString()!),
+                    Req(m, "path"),
+                    Req(m, "side"),
+                    CanonicalTokens.Op(Req(m, "op")),
                     m.GetProperty("oldStart").GetInt32(), m.GetProperty("oldLines").GetInt32(),
                     m.GetProperty("newStart").GetInt32(), m.GetProperty("newLines").GetInt32()));
 
         return new ConflictManifest(version, v1Tree, v2Tree, conflicts, clean, sha);
+    }
+
+    /// <summary>A required string property; anything else is a malformed manifest (<see cref="FormatException"/>).</summary>
+    private static string Req(JsonElement obj, string name)
+        => obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString()!
+            : throw new FormatException($"'{name}' must be a string");
+
+    /// <summary>A missing property or a value of the wrong kind is a malformed manifest, never a crash.</summary>
+    private static T Malformed<T>(Func<T> parse, string what)
+    {
+        try { return parse(); }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or ArgumentException)
+        {
+            // GetProperty's KeyNotFoundException doesn't say which: the manifest is still plainly not one.
+            throw new FormatException($"not a valid {what}: {(ex is KeyNotFoundException ? "a required field is missing" : ex.Message)}", ex);
+        }
     }
 
     private static string? Str(JsonElement obj, string name)

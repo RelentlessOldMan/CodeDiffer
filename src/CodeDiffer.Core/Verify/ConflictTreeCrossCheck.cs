@@ -1,8 +1,26 @@
 using CodeDiffer.Core.Diff;
 using CodeDiffer.Core.DiffTruth;
 using CodeDiffer.Core.Model;
+using CodeDiffer.Core.ThreeWay;
 
 namespace CodeDiffer.Core.Verify;
+
+/// <summary>
+/// Gate 3: what <c>compare3</c> itself (<see cref="TreeMerger"/>, over the whole trees, lines with their endings) says
+/// against the manifest. <see cref="ConflictOnlyInCompare3"/> / <see cref="ConflictOnlyInManifest"/>: files compare3
+/// conflicts in at the same path in all three trees that the manifest doesn't, and the reverse. <see cref="Unchanged"/>:
+/// manifest files compare3 found no change in.
+/// </summary>
+public sealed record Compare3CrossCheck(
+    int Entries,
+    int Conflicts,
+    IReadOnlyList<string> ConflictOnlyInCompare3,
+    IReadOnlyList<string> ConflictOnlyInManifest,
+    IReadOnlyList<string> Unchanged,
+    int Unread)
+{
+    public bool Ok => ConflictOnlyInCompare3.Count == 0 && ConflictOnlyInManifest.Count == 0 && Unchanged.Count == 0 && Unread == 0;
+}
 
 /// <summary>Per-file reconstruction outcome (manifest's own per-side coords rebuild each variant).</summary>
 public sealed record FileMergeCheck(string Path, bool V1Reconstructs, bool V2Reconstructs);
@@ -58,6 +76,28 @@ public sealed record ConflictCrossCheckResult(
 /// </summary>
 public static class ConflictTreeCrossCheck
 {
+    /// <summary>
+    /// Gate 3: the files compare3 conflicts in must be exactly the manifest's. Gates 1 and 2 check the manifest's files
+    /// with the contract's line metric (no line endings); this one checks the verdicts a user gets, everywhere: a
+    /// difference only in a final newline, or a conflict in a file the manifest never mentions, fails here.
+    /// </summary>
+    public static Compare3CrossCheck Compare3(ThreeWayReport report, ConflictManifest manifest)
+    {
+        // A line merge happens where both sides modified the file in place; renames, adds and deletes are file
+        // operations the conflict manifest doesn't describe.
+        static bool InPlace(Merge3Entry e) => e.V1 is { Status: ChangeStatus.Modified } && e.V2 is { Status: ChangeStatus.Modified };
+        var mine = report.Entries.Where(e => e.Outcome == Merge3Outcome.Conflict && InPlace(e)).Select(e => e.Path).ToHashSet(StringComparer.Ordinal);
+        var theirs = manifest.Conflicts.Select(c => c.Path).ToHashSet(StringComparer.Ordinal);
+        var touched = report.Entries.Select(e => e.Path).ToHashSet(StringComparer.Ordinal);
+        var named = manifest.Conflicts.Select(c => c.Path).Concat(manifest.CleanMerges.Select(m => m.Path)).ToHashSet(StringComparer.Ordinal);
+        return new Compare3CrossCheck(
+            report.Entries.Count, report.Count(Merge3Outcome.Conflict),
+            mine.Except(theirs).Order(StringComparer.Ordinal).ToList(),
+            theirs.Except(mine).Order(StringComparer.Ordinal).ToList(),
+            named.Except(touched).Order(StringComparer.Ordinal).ToList(),
+            report.UnreadableFiles + report.DroppedDirectories);
+    }
+
     public static ConflictCrossCheckResult Run(
         string baseDir, string v1Dir, string v2Dir, ConflictManifest manifest)
     {
@@ -78,9 +118,14 @@ public static class ConflictTreeCrossCheck
             var v2Path = Path.Combine(v2Dir, rel);
             if (!File.Exists(bPath) || !File.Exists(v1Path) || !File.Exists(v2Path)) continue;
 
-            var b = LineText.SplitLines(File.ReadAllText(bPath));
-            var v1 = LineText.SplitLines(File.ReadAllText(v1Path));
-            var v2 = LineText.SplitLines(File.ReadAllText(v2Path));
+            string[] b, v1, v2;
+            try
+            {
+                b = LineText.SplitLines(File.ReadAllText(bPath));
+                v1 = LineText.SplitLines(File.ReadAllText(v1Path));
+                v2 = LineText.SplitLines(File.ReadAllText(v2Path));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; } // fails reconstruction below
             trees[path] = (b, v1, v2);
 
             var r = ThreeWayMerger.Merge(path, b, v1, v2);
@@ -144,7 +189,7 @@ public static class ConflictTreeCrossCheck
     {
         if (hunks is null) return true; // no recorded change on this side ⇒ variant equals base there
         var sorted = hunks.OrderBy(h => h.OldStart).ThenBy(h => h.NewStart).ToList();
-        return HunkApplier.Reconstruct(baseLines, variantLines, sorted).SequenceEqual(variantLines);
+        return HunkApplier.Rebuilds(baseLines, variantLines, sorted);
     }
 
     /// <summary>
@@ -186,7 +231,7 @@ public static class ConflictTreeCrossCheck
         }
 
         var sorted = v2Hunks.OrderBy(h => h.OldStart).ThenBy(h => h.NewStart).ToList();
-        return HunkApplier.Reconstruct(baseLines, v2Lines, sorted).SequenceEqual(v2Lines);
+        return HunkApplier.Rebuilds(baseLines, v2Lines, sorted);
     }
 
     private static bool SeqEqual(

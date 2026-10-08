@@ -6,8 +6,9 @@ namespace CodeDiffer.Core.Verify;
 /// <summary>Per-file cross-check outcome.</summary>
 /// <param name="Reconstructs">The manifest's hunks (and CodeDiffer's own) rebuild the variant from the base — the correctness gate.</param>
 /// <param name="ExactMatch">CodeDiffer's hunks are coordinate-identical to the manifest's (a bonus; only guaranteed when the diff is unambiguous).</param>
+/// <param name="Problem">Why the file could not be checked (missing, unreadable), or null.</param>
 public sealed record FileHunkCheck(
-    string Path, string Reason, bool Checked, bool Reconstructs, bool ExactMatch, int ExpectedHunks, int ActualHunks);
+    string Path, string Reason, bool Checked, bool Reconstructs, bool ExactMatch, int ExpectedHunks, int ActualHunks, string? Problem = null);
 
 public sealed record TreeCrossCheckResult(IReadOnlyList<FileHunkCheck> Files)
 {
@@ -48,8 +49,17 @@ public static class DeltaTreeCrossCheck
             }
 
             var relative = f.Path.Replace('/', Path.DirectorySeparatorChar);
-            var baseLines = LineText.SplitLines(File.ReadAllText(Path.Combine(baseDir, relative)));
-            var variantLines = LineText.SplitLines(File.ReadAllText(Path.Combine(variantDir, relative)));
+            string[] baseLines, variantLines;
+            try
+            {
+                baseLines = LineText.SplitLines(File.ReadAllText(Path.Combine(baseDir, relative)));
+                variantLines = LineText.SplitLines(File.ReadAllText(Path.Combine(variantDir, relative)));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                results.Add(new FileHunkCheck(f.Path, reason, Checked: true, Reconstructs: false, ExactMatch: false, f.Hunks.Count, 0, ex.Message));
+                continue;
+            }
 
             var mine = LineDiffer.Diff(baseLines, variantLines);
 
@@ -68,7 +78,7 @@ public static class DeltaTreeCrossCheck
     }
 
     private static bool Reconstructs(IReadOnlyList<string> baseLines, IReadOnlyList<string> variantLines, IReadOnlyList<Hunk> hunks)
-        => HunkApplier.Reconstruct(baseLines, variantLines, hunks).SequenceEqual(variantLines);
+        => HunkApplier.Rebuilds(baseLines, variantLines, hunks);
 
     private static bool HunksEqual(IReadOnlyList<Hunk> mine, IReadOnlyList<Hunk> expected)
     {

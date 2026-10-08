@@ -25,6 +25,14 @@ public static class DeltaVerifier
                 $"unsupported manifestVersion {manifest.ManifestVersion} (CodeDiffer supports {SupportedManifestVersion})");
     }
 
+    /// <summary>The same for a 3-way conflict artifact.</summary>
+    public static void AssertSupportedVersion(ConflictManifest manifest)
+    {
+        if (manifest.ManifestVersion != SupportedManifestVersion)
+            throw new NotSupportedException(
+                $"unsupported manifestVersion {manifest.ManifestVersion} (CodeDiffer supports {SupportedManifestVersion})");
+    }
+
     /// <summary>Recompute diffTruthSha and compare to the stated value. Ok iff they match (both present).</summary>
     public static DigestVerification VerifyDigest(DeltaManifest manifest)
     {
@@ -37,10 +45,7 @@ public static class DeltaVerifier
     /// <summary>Recompute conflictTruthSha for a 3-way artifact and compare to the stated value.</summary>
     public static DigestVerification VerifyConflictDigest(ConflictManifest manifest)
     {
-        if (manifest.ManifestVersion != SupportedManifestVersion)
-            throw new NotSupportedException(
-                $"unsupported manifestVersion {manifest.ManifestVersion} (CodeDiffer supports {SupportedManifestVersion})");
-
+        AssertSupportedVersion(manifest);
         var recomputed = ConflictDigest.Compute(manifest);
         var ok = manifest.ConflictTruthSha is not null
                  && string.Equals(recomputed, manifest.ConflictTruthSha, StringComparison.Ordinal);

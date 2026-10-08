@@ -70,36 +70,39 @@ static int Compare(string[] args)
     }
     var cache = args.Contains("--no-cache") ? CacheMode.Off : args.Contains("--rehash") ? CacheMode.Rehash : CacheMode.On;
     var options = new CompareOptions { Parallelism = threads, Cache = cache, StrictStat = !args.Contains("--fast-stat") };
+    // Every option is checked before a compare that may take an hour, not after it.
+    bool patch = args.Contains("--patch");
+    PatchOptions popt = new();
+    if (patch && !TryPatchOptions(args, out popt)) return 64;
+    if (args.Contains("--html") && !MaxDiffsOk(args, out _)) return 64;
 
-    CompareReport report;
-    var started = DateTime.UtcNow;
-    var sw = System.Diagnostics.Stopwatch.StartNew();
-    var progress = new CompareProgress();
-    using var stop = new CancellationTokenSource();
-    try
-    {
-        report = WithProgress(() => new DirectoryComparer(options).Compare(args[1], args[2], progress, ct: stop.Token),
-            () => ProgressView.Line(progress), stop.Cancel);
-    }
-    catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
+    // Run as a session, like compare3 and the MCP server: the result directory says "running" while it runs (a crash
+    // leaves an honest trace), and "cancelled" or "failed" if it doesn't finish.
+    CompareSession session;
+    try { session = new SessionStore(save: !args.Contains("--no-save")).Start(args[1], args[2], options); }
+    catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException or IOException or UnauthorizedAccessException)
     {
         // Honesty contract: a bad input is a loud error, never a silent all-added/all-deleted "success".
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
     }
-    catch (OperationCanceledException) { return Cancelled(sw.Elapsed, options.Cache); }
-    var compareTime = sw.Elapsed;
+    WithProgress(() => session.Wait(Timeout.InfiniteTimeSpan), () => ProgressView.Line(session.Progress!), () => session.Cancel());
+    if (session.Cancelled) return Cancelled(session.Elapsed, options.Cache);
+    if (session.Error is { } err)
+    {
+        Console.Error.WriteLine($"error: {err}");
+        return 2;
+    }
+    var report = session.Report!;
 
     if (args.Contains("--timings"))
         foreach (var (phase, elapsed) in report.Timings)
             Console.Error.WriteLine($"  timing     {phase,-28} {elapsed.TotalMilliseconds,9:N0} ms");
 
     // --patch: the patch goes to stdout (pipe it to a file or `git apply`), the summary to stderr.
-    bool patch = args.Contains("--patch");
     var info = patch ? Console.Error : Console.Out;
     if (patch)
     {
-        if (!TryPatchOptions(args, out var popt)) return 64;
         using var stdout = PatchStdout();
         var ps = PatchWriter.Write(stdout, report, args[1], args[2], popt);
         stdout.Flush();
@@ -111,7 +114,7 @@ static int Compare(string[] args)
     }
 
     PrintSummary(info, args[1], args[2], report);
-    info.WriteLine($"  elapsed    {sw.Elapsed.ToString(@"hh\:mm\:ss")}  (threads {options.Parallelism}, cache {cache.ToString().ToLowerInvariant()})");
+    info.WriteLine($"  elapsed    {session.Elapsed.ToString(@"hh\:mm\:ss")}  (threads {options.Parallelism}, cache {cache.ToString().ToLowerInvariant()})");
     info.WriteLine($"  content    {report.ComparedPairs} same-size pair(s) · {report.CacheHits} side(s) from hash cache" +
         (report.CodeCompassHits > 0 ? $" ({report.CodeCompassHits} via CodeCompass)" : "") +
         $" · {report.BytesRead / (1024.0 * 1024 * 1024):F1} GB read" +
@@ -119,18 +122,10 @@ static int Compare(string[] args)
     foreach (var n in AgentViews.Notes(report)) Console.Error.WriteLine("note: " + n);
 
     int? htmlCode = null; // a failed or stopped report: its exit code, but only after the warnings below
-    if (!args.Contains("--no-save"))
+    if (session.ResultDir is not null)
     {
-        try
-        {
-            var session = new SessionStore().Adopt(args[1], args[2], options, report, started, compareTime);
-            info.WriteLine(session.SaveError is { } se ? $"  saved      NOT saved: {se}" : $"  saved      {session.ResultDir}  (id {session.Id})");
-            if (args.Contains("--html") && session.SaveError is null) htmlCode = WriteHtml(session, args, info);
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
-        {
-            Console.Error.WriteLine($"note: result not saved: {ex.Message}");
-        }
+        info.WriteLine(session.SaveError is { } se ? $"  saved      NOT saved: {se}" : $"  saved      {session.ResultDir}  (id {session.Id})");
+        if (args.Contains("--html") && session.SaveError is null) htmlCode = WriteHtml(session, args, info);
     }
     else if (args.Contains("--html"))
         Console.Error.WriteLine("note: --html needs a saved result; drop --no-save");
@@ -150,12 +145,7 @@ static int Compare(string[] args)
 /// <summary>Write the HTML report for a finished session; prints its path. Returns an exit code on failure, else null.</summary>
 static int? WriteHtml(Session s, string[] args, TextWriter info)
 {
-    int maxDiffs = new HtmlReportOptions().MaxDiffs;
-    if (FlagValue(args, "--max-diffs") is { } md && (!int.TryParse(md, out maxDiffs) || maxDiffs < 0))
-    {
-        Console.Error.WriteLine("error: --max-diffs needs a non-negative integer");
-        return 64;
-    }
+    if (!MaxDiffsOk(args, out int maxDiffs)) return 64;
     var opt = new HtmlReportOptions
     {
         IncludeLarge = args.Contains("--large"),
@@ -200,6 +190,18 @@ static int? WriteHtml(Session s, string[] args, TextWriter info)
         return 2;
     }
     finally { Console.CancelKeyPress -= onCtrlC; }
+}
+
+/// <summary>--max-diffs, when given, is a non-negative integer (else the error is printed).</summary>
+static bool MaxDiffsOk(string[] args, out int maxDiffs)
+{
+    maxDiffs = new HtmlReportOptions().MaxDiffs;
+    if (FlagValue(args, "--max-diffs") is { } md && (!int.TryParse(md, out maxDiffs) || maxDiffs < 0))
+    {
+        Console.Error.WriteLine("error: --max-diffs needs a non-negative integer");
+        return false;
+    }
+    return true;
 }
 
 /// <summary>report: the HTML report for a saved compare (by id or result directory).</summary>
@@ -363,7 +365,7 @@ static int Verify(string[] args)
     {
         deltaKind = DeltaKind(args[1]);
     }
-    catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException)
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException)
     {
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
@@ -372,13 +374,23 @@ static int Verify(string[] args)
     if (deltaKind == "conflict-3way")
         return VerifyConflict(args);
 
+    // A misspelled or half-given tree flag used to skip the tree checks silently and pass on the digest alone.
+    const string deltaUsage = "usage: codediffer verify <delta.json> [--base DIR --variant DIR]";
+    if (!ArgsOk(args, 1, deltaUsage, [], ["--base", "--variant"])) return 64;
+    if ((FlagValue(args, "--base") is null) != (FlagValue(args, "--variant") is null))
+    {
+        Console.Error.WriteLine("error: the tree checks need both --base and --variant");
+        Console.Error.WriteLine(deltaUsage);
+        return 64;
+    }
+
     DeltaManifest manifest;
     try
     {
         manifest = DeltaManifestParser.ParseFile(args[1]);
         DeltaVerifier.AssertSupportedVersion(manifest);
     }
-    catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or NotSupportedException or FormatException)
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or NotSupportedException or FormatException)
     {
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
@@ -407,7 +419,7 @@ static int Verify(string[] args)
         var cc = DeltaTreeCrossCheck.Run(baseDir, variantDir, manifest);
         Console.WriteLine($"  hunk cross-check: {cc.Reconstructed}/{cc.Checked} reconstructed · exact {cc.ExactMatches}/{cc.Checked} · {cc.Skipped} skipped (binary/eol/encoding/giant)");
         foreach (var f in cc.Files.Where(f => f.Checked && !f.Reconstructs))
-            Console.WriteLine($"    MISMATCH {f.Path} (manifest hunks do not rebuild the variant)");
+            Console.WriteLine($"    MISMATCH {f.Path} ({f.Problem ?? "manifest hunks do not rebuild the variant"})");
         Console.WriteLine(cc.Ok ? "  OK — hunks reconstruct the variant" : "  FAIL — a manifest hunk set does not rebuild the variant");
         crossOk = cc.Ok;
 
@@ -441,12 +453,14 @@ static int Verify(string[] args)
 
 static int VerifyConflict(string[] args)
 {
+    if (!ArgsOk(args, 1, "usage: codediffer verify <conflict.json> [--base DIR --v1 DIR --v2 DIR]", [], ["--base", "--v1", "--v2"])) return 64;
     ConflictManifest manifest;
     try
     {
         manifest = ConflictManifestParser.ParseFile(args[1]);
+        DeltaVerifier.AssertSupportedVersion(manifest);
     }
-    catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or FormatException)
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or NotSupportedException or FormatException)
     {
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
@@ -494,6 +508,32 @@ static int VerifyConflict(string[] args)
             ? "  OK — 3-way verified (exact decomposition, or reconstruction with the same conflicted files)"
             : "  FAIL — my merge does not reproduce the manifest's decomposition or its conflicted files");
         mergeOk = cc.Ok;
+
+        // compare3 itself over the whole trees (hash cache on: warm, it reads only the changed files): the verdicts a
+        // user actually sees, lines with their endings, in every file.
+        ThreeWayReport r3;
+        using var stop = new CancellationTokenSource();
+        CompareProgress p1 = new(), p2 = new();
+        try
+        {
+            r3 = WithProgress(() => TreeMerger.Run(baseDir, v1Dir, v2Dir, new CompareOptions(), p1, p2, stop.Token),
+                () => p1.Phase != ComparePhase.Done ? "base->v1: " + ProgressView.Line(p1)
+                    : p2.Phase != ComparePhase.Done ? "base->v2: " + ProgressView.Line(p2)
+                    : "classifying and merging the paths both sides touched", stop.Cancel);
+        }
+        catch (OperationCanceledException) { return Cancelled(TimeSpan.Zero, CacheMode.On); }
+        var c3 = ConflictTreeCrossCheck.Compare3(r3, manifest);
+        Console.WriteLine($"    [3] compare3 over the whole trees: {c3.Entries:N0} changed paths · {c3.Conflicts:N0} conflicts · " +
+                          $"{c3.ConflictOnlyInCompare3.Count:N0} conflicted only in compare3 · {c3.ConflictOnlyInManifest.Count:N0} only in the manifest · " +
+                          $"{c3.Unchanged.Count:N0} manifest file(s) it found unchanged");
+        foreach (var p in c3.ConflictOnlyInCompare3.Take(20)) Console.WriteLine($"        + compare3-only conflicted file {p}");
+        foreach (var p in c3.ConflictOnlyInManifest.Take(20)) Console.WriteLine($"        - manifest-only conflicted file {p}");
+        foreach (var p in c3.Unchanged.Take(20)) Console.WriteLine($"        ? unchanged in compare3 {p}");
+        if (c3.Unread > 0) Console.WriteLine($"        (compare3 could not read {c3.Unread:N0} file(s) / director(ies))");
+        Console.WriteLine(c3.Ok
+            ? "  OK — compare3 conflicts in exactly the manifest's files"
+            : "  FAIL — compare3 disagrees with the manifest");
+        mergeOk &= c3.Ok;
     }
 
     return v.Ok && mergeOk ? 0 : 1;
@@ -726,6 +766,7 @@ static int Compare3(string[] args)
         return 64;
     }
     var options = new CompareOptions { Parallelism = threads, Cache = args.Contains("--no-cache") ? CacheMode.Off : CacheMode.On };
+    if (args.Contains("--html") && !MaxDiffsOk(args, out _)) return 64;
     var store = new SessionStore(save: !args.Contains("--no-save"));
     var outDir = FlagValue(args, "--merge-out", from: 4);
     Compare3Session s;

@@ -107,12 +107,38 @@ internal static class TextInspector
 
     public static string NormalizeEol(string s) => s.Replace("\r\n", "\n").Replace('\r', '\n');
 
-    public static string StripWhitespace(string s)
+    /// <summary>Horizontal whitespace for the whitespace reason: ASCII space, tab, VT and FF only — never NBSP, NEL or
+    /// another Unicode space (in a single-byte code page those are other characters), and the same set the streamed
+    /// byte comparison uses.</summary>
+    public static bool IsHorizontalSpace(int c) => c is ' ' or '\t' or 0x0B or 0x0C;
+
+    /// <summary>A character a run of whitespace can't vanish next to without joining two tokens: an ASCII letter, digit or
+    /// '_', or anything non-ASCII (a decoded char, or a byte of one in the streamed comparison — the same verdict).</summary>
+    public static bool IsWordChar(int c) => c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '_' or >= 0x80;
+
+    /// <summary>
+    /// What a whitespace-only change leaves alone, of EOL-normalized text: the same lines, each with its leading and
+    /// trailing whitespace dropped, and an inner run of it read as one space between two word characters and as
+    /// nothing elsewhere. So reindenting, trailing spaces and spacing round punctuation ("x=1" → "x = 1") are
+    /// whitespace; a space that joins or splits a token ("return x" → "returnx") and a line joined, split or added
+    /// are content.
+    /// </summary>
+    public static string WhitespaceKey(string s)
     {
         var sb = new StringBuilder(s.Length);
-        foreach (var c in s)
-            if (!char.IsWhiteSpace(c))
-                sb.Append(c);
+        bool lineStart = true;
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (IsHorizontalSpace(c))
+            {
+                while (i + 1 < s.Length && IsHorizontalSpace(s[i + 1])) i++;
+                if (!lineStart && i + 1 < s.Length && IsWordChar(sb[^1]) && IsWordChar(s[i + 1])) sb.Append(' ');
+                continue;
+            }
+            lineStart = c == '\n';
+            sb.Append(c);
+        }
         return sb.ToString();
     }
 }

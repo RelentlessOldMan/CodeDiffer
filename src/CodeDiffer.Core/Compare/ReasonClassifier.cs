@@ -8,10 +8,11 @@ namespace CodeDiffer.Core.Compare;
 ///   1. <b>binary</b> — a NUL (no BOM) on EITHER side. Fixes the prototype's one-sided binary bug.
 ///   2. <b>encoding</b> — decoded text identical, bytes differ (UTF-8↔UTF-16 / BOM).
 ///   3. <b>eol</b> — equal after EOL normalization (LF↔CRLF). Never reported as "content with no diff".
-///   4. <b>whitespace</b> — equal after stripping whitespace.
+///   4. <b>whitespace</b> — the same lines but for indentation, trailing whitespace and the width of inner runs of it
+///      (<see cref="TextInspector.WhitespaceKey"/>).
 ///   5. <b>content</b> — a real textual change.
-/// A file over <c>maxClassifyBytes</c> is not decoded whole: it is compared streamed, as bytes (BOM, ASCII whitespace
-/// and line endings normalized byte by byte, stopping at the first real difference — so a content change costs only
+/// A file over <c>maxClassifyBytes</c> is not decoded whole: it is compared streamed, as bytes (BOM, whitespace and
+/// line endings normalized byte by byte, by the same rule, stopping at the first real difference — so a content change costs only
 /// the read up to it). Past <c>maxStreamBytes</c>, or in UTF-16/32, a difference is called content unchecked.
 /// </summary>
 public sealed class ReasonClassifier
@@ -48,7 +49,7 @@ public sealed class ReasonClassifier
         if (string.Equals(leftEol, rightEol, StringComparison.Ordinal))
             return ChangeReason.Eol;
 
-        if (string.Equals(TextInspector.StripWhitespace(leftEol), TextInspector.StripWhitespace(rightEol), StringComparison.Ordinal))
+        if (string.Equals(TextInspector.WhitespaceKey(leftEol), TextInspector.WhitespaceKey(rightEol), StringComparison.Ordinal))
             return ChangeReason.Whitespace;
 
         return ChangeReason.Content;
@@ -64,7 +65,7 @@ public sealed class ReasonClassifier
         if (Wide(leftHead) || Wide(rightHead)) return ChangeReason.Content;
         int l = Utf8Bom(leftHead) ? 3 : 0, r = Utf8Bom(rightHead) ? 3 : 0;
         if (l != r && Same(leftPath, l, rightPath, r, Norm.None)) return ChangeReason.Encoding;
-        // Whitespace-stripped first: it is implied by eol-equality, and a content change ends it at the first difference.
+        // Whitespace-normalized first: it is implied by eol-equality, and a content change ends it at the first difference.
         if (!Same(leftPath, l, rightPath, r, Norm.Whitespace)) return ChangeReason.Content;
         return Same(leftPath, l, rightPath, r, Norm.Eol) ? ChangeReason.Eol : ChangeReason.Whitespace;
     }
@@ -91,12 +92,18 @@ public sealed class ReasonClassifier
             int c = f.Next();
             switch (norm)
             {
-                case Norm.Whitespace when c is ' ' or (>= 0x09 and <= 0x0D):
-                    continue;
-                case Norm.Eol when c == '\r':
+                // TextInspector.WhitespaceKey, byte by byte (line endings normalized too).
+                case Norm.Whitespace when TextInspector.IsHorizontalSpace(c):
+                    while (TextInspector.IsHorizontalSpace(f.Peek())) f.Next();
+                    if (f.LineStart || !TextInspector.IsWordChar(f.Last) || !TextInspector.IsWordChar(f.Peek())) continue;
+                    return ' ';
+                case Norm.Whitespace or Norm.Eol when c == '\r':
                     if (f.Peek() == '\n') f.Next();
+                    f.LineStart = true;
                     return '\n';
                 default:
+                    f.LineStart = c == '\n';
+                    f.Last = c;
                     return c;
             }
         }
@@ -108,6 +115,12 @@ public sealed class ReasonClassifier
         private readonly FileStream _fs;
         private readonly byte[] _buf = new byte[1 << 16];
         private int _n, _i;
+
+        /// <summary>Nothing but whitespace since the last line ending (or the start).</summary>
+        public bool LineStart = true;
+
+        /// <summary>The last byte returned that wasn't whitespace (whitespace normalization).</summary>
+        public int Last = -1;
 
         public Feed(string path, int skip)
         {

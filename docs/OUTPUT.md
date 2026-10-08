@@ -244,7 +244,16 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - A hash ledger that can't be saved after the compare (disk full, a file held open) is a note, never a lost
   result: the next compare reads those files again.
 - A command given an option it doesn't take (`--no-chache`), an extra word, or a flag without its value stops
-  at once with the usage (exit 64), instead of running an hour without it.
+  at once with the usage (exit 64), instead of running an hour without it; so does a bad `-U` / `--max-diffs`
+  value, a results directory inside a compared tree, and `verify` given only one of `--base` / `--variant`.
+- `whitespace` means only whitespace: the same lines but for indentation, trailing spaces / tabs and the
+  spacing round punctuation (`x=1` → `x = 1`). A space that joins or splits a word (`return x` → `returnx`),
+  a line joined, split or added, and NBSP / NEL (characters, not whitespace) are `content`. Whitespace is
+  ASCII space, tab, VT and FF, whole or streamed alike.
+- Among identical files the rename is the best match, not the first listed: `a/LICENSE` and `b/LICENSE`
+  identical, `b/LICENSE` renamed to `b/COPYING` and `a/` deleted gives `b/LICENSE → b/COPYING`.
+- A malformed manifest, hunk coordinates outside the files, a manifest file missing from the tree and a
+  corrupt saved result (a bad status, a number out of range) are errors or failed checks, never a crash.
 - Text that isn't valid UTF-8 (a cp1252 / Latin-1 file) is read byte for byte, never with U+FFFD in place of
   the bad bytes: `25°C` → `25±C` is a `content` change, not "the same text, encoding changed".
 - A whole patch (`--patch`, `export_changeset`) is for `git apply`: what it can't carry — binary and large
@@ -254,12 +263,13 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   found by line similarity always carries its diff, even at "100% similar" (one line in 2,001, reordered lines,
   line endings only): the list says "(but edited)", and it never counts as pure.
 - A file over 8 MB is not decoded whole to find its reason: up to 64 MB it is compared streamed, as bytes
-  (BOM, ASCII whitespace and line endings normalized byte by byte, stopping at the first real difference), so
+  (BOM, whitespace and line endings normalized byte by byte by the same rule, stopping at the first real difference), so
   a large LF→CRLF change is still `eol`; past 64 MB, or in UTF-16/32, a difference is `content` unchecked.
 - `verify` checks CodeDiffer, not only the manifest: with the trees it runs CodeDiffer's own compare and
   requires exactly the manifest's files, reasons and rename similarities (death 1.0.9: 1,561/1,561 and
   1,354/1,354); the 3-way gate needs the exact decomposition, or reconstruction AND a merge conflicting in
-  exactly the manifest's files.
+  exactly the manifest's files, AND compare3 itself — over the whole trees, lines with their endings —
+  conflicting in exactly the manifest's files (death 1.0.9: 941 of 941).
 - Deterministic output: two runs over the same inputs are byte-identical, so a diff of results is real.
 
 ## 7. Defaults (tunable)

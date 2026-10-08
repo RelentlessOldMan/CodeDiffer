@@ -180,6 +180,11 @@ public static class CodeDifferTools
     public static string ListCompares([Description("Most to list (default 20).")] int max = 20)
     {
         if (Sessions.ResultsRoot is not { } root) return "compares are not being saved in this server";
+        return Safe(() => ListSaved(root, max));
+    }
+
+    private static string ListSaved(string root, int max)
+    {
         var saved = ResultStore.List(root, Math.Clamp(max, 1, 200));
         if (saved.Count == 0) return $"no saved compares in {root}";
         var o = new System.Text.StringBuilder($"{saved.Count} saved compare(s) in {root} (newest first):\n");

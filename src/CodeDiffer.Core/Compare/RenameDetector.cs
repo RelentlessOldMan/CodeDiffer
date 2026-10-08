@@ -74,8 +74,9 @@ public sealed class RenameDetector
     /// Pass 1: pair byte-identical files. Consumes matched entries from both lists. Identical bytes means identical
     /// size, so only files whose size occurs on both sides are hashed. Empty files never pair (git skips them too):
     /// every empty file is identical to every other, so a pairing would be a guess — and a 3-way merge would follow
-    /// it, moving the other side's edit into an unrelated file. Among identical candidates the one with the same file
-    /// name, then the same directory, wins.
+    /// it, moving the other side's edit into an unrelated file. Among identical files the pairs are taken best first —
+    /// same file name, then same directory, then by path — over every pair at once, so the order of the removed list
+    /// never decides (a/LICENSE and b/LICENSE identical, b/LICENSE renamed to b/COPYING: b/LICENSE is the rename).
     /// </summary>
     private void PairPureRenames(List<FileEntry> removed, List<FileEntry> added, HashCache? leftCache, HashCache? rightCache,
         List<RenameOp> renames, ConcurrentDictionary<string, string> unreadable, ref long bytesRead, CancellationToken ct)
@@ -93,32 +94,42 @@ public sealed class RenameDetector
             list.Add(ai);
         }
 
-        var pairedAdds = new HashSet<string>(StringComparer.Ordinal);
-        var stillRemoved = new List<FileEntry>(removed.Count);
+        // Every identical (removed, added) pair, best first; each file is used once.
+        var pairs = new List<(int R, int A)>();
         for (int ri = 0; ri < removed.Count; ri++)
-        {
-            var r = removed[ri];
-            int best = -1;
             if (removedIds[ri] is { } rid && addsByXx.TryGetValue(rid.XxHash, out var list))
-                best = list.Where(ai => ContentId.Same(addedIds[ai]!.Value, rid) == true)
-                    .OrderBy(ai => Name(added[ai]) == Name(r) ? 0 : 1).ThenBy(ai => Dir(added[ai]) == Dir(r) ? 0 : 1)
-                    .ThenBy(ai => added[ai].RelativePath, StringComparer.Ordinal).DefaultIfEmpty(-1).First();
-            if (best >= 0)
-            {
-                var a = added[best];
-                addsByXx[removedIds[ri]!.Value.XxHash].Remove(best);
-                renames.Add(new RenameOp(r.RelativePath, a.RelativePath, 1000));
-                pairedAdds.Add(a.RelativePath);
-            }
-            else
-            {
-                stillRemoved.Add(r);
-            }
-        }
+                foreach (var ai in list)
+                    if (ContentId.Same(addedIds[ai]!.Value, rid) == true)
+                        pairs.Add((ri, ai));
+        pairs.Sort((x, y) =>
+        {
+            int c = Rank(x).CompareTo(Rank(y));
+            if (c == 0) c = string.CompareOrdinal(removed[x.R].RelativePath, removed[y.R].RelativePath);
+            if (c == 0) c = string.CompareOrdinal(added[x.A].RelativePath, added[y.A].RelativePath);
+            return c;
+        });
 
+        var usedRemoved = new HashSet<int>();
+        var usedAdded = new HashSet<int>();
+        var found = new List<(int R, RenameOp Op)>();
+        foreach (var (ri, ai) in pairs)
+        {
+            if (usedRemoved.Contains(ri) || usedAdded.Contains(ai)) continue;
+            usedRemoved.Add(ri);
+            usedAdded.Add(ai);
+            found.Add((ri, new RenameOp(removed[ri].RelativePath, added[ai].RelativePath, 1000)));
+        }
+        // Listed in removed order, as before.
+        renames.AddRange(found.OrderBy(f => f.R).Select(f => f.Op));
+
+        var stillRemoved = removed.Where((_, i) => !usedRemoved.Contains(i)).ToList();
+        var stillAdded = added.Where((_, i) => !usedAdded.Contains(i)).ToList();
         removed.Clear();
         removed.AddRange(stillRemoved);
-        added.RemoveAll(a => pairedAdds.Contains(a.RelativePath));
+        added.Clear();
+        added.AddRange(stillAdded);
+
+        int Rank((int R, int A) p) => (Name(added[p.A]) == Name(removed[p.R]) ? 0 : 2) + (Dir(added[p.A]) == Dir(removed[p.R]) ? 0 : 1);
 
         static string Name(FileEntry e) => e.RelativePath[(e.RelativePath.LastIndexOf('/') + 1)..];
         static string Dir(FileEntry e) => e.RelativePath[..Math.Max(0, e.RelativePath.LastIndexOf('/'))];

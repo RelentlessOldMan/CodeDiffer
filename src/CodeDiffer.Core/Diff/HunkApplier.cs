@@ -15,6 +15,15 @@ namespace CodeDiffer.Core.Diff;
 /// </summary>
 public static class HunkApplier
 {
+    /// <summary>True when <paramref name="hunks"/> rebuild <paramref name="newLines"/> from <paramref name="oldLines"/>;
+    /// false too when a hunk points outside either file or overlaps another (a bad manifest is a failed check, not a crash).</summary>
+    public static bool Rebuilds(IReadOnlyList<string> oldLines, IReadOnlyList<string> newLines, IReadOnlyList<Hunk> hunks)
+    {
+        try { return Reconstruct(oldLines, newLines, hunks).SequenceEqual(newLines); }
+        catch (FormatException) { return false; }
+    }
+
+    /// <exception cref="FormatException">A hunk points outside either file or overlaps the one before it.</exception>
     public static List<string> Reconstruct(
         IReadOnlyList<string> oldLines, IReadOnlyList<string> newLines, IReadOnlyList<Hunk> hunks)
     {
@@ -33,6 +42,9 @@ public static class HunkApplier
             // Insert anchors on the line AFTER WHICH it goes (oldStart lines precede it); replace/delete
             // anchor on the first affected line, so copy up to oldStart-1.
             int copyUntil = h.OldLines == 0 ? h.OldStart : h.OldStart - 1;
+            if (h.OldLines < 0 || h.NewLines < 0 || copyUntil < oi || copyUntil + h.OldLines > oldLines.Count
+                || (h.NewLines > 0 && (h.NewStart < 1 || h.NewStart - 1 + h.NewLines > newLines.Count)))
+                throw new FormatException($"hunk {h.Op} -{h.OldStart},{h.OldLines} +{h.NewStart},{h.NewLines} is outside the files or overlaps another");
             for (; oi < copyUntil; oi++)
                 result.Add(oldLines[oi]);
 

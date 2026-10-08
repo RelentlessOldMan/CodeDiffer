@@ -15,7 +15,10 @@ public static class DeltaManifestParser
 {
     public static DeltaManifest ParseFile(string path) => Parse(File.ReadAllText(path));
 
-    public static DeltaManifest Parse(string json)
+    /// <exception cref="FormatException">The JSON is not a delta manifest (a field missing or of the wrong kind).</exception>
+    public static DeltaManifest Parse(string json) => Malformed(() => ParseCore(json), "delta manifest");
+
+    private static DeltaManifest ParseCore(string json)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -39,8 +42,8 @@ public static class DeltaManifestParser
             if (fileOps.TryGetProperty("renamed", out var ren) && ren.ValueKind == JsonValueKind.Array)
                 foreach (var r in ren.EnumerateArray())
                     renamed.Add(new RenameOp(
-                        r.GetProperty("from").GetString()!,
-                        r.GetProperty("to").GetString()!,
+                        Req(r, "from"),
+                        Req(r, "to"),
                         r.GetProperty("similarityMilli").GetInt32()));
 
             if (fileOps.TryGetProperty("modified", out var mod) && mod.ValueKind == JsonValueKind.Array)
@@ -59,7 +62,7 @@ public static class DeltaManifestParser
         if (f.TryGetProperty("hunks", out var hs) && hs.ValueKind == JsonValueKind.Array)
             foreach (var h in hs.EnumerateArray())
             {
-                var op = CanonicalTokens.Op(h.GetProperty("op").GetString()!);
+                var op = CanonicalTokens.Op(Req(h, "op"));
                 if (h.TryGetProperty("kind", out var kind) && kind.GetString() == "run")
                     runs.Add(new RunHunk(
                         op,
@@ -77,14 +80,31 @@ public static class DeltaManifestParser
             }
 
         return new FileDelta(
-            f.GetProperty("path").GetString()!,
-            CanonicalTokens.Reason(f.GetProperty("reason").GetString()!),
-            f.GetProperty("oldSha").GetString()!,
-            f.GetProperty("newSha").GetString()!,
+            Req(f, "path"),
+            CanonicalTokens.Reason(Req(f, "reason")),
+            Req(f, "oldSha"),
+            Req(f, "newSha"),
             f.GetProperty("oldSize").GetInt64(),
             f.GetProperty("newSize").GetInt64(),
             hunks,
             runs);
+    }
+
+    /// <summary>A required string property; anything else is a malformed manifest (<see cref="FormatException"/>).</summary>
+    private static string Req(JsonElement obj, string name)
+        => obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString()!
+            : throw new FormatException($"'{name}' must be a string");
+
+    /// <summary>A missing property or a value of the wrong kind is a malformed manifest, never a crash.</summary>
+    private static T Malformed<T>(Func<T> parse, string what)
+    {
+        try { return parse(); }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or ArgumentException)
+        {
+            // GetProperty's KeyNotFoundException doesn't say which: the manifest is still plainly not one.
+            throw new FormatException($"not a valid {what}: {(ex is KeyNotFoundException ? "a required field is missing" : ex.Message)}", ex);
+        }
     }
 
     private static void ReadStringArray(JsonElement obj, string name, List<string> into)

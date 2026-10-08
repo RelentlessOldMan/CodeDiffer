@@ -170,8 +170,10 @@ public static class ResultStore
                 list.Add(new SavedCompare(dir, Str(m, "id"), Str(m, "kind"), State(m), Started(m), Elapsed(m), roots, counts,
                     m.TryGetProperty("error", out var e) ? e.GetString() : null));
             }
+            // A corrupt or foreign compare.json is left out of the list, whatever is wrong with it (a number out of range too).
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException
-                                           or KeyNotFoundException or InvalidOperationException or FormatException) { }
+                                           or KeyNotFoundException or InvalidOperationException or FormatException
+                                           or ArgumentException or OverflowException) { }
         }
         return list;
     }
@@ -287,7 +289,8 @@ public static class ResultStore
                 var k => throw new InvalidDataException($"unknown compare kind '{k}' in {dir}"),
             };
         }
-        catch (Exception ex) when (ex is FileNotFoundException or KeyNotFoundException or JsonException or InvalidOperationException or FormatException)
+        catch (Exception ex) when (ex is FileNotFoundException or KeyNotFoundException or JsonException or InvalidOperationException or FormatException
+                                       or ArgumentException or OverflowException)
         {
             throw new InvalidDataException($"result {dir} is incomplete or corrupt: {ex.Message}", ex);
         }
@@ -522,7 +525,7 @@ public static class ResultStore
 
     private static FileChange ReadChange(JsonElement e) => new(
         PathOf(e, "path"),
-        Enum.Parse<ChangeStatus>(Str(e, "status"), ignoreCase: true),
+        Status(Str(e, "status")),
         e.TryGetProperty("reason", out var r) ? CanonicalTokens.Reason(r.GetString()!) : null,
         e.GetProperty("leftSize").GetInt64(),
         e.GetProperty("rightSize").GetInt64(),
@@ -570,6 +573,15 @@ public static class ResultStore
         Merge3Outcome.Merged => "merged",
         _ => "conflict",
     };
+
+    /// <summary>A status as <see cref="Token(ChangeStatus)"/> writes it; anything else (a number too, which Enum.Parse would
+    /// take) is a corrupt file.</summary>
+    private static ChangeStatus Status(string t)
+    {
+        foreach (var v in Enum.GetValues<ChangeStatus>())
+            if (string.Equals(Token(v), t, StringComparison.OrdinalIgnoreCase)) return v;
+        throw new FormatException($"unknown status '{t}'");
+    }
 
     private static Merge3Outcome Outcome(string t) => t switch
     {
@@ -635,7 +647,12 @@ public static class ResultStore
         => DateTime.Parse(Str(m, "started"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
 
     private static TimeSpan Elapsed(JsonElement m)
-        => m.TryGetProperty("elapsedSeconds", out var e) ? TimeSpan.FromSeconds(e.GetDouble()) : TimeSpan.Zero;
+    {
+        if (!m.TryGetProperty("elapsedSeconds", out var e)) return TimeSpan.Zero;
+        double s = e.GetDouble();
+        return double.IsFinite(s) && s >= 0 && s < TimeSpan.MaxValue.TotalSeconds ? TimeSpan.FromSeconds(s)
+            : throw new FormatException($"elapsedSeconds {s} is out of range");
+    }
 
     /// <summary>Is <paramref name="path"/> equal to or inside <paramref name="tree"/>? (case-insensitive on Windows)</summary>
     internal static bool IsUnder(string path, string tree)
