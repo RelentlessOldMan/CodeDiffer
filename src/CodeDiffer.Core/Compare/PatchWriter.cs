@@ -35,11 +35,12 @@ public sealed class PatchOptions
 public sealed class PatchStats
 {
     /// <summary><see cref="OtherFiles"/>: text that is not UTF-8 (UTF-16, a legacy code page) — a UTF-8 patch can't
-    /// carry its bytes. <see cref="UnreadableFiles"/>: a side could not be read.</summary>
-    public int TextFiles, BinaryFiles, GiantFiles, NoteFiles, CoarseFiles, OtherFiles, UnreadableFiles;
+    /// carry its bytes. <see cref="UnreadableFiles"/>: a side could not be read, or is behind a link.
+    /// <see cref="CaseFiles"/>: a path another change's path differs from only in case.</summary>
+    public int TextFiles, BinaryFiles, GiantFiles, NoteFiles, CoarseFiles, OtherFiles, UnreadableFiles, CaseFiles;
 
     /// <summary>Files the patch describes in '#' comments but does not carry: copy them by hand.</summary>
-    public int NotCarried => BinaryFiles + GiantFiles + OtherFiles + UnreadableFiles;
+    public int NotCarried => BinaryFiles + GiantFiles + OtherFiles + UnreadableFiles + CaseFiles;
 
     internal void Add(PatchStats o)
     {
@@ -50,13 +51,15 @@ public sealed class PatchStats
         CoarseFiles += o.CoarseFiles;
         OtherFiles += o.OtherFiles;
         UnreadableFiles += o.UnreadableFiles;
+        CaseFiles += o.CaseFiles;
     }
 
     /// <summary>The one-line summary of a written patch.</summary>
     public string Summary(bool literal) =>
         $"{TextFiles:N0} text · {NoteFiles:N0} eol/encoding note(s)" + (CoarseFiles > 0 ? $" · {CoarseFiles:N0} coarse (edit-distance budget exceeded)" : "") +
         (NotCarried > 0 ? $" · NOT CARRIED (described in '#' lines; copy them by hand): {BinaryFiles:N0} binary · {GiantFiles:N0} large · " +
-                          $"{OtherFiles:N0} non-UTF-8 text · {UnreadableFiles:N0} unreadable" : "") +
+                          $"{OtherFiles:N0} non-UTF-8 text · {UnreadableFiles:N0} unreadable" +
+                          (CaseFiles > 0 ? $" · {CaseFiles:N0} case-only path change(s)" : "") : "") +
         (NoteFiles > 0 && !literal ? " · eol/encoding-only files are notes, not hunks (--literal / literal=true carries them)" : "");
 }
 
@@ -69,16 +72,24 @@ public sealed class PatchStats
 /// A whole patch (<see cref="Write"/>, <see cref="WriteFiles"/>) is for <c>git apply</c>: everything it can't carry —
 /// binary files, large files, text that isn't UTF-8, files it couldn't read, the eol/encoding notes — is described
 /// in '#' comment lines outside any <c>diff --git</c> section, which git skips, so the rest still applies (a
-/// UTF-8 BOM is kept, so its first line matches). One file's section for a reader (<see cref="WriteChange"/>) shows
+/// UTF-8 BOM is kept, so its first line matches). So are a path behind a link (never written or deleted through)
+/// and paths that differ only in case (on Windows git refuses the whole patch over one of them). An incomplete
+/// compare is refused: its adds and removes under an unlisted directory may be listing failures. One file's section for a reader (<see cref="WriteChange"/>) shows
 /// them in place instead: git's "Binary files … differ", legacy text decoded as Latin-1.
 /// </summary>
 public static class PatchWriter
 {
+    /// <exception cref="ArgumentException">The compare is incomplete (a directory could not be listed).</exception>
     public static PatchStats Write(TextWriter w, CompareReport report, string leftRoot, string rightRoot, PatchOptions? options = null)
     {
+        if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
+            throw new ArgumentException($"the compare is incomplete ({report.LeftDroppedDirectories} left / {report.RightDroppedDirectories} right " +
+                                        "director(ies) could not be listed): its adds and removes there may be listing failures — " +
+                                        "refusing to write it as a patch; compare again");
         var opt = options ?? new PatchOptions();
         var stats = new PatchStats();
         var changed = report.Changes.Where(c => c.Status != ChangeStatus.Identical).ToList();
+        var caseOnly = CaseOnly(changed);
 
         // Render sections concurrently (each is a few opens + reads — over SMB they must overlap), but in
         // bounded batches written in report order: at most Batch file sections are held in memory at once.
@@ -95,7 +106,13 @@ public static class PatchWriter
                 var c = changed[start + i];
                 try
                 {
-                    Section(sw, c, leftRoot, rightRoot, opt, local[i], forGit: true);
+                    if (caseOnly.Contains(c.RelativePath) || (c.RenamedFrom is { } f && caseOnly.Contains(f)))
+                    {
+                        local[i].CaseFiles = 1;
+                        sw.Write($"# {Name(c)}: another path in this patch differs from it only in case (one file on Windows, " +
+                                 "where git apply would refuse the whole patch) — not in this patch; do it by hand\n");
+                    }
+                    else Section(sw, c, leftRoot, rightRoot, opt, local[i], forGit: true);
                     sections[i] = sw.ToString();
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -113,6 +130,17 @@ public static class PatchWriter
         }
         return stats;
     }
+
+    /// <summary>
+    /// The paths of the changes that share a path with another spelling, ignoring case: a case-only rename (Foo.c →
+    /// foo.c, or every file under a directory renamed so), or a remove and an add like that. git on Windows sees the
+    /// new path as already there and rejects the whole patch.
+    /// </summary>
+    private static HashSet<string> CaseOnly(List<FileChange> changed)
+        => changed.SelectMany(c => c.RenamedFrom is { } f ? new[] { c.RelativePath, f } : [c.RelativePath])
+            .GroupBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Distinct(StringComparer.Ordinal).Skip(1).Any())
+            .SelectMany(g => g).ToHashSet(StringComparer.Ordinal);
 
     /// <summary>One change's section, for a reader (an agent's or the report's view of one file). A side that can't
     /// be read (gone or locked since the compare) is said in one line, never thrown.</summary>
@@ -136,6 +164,13 @@ public static class PatchWriter
     /// <param name="forGit">Part of a whole patch for <c>git apply</c>: what it can't carry goes in '#' lines.</param>
     private static void Section(TextWriter w, FileChange c, string leftRoot, string rightRoot, PatchOptions opt, PatchStats stats, bool forGit)
     {
+        if (c.BehindLink)
+        {
+            // The other tree has a link there: the file is unknown, and a patch would write or delete through the link.
+            w.Write(forGit ? $"# {Name(c)}: {OneLine(c.Unreadable ?? "behind a link")} — not in this patch\n" : $"{Name(c)}: {OneLine(c.Unreadable ?? "behind a link")}\n");
+            stats.UnreadableFiles++;
+            return;
+        }
         switch (c.Status)
         {
             case ChangeStatus.Added:

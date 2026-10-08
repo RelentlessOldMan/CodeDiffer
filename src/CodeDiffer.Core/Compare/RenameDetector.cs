@@ -95,7 +95,8 @@ public sealed class RenameDetector
     /// Pass 1: pair byte-identical files. Consumes matched entries from both lists. Identical bytes means identical
     /// size, so only files whose size occurs on both sides are hashed. Empty files never pair (git skips them too):
     /// every empty file is identical to every other, so a pairing would be a guess — and a 3-way merge would follow
-    /// it, moving the other side's edit into an unrelated file. Among identical files the pairs are taken best first —
+    /// it, moving the other side's edit into an unrelated file. A file that is only a BOM (an editor's "empty" .cs)
+    /// is empty text, and never pairs either. Among identical files the pairs are taken best first —
     /// same file name, then same directory, then by path — over every pair at once, so the order of the removed list
     /// never decides (a/LICENSE and b/LICENSE identical, b/LICENSE renamed to b/COPYING: b/LICENSE is the rename).
     /// </summary>
@@ -118,7 +119,7 @@ public sealed class RenameDetector
         // Every identical (removed, added) pair, best first; each file is used once.
         var pairs = new List<(int R, int A)>();
         for (int ri = 0; ri < removed.Count; ri++)
-            if (removedIds[ri] is { } rid && addsByXx.TryGetValue(rid.XxHash, out var list))
+            if (removedIds[ri] is { } rid && !(removed[ri].Length <= 4 && BomOnly.Contains(rid.XxHash)) && addsByXx.TryGetValue(rid.XxHash, out var list))
                 foreach (var ai in list)
                     if (ContentId.Same(addedIds[ai]!.Value, rid) == true)
                         pairs.Add((ri, ai));
@@ -155,6 +156,11 @@ public sealed class RenameDetector
         static string Name(FileEntry e) => e.RelativePath[(e.RelativePath.LastIndexOf('/') + 1)..];
         static string Dir(FileEntry e) => e.RelativePath[..Math.Max(0, e.RelativePath.LastIndexOf('/'))];
     }
+
+    /// <summary>The XxHash128 of each byte-order mark alone: a file with that content is empty text.</summary>
+    private static readonly HashSet<string> BomOnly = new(
+        new byte[][] { [0xEF, 0xBB, 0xBF], [0xFF, 0xFE], [0xFE, 0xFF], [0xFF, 0xFE, 0, 0], [0, 0, 0xFE, 0xFF] }
+            .Select(b => Convert.ToHexString(System.IO.Hashing.XxHash128.Hash(b))), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The content id of each entry whose (non-zero) size is in <paramref name="sizes"/>, else null. A trusted ledger
@@ -253,7 +259,7 @@ public sealed class RenameDetector
     /// <summary>round(common / max * 1000) in exact integers — the same formula as <see cref="Similarity.MilliFromLines"/>.</summary>
     private static int Milli(int common, int max) => (int)(((long)common * 1000 + max / 2) / max);
 
-    /// <summary>Each entry's line multiset, or null where the file is empty, binary, past the read cap or unreadable.
+    /// <summary>Each entry's line multiset, or null where the file is empty (or only a BOM), binary, past the read cap or unreadable.
     /// Read in parallel; lines are interned so a pair's common count is a merge of two sorted id arrays.</summary>
     private LineCounts?[] ReadLines(IReadOnlyList<FileEntry> entries, LineIds intern,
         ConcurrentDictionary<string, string> unreadable, ref long bytesRead, CancellationToken ct)
@@ -278,6 +284,7 @@ public sealed class RenameDetector
             if (TextInspector.LooksBinary(bytes.AsSpan(0, head))) return;
 
             var normalized = TextInspector.NormalizeEol(TextInspector.Decode(bytes));
+            if (normalized.Length == 0) return; // only a BOM: empty text pairs with nothing, as an empty file
             result[i] = LineCounts.Of(LineText.SplitLines(normalized), intern);
         });
         bytesRead += read;

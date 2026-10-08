@@ -15,7 +15,9 @@ public sealed record FileOpsCheckResult(
 /// <summary>
 /// The file-level verify tier: CodeDiffer's OWN compare of the base and variant trees (the verdicts every user sees:
 /// status, reason, rename pairing and similarity) against the manifest's fileOps. The digest tier checks the
-/// manifest, the hunk tier the line differ; this one checks the compare itself.
+/// manifest, the hunk tier the line differ; this one checks the compare itself. A rename with edits is one operation:
+/// the contract lists its hunks as a <c>modified</c> record under the new path, which CodeDiffer reports as the rename
+/// (its similarity says it was edited), so that record is not a separate expected "modified".
 /// </summary>
 public static class DeltaFileOpsCheck
 {
@@ -26,7 +28,9 @@ public static class DeltaFileOpsCheck
         foreach (var p in manifest.Added) expected[$"added {p}"] = "";
         foreach (var p in manifest.Removed) expected[$"removed {p}"] = "";
         foreach (var r in manifest.Renamed) expected[$"renamed {r.From} -> {r.To}"] = $"similarity {r.SimilarityMilli}";
-        foreach (var m in manifest.Modified) expected[$"modified {m.Path}"] = CanonicalTokens.Token(m.Reason);
+        var renameTo = manifest.Renamed.Select(r => r.To).ToHashSet(StringComparer.Ordinal);
+        foreach (var m in manifest.Modified)
+            if (!renameTo.Contains(m.Path)) expected[$"modified {m.Path}"] = CanonicalTokens.Token(m.Reason);
 
         var actual = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var c in report.Changes)

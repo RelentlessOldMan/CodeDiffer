@@ -360,6 +360,10 @@ public static class AgentViews
     {
         if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
         var r = s.Report!;
+        if (r.LeftDroppedDirectories + r.RightDroppedDirectories > 0)
+            return $"error: compare {s.Id} is incomplete ({r.LeftDroppedDirectories} left / {r.RightDroppedDirectories} right director(ies) " +
+                   "could not be listed): its adds and removes there may be listing failures, which a patch would carry out as deletes — " +
+                   "no patch written; compare again";
         var file = string.IsNullOrWhiteSpace(outPath) ? Path.Combine(OutDir(s), "changeset.patch") : Path.GetFullPath(outPath);
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         PatchStats ps;
@@ -532,7 +536,7 @@ public static class AgentViews
             yield return $"{pre}{r.SkippedLinks:N0} symlink(s)/junction(s) not followed — nothing behind them is compared" +
                          Some(skipped.Where(t => t.x.Kind == Walk.SkipKind.Link).Select(t => $"{t.Item2} {t.x.Path}"));
         if (r.SkippedNames > 0)
-            yield return $"{pre}{r.SkippedNames:N0} name(s) ending in '.' or ' ' skipped — Windows opens another file by that path" +
+            yield return $"{pre}{r.SkippedNames:N0} name(s) ending in '.' or ' ', or device names like \"nul\", skipped — Windows opens another file (or the device) by that path" +
                          Some(skipped.Where(t => t.x.Kind == Walk.SkipKind.Name).Select(t => $"{t.Item2} {t.x.Path}"));
         if (r.RenameLimit is { } rl) yield return $"{pre}{rl}.";
         if (r.CacheSaveError is { } e) yield return $"{pre}the hash cache could not be saved ({e}) — the result stands; the next compare reads those files again.";

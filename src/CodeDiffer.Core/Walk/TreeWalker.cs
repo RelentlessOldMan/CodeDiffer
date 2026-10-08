@@ -4,7 +4,8 @@ using System.Runtime.ExceptionServices;
 namespace CodeDiffer.Core.Walk;
 
 /// <summary>What a walk skipped on purpose: a symlink / junction (never followed: it can point outside the tree or back
-/// into it), or a name Windows can't open by path (ending in '.' or ' ' — the path API would open another file).</summary>
+/// into it), or a name Windows can't open by path (ending in '.' or ' ', or a device name like "nul" — the path API
+/// would open another file, or the device).</summary>
 public enum SkipKind { Link, Name }
 
 /// <summary>A path the walk skipped, relative to the root ('/' separated), file or directory.</summary>
@@ -102,10 +103,13 @@ public sealed class TreeWalker
     /// <summary>
     /// Can the file be opened by its plain path? On Windows the path API drops a trailing '.' or ' ' ("a." opens "a"),
     /// so such a name (legal on NTFS through \\?\, common on Samba shares written from Linux) would read another file
-    /// or none — and "a" next to "a." would be one path twice. Skipped and said instead.
+    /// or none — and "a" next to "a." would be one path twice. A legacy device name ("nul", and on older Windows
+    /// "con", "com1.txt"…) opens the device, which can't be read as a file (or takes what is written to it). Both are
+    /// skipped and said instead. Which names are devices is asked of the path API itself, so it is this Windows' list.
     /// </summary>
     internal static bool UsableName(string name)
-        => !OperatingSystem.IsWindows() || name.Length == 0 || (name[^1] != '.' && name[^1] != ' ');
+        => !OperatingSystem.IsWindows() || name.Length == 0 ||
+           (name[^1] != '.' && name[^1] != ' ' && !Path.GetFullPath(@"C:\d\" + name).StartsWith(@"\\.\", StringComparison.Ordinal));
 
     /// <summary>The full root path without a trailing separator — except a drive root keeps it: "Z:" alone means
     /// the current directory on Z:, not its root.</summary>

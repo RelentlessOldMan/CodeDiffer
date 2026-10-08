@@ -114,6 +114,30 @@ public static class TreeMerger
                     ? entries[i] with { Note = (entries[i].Note is { } n ? n + "; " : "") + $"another change lands on {Occupies(entries[i])} too" }
                     : entries[i] with { Outcome = Merge3Outcome.Conflict, ConflictKind = "path collision", Note = $"another change also lands on {entries[i].MergedPath}" };
 
+        // A file where the other side has a directory (v2 turns directory D into a file D while v1 adds D/z.txt, or
+        // the reverse): both can't be. Every file of the merged tree that isn't an entry is unchanged on both sides,
+        // and so can't be under (or be) a path one side turned into a file — the entries alone show every clash.
+        var occupied = new Dictionary<string, Merge3Entry>(PathComparer);
+        foreach (var e in entries)
+            if (Occupies(e) is { } at) occupied.TryAdd(at, e);
+        var clash = new Dictionary<Merge3Entry, string>();
+        foreach (var e in entries)
+        {
+            if (Occupies(e) is not { } at) continue;
+            for (int slash = at.LastIndexOf('/'); slash > 0; slash = at.LastIndexOf('/', slash - 1))
+                if (occupied.TryGetValue(at[..slash], out var file))
+                {
+                    clash.TryAdd(e, $"another change puts a file at {at[..slash]}, a directory here");
+                    clash.TryAdd(file, $"another change puts {at} under it, as a directory");
+                    break;
+                }
+        }
+        for (int i = 0; i < entries.Length; i++)
+            if (clash.TryGetValue(entries[i], out var why))
+                entries[i] = entries[i].MergedPath is null
+                    ? entries[i] with { Note = (entries[i].Note is { } n ? n + "; " : "") + why }
+                    : entries[i] with { Outcome = Merge3Outcome.Conflict, ConflictKind = "file/directory clash", Note = why };
+
         timings.Add(("classify + merge", sw.Elapsed));
         return new ThreeWayReport { V1Report = r1, V2Report = r2, Entries = entries, Timings = timings };
     }

@@ -31,12 +31,16 @@ public sealed record TreeCrossCheckResult(IReadOnlyList<FileHunkCheck> Files)
 ///
 /// Only reason=content files with explicit hunks are line-comparable; giant run-rule files and
 /// binary/eol/encoding/metadata carry no comparable textual hunks and are reported as skipped (with reason).
+/// A rename with edits has its hunks under the new path (the contract keys them by <c>to</c>): its old side is the
+/// base's <c>from</c>.
 /// </summary>
 public static class DeltaTreeCrossCheck
 {
     public static TreeCrossCheckResult Run(string baseDir, string variantDir, DeltaManifest manifest)
     {
         var results = new List<FileHunkCheck>(manifest.Modified.Count);
+        var renamedFrom = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var r in manifest.Renamed) renamedFrom[r.To] = r.From;
 
         foreach (var f in manifest.Modified)
         {
@@ -49,10 +53,11 @@ public static class DeltaTreeCrossCheck
             }
 
             var relative = f.Path.Replace('/', Path.DirectorySeparatorChar);
+            var baseRelative = (renamedFrom.TryGetValue(f.Path, out var from) ? from : f.Path).Replace('/', Path.DirectorySeparatorChar);
             string[] baseLines, variantLines;
             try
             {
-                baseLines = LineText.SplitLines(File.ReadAllText(Path.Combine(baseDir, relative)));
+                baseLines = LineText.SplitLines(File.ReadAllText(Path.Combine(baseDir, baseRelative)));
                 variantLines = LineText.SplitLines(File.ReadAllText(Path.Combine(variantDir, relative)));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

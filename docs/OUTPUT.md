@@ -140,7 +140,8 @@ pairs, or 1 GB of their text, it is skipped and a note says so — those files a
 the first's base listing and the base hashes it proved (no re-listing, no re-reading, not even a per-file
 stat of the base; both compares judge the same snapshot of it), then every touched path is
 v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content, modify/delete,
-add/add, rename/rename, path collision, binary, large. Renames are followed (renamed on one side, edited
+add/add, rename/rename, path collision, file/directory clash (one side has a file where the other has a
+directory: v2 turns `D/` into a file `D` while v1 adds `D/z.txt`), binary, large. Renames are followed (renamed on one side, edited
 on the other ⇒ merged at the new name). The same `get_summary` / `list_files` / `get_file_diff` / `get_stats`
 serve it; `get_file_diff` shows the merged file with diff3 markers (`<<<<<<< v1 / ||||||| base / ======= /
 >>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested). A file's encoding (BOM, UTF-16) and
@@ -155,7 +156,7 @@ stays part of its line.
 as an overlay on v1, never the whole tree: `files\` holds only what the merge changes in v1 (v2's one-sided
 changes, clean merges in the merged encoding and line endings, text conflicts with diff3 markers),
 `deletes.txt` the v1 paths to delete (v2's deletes, the old side of a move), `conflicts.txt` the conflicts
-with markers plus those that can't be one file (binary, large, modify/delete, rename/rename, path collision, encoding, line endings)
+with markers plus those that can't be one file (binary, large, modify/delete, rename/rename, path collision, file/directory clash, encoding, line endings)
 with each side's file, and `OVERLAY.txt` how to apply it: delete the paths in `deletes.txt` from v1, remove the
 directories that left empty, then copy `files\` over v1 (deletes first, so a file v2 turned into a directory, a
 directory v2 turned into a file, or a case-only rename lands right).
@@ -241,10 +242,11 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   has a link is not "added" or "removed" but unknown — `[unreadable]`, a `behind a link` conflict in compare3,
   never ported or written as a delete. Other reparse points — OneDrive / cloud placeholders, deduplicated
   files — are ordinary files and directories and are compared. Paths past 260 characters are listed and
-  checked like any other; a name ending in '.' or ' ' (which Windows' path API opens as another file) is
-  skipped and said, and a timestamp past year 9999 counts as unknown (the file just isn't cached).
-- An incomplete compare (a directory that couldn't be listed) is never acted on: `apply`, `apply_changeset`
-  and the merge overlay refuse it, since every file under that directory would look deleted.
+  checked like any other; a name ending in '.' or ' ' (which Windows' path API opens as another file), or a
+  device name like `nul` (which it opens as the device), is skipped and said, and a timestamp past year 9999 counts as unknown (the file just isn't cached).
+- An incomplete compare (a directory that couldn't be listed) is never acted on: `apply`, `apply_changeset`,
+  the merge overlay and a whole patch (`--patch`, `export_changeset`) refuse it, since every file under that
+  directory would look deleted.
 - Names that differ only in case are one file on Windows: a remove and an add like that (`Foo.c` → an unrelated
   `foo.c`) are left to do by hand by `apply`, and in compare3 a v2 file landing on a name a conflict keeps in v1
   is a `path collision`, never written over v1's file.
@@ -258,7 +260,14 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   a line joined, split or added, and NBSP / NEL (characters, not whitespace) are `content`. Whitespace is
   ASCII space, tab, VT and FF, whole or streamed alike.
 - Among identical files the rename is the best match, not the first listed: `a/LICENSE` and `b/LICENSE`
-  identical, `b/LICENSE` renamed to `b/COPYING` and `a/` deleted gives `b/LICENSE → b/COPYING`.
+  identical, `b/LICENSE` renamed to `b/COPYING` and `a/` deleted gives `b/LICENSE → b/COPYING`. Empty files
+  never pair as renames, and nor does a file that is only a BOM (an editor's "empty" `.cs`): that is empty text.
+- `apply` carries a change's re-encoding with its edits (the right side dropped the BOM, or went UTF-16 →
+  UTF-8, and edited a line): the target, still in the base's encoding, is written in the right side's, and the
+  note says so. A target that re-encoded the file its own way keeps its own encoding, also said.
+- `verify` on a delta with renamed-and-edited files reads each one's hunks against its old path in the base
+  (the contract lists them under the new path), and takes the rename as that file's operation; the 3-way
+  reconstruction checks a side the manifest records no change for is the base, not assumed to be.
 - A malformed manifest, hunk coordinates outside the files, a manifest file missing from the tree and a
   corrupt saved result (a bad status, a number out of range) are errors or failed checks, never a crash.
 - Text that isn't valid UTF-8 (a cp1252 / Latin-1 file) is read byte for byte, never with U+FFFD in place of
@@ -266,7 +275,9 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - A whole patch (`--patch`, `export_changeset`) is for `git apply`: what it can't carry — binary and large
   files, text that isn't UTF-8, unreadable files, the eol/encoding-only notes — is described in `#` lines
   outside any `diff --git` section, which git skips, so the rest still applies; the summary counts them as
-  NOT CARRIED. A byte-identical rename is a header-only rename, binary or not; a UTF-8 BOM is kept. A rename
+  NOT CARRIED. So is a file behind a link in the other tree (a patch would write or delete through it), and a
+  path another change's path differs from only in case (`Foo.c` → `foo.c`, or a directory renamed so): on
+  Windows `git apply` refuses the whole patch over one of those. A byte-identical rename is a header-only rename, binary or not; a UTF-8 BOM is kept. A rename
   found by line similarity always carries its diff, even at "100% similar" (one line in 2,001, reordered lines,
   line endings only): the list says "(but edited)", and it never counts as pure.
 - A file over 8 MB is not decoded whole to find its reason: up to 64 MB it is compared streamed, as bytes

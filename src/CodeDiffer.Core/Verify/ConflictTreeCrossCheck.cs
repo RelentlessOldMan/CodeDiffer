@@ -187,8 +187,9 @@ public static class ConflictTreeCrossCheck
     private static bool ReconstructsSide(
         IReadOnlyList<string> baseLines, IReadOnlyList<string> variantLines, List<Hunk>? hunks)
     {
-        if (hunks is null) return true; // no recorded change on this side ⇒ variant equals base there
-        var sorted = hunks.OrderBy(h => h.OldStart).ThenBy(h => h.NewStart).ToList();
+        // No recorded change on this side: the variant must BE the base (checked, not assumed — a manifest that left
+        // out all of one side's changes in a file would otherwise pass).
+        var sorted = (hunks ?? []).OrderBy(h => h.OldStart).ThenBy(h => h.NewStart).ToList();
         return HunkApplier.Rebuilds(baseLines, variantLines, sorted);
     }
 
@@ -206,7 +207,6 @@ public static class ConflictTreeCrossCheck
         var events = new List<(Hunk h, bool definite)>();
         if (v2Def is not null) foreach (var h in v2Def) events.Add((h, true));
         if (cleanV1 is not null) foreach (var h in cleanV1) events.Add((h, false));
-        if (events.Count == 0) return true;
         events.Sort((x, y) => x.h.OldStart != y.h.OldStart ? x.h.OldStart.CompareTo(y.h.OldStart) : x.h.OldLines.CompareTo(y.h.OldLines));
 
         var v2Hunks = new List<Hunk>();

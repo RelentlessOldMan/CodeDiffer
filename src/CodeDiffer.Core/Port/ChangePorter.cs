@@ -293,14 +293,26 @@ public static class ChangePorter
         string action = c.Status == ChangeStatus.Renamed ? "rename" : "modify";
         if (hunks.Any(h => h.Outcome == HunkOutcome.Conflict))
             return (new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Conflict, "none", hunks, null), null);
-        bool nothing = hunks.All(h => h.Outcome == HunkOutcome.Already) && c.Status != ChangeStatus.Renamed;
+        bool reencode = a.Kind != b.Kind && t.Kind == a.Kind; // the change's re-encoding, not yet in the target
+        bool nothing = hunks.All(h => h.Outcome == HunkOutcome.Already) && c.Status != ChangeStatus.Renamed && !reencode;
         if (nothing)
             return (new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Already, "none", hunks, null), null);
 
         var text = merged.ToString();
         if (normalize && t.Eol == "CRLF") text = text.Replace("\n", "\r\n");
-        return (new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Clean, action, hunks,
-            normalize ? $"merged ignoring line endings; written with the target's {t.Eol}" : null), t.Encode(text));
+        // The change may re-encode the file as well as edit it (a BOM dropped, UTF-16 → UTF-8): that is part of the
+        // change, carried when the target still has the base's encoding. A target that re-encoded it its own way keeps
+        // its own, and says so.
+        var write = t;
+        string? encNote = null;
+        if (a.Kind != b.Kind)
+        {
+            if (reencode) { write = b; encNote = $"re-encoded {a.Kind} → {b.Kind}, as the change does"; }
+            else if (t.Kind != b.Kind) encNote = $"the change re-encodes it {a.Kind} → {b.Kind}, but the target is {t.Kind} — kept the target's {t.Kind}";
+        }
+        string? note = normalize ? $"merged ignoring line endings; written with the target's {t.Eol}" : null;
+        if (encNote is not null) note = note is null ? encNote : note + "; " + encNote;
+        return (new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Clean, action, hunks, note), write.Encode(text));
     }
 
     private static (PortFile, Output?) ByteLevel(FileChange c, string aPath, string bPath, string tPath, string? note)
@@ -368,6 +380,14 @@ public static class ChangePorter
         public required string Content { get; init; }
         public required Encoding Encoding { get; init; }
         public required string Eol { get; init; }
+
+        /// <summary>The encoding as a reader would name it: "UTF-8", "UTF-8 with BOM", "UTF-16LE"…</summary>
+        public string Kind => Encoding switch
+        {
+            UTF8Encoding => Encoding.GetPreamble().Length > 0 ? "UTF-8 with BOM" : "UTF-8",
+            UnicodeEncoding => Encoding.WebName == "utf-16BE" ? "UTF-16BE" : "UTF-16LE",
+            _ => Encoding.WebName == "utf-32BE" ? "UTF-32BE" : "UTF-32LE",
+        };
 
         public byte[] Encode(string s)
         {

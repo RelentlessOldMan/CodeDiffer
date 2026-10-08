@@ -110,7 +110,9 @@ internal static class DirectoryLister
 
     private static List<DirRow> ListManaged(string dir)
     {
-        var opts = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = 0 };
+        // Not IgnoreInaccessible: a directory that can't be listed would read as empty — every file under it "removed"
+        // and the walk looking complete. It throws, and is counted as dropped.
+        var opts = new EnumerationOptions { IgnoreInaccessible = false, AttributesToSkip = 0 };
         return new DirectoryInfo(dir).EnumerateFileSystemInfos("*", opts)
             .Select(i => new DirRow(
                 i.Name,

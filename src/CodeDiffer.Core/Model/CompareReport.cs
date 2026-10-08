@@ -52,7 +52,7 @@ public sealed class CompareReport
     /// <summary>What each walk skipped (links, names Windows can't open by path). Empty for a result saved before 2026-10-08.</summary>
     public IReadOnlyList<SkippedPath> LeftSkipped { get; init; } = [];
     public IReadOnlyList<SkippedPath> RightSkipped { get; init; } = [];
-    /// <summary>Names ending in '.' or ' ' (unopenable by path on Windows) skipped in either tree.</summary>
+    /// <summary>Names ending in '.' or ' ', or device names (unopenable by path on Windows), skipped in either tree.</summary>
     public int SkippedNames => LeftSkipped.Concat(RightSkipped).Count(s => s.Kind == SkipKind.Name);
     /// <summary>Why the hash ledgers could not be saved after the compare (the result stands; the next run reads again).</summary>
     public string? CacheSaveError { get; init; }

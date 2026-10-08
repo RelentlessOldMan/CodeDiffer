@@ -101,7 +101,12 @@ static int Compare(string[] args)
 
     // --patch: the patch goes to stdout (pipe it to a file or `git apply`), the summary to stderr.
     var info = patch ? Console.Error : Console.Out;
-    if (patch)
+    if (patch && report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
+    {
+        // An unlisted directory makes its files look removed: a patch would delete them. Nothing is written.
+        Console.Error.WriteLine("error: incomplete walk (unlistable directories) — refusing to write a partial change set as a patch");
+    }
+    else if (patch)
     {
         using var stdout = PatchStdout();
         var ps = PatchWriter.Write(stdout, report, args[1], args[2], popt);
