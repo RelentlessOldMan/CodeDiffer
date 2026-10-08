@@ -134,8 +134,10 @@ public sealed class Round9Tests : IDisposable
     {
         Put("B/a.c", Ten);
         Put("V/b.c", Ten.Replace("line 3", "line three"));
+        static string Sha(string p) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(p))).ToLowerInvariant();
         var manifest = new DeltaManifest(1, [], [], [new RenameOp("a.c", "b.c", 900)],
-            [new FileDelta("b.c", ChangeReason.Content, "o", "n", 81, 85, [new Hunk(HunkOp.Replace, 3, 1, 3, 1)], [])], null);
+            [new FileDelta("b.c", ChangeReason.Content, Sha(P("B/a.c")), Sha(P("V/b.c")), new FileInfo(P("B/a.c")).Length, new FileInfo(P("V/b.c")).Length,
+                [new Hunk(HunkOp.Replace, 3, 1, 3, 1)], [])], null);
 
         var tree = DeltaTreeCrossCheck.Run(P("B"), P("V"), manifest);
         Assert.True(tree.Ok);

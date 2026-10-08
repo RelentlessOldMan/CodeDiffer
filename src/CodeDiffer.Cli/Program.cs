@@ -427,7 +427,11 @@ static int Verify(string[] args)
         Console.WriteLine($"  hunk cross-check: {cc.Reconstructed}/{cc.Checked} reconstructed · exact {cc.ExactMatches}/{cc.Checked} · {cc.Skipped} skipped (binary/eol/encoding/giant)");
         foreach (var f in cc.Files.Where(f => f.Checked && !f.Reconstructs))
             Console.WriteLine($"    MISMATCH {f.Path} ({f.Problem ?? "manifest hunks do not rebuild the variant"})");
-        Console.WriteLine(cc.Ok ? "  OK — hunks reconstruct the variant" : "  FAIL — a manifest hunk set does not rebuild the variant");
+        Console.WriteLine($"  content cross-check: {manifest.Modified.Count:N0} modified record(s), shas and sizes against the trees · " +
+                          $"{cc.ContentMismatches.Count:N0} wrong");
+        foreach (var m in cc.ContentMismatches.Take(20)) Console.WriteLine($"    WRONG    {m}");
+        Console.WriteLine(cc.Ok ? "  OK — hunks reconstruct the variant, and the shas and sizes are the trees' files"
+                                : "  FAIL — a manifest hunk set does not rebuild the variant, or a sha or size is not the trees' file");
         crossOk = cc.Ok;
 
         // CodeDiffer's own compare of the two trees (hash cache on: warm, it reads only the changed files) against
@@ -511,8 +515,13 @@ static int VerifyConflict(string[] args)
         Console.WriteLine($"        conflicted files: {(cc.ConflictPathsMatch ? "my merge conflicts in exactly the manifest's files" : $"{cc.ConflictPathsOnlyInMine.Count:N0} only in mine · {cc.ConflictPathsOnlyInManifest.Count:N0} only in the manifest")}");
         foreach (var p in cc.ConflictPathsOnlyInMine.Take(20)) Console.WriteLine($"        + mine-only conflicted file {p}");
         foreach (var p in cc.ConflictPathsOnlyInManifest.Take(20)) Console.WriteLine($"        - manifest-only conflicted file {p}");
+        if (!cc.DecompositionMatches)
+        {
+            Console.WriteLine($"        regions against the trees: {(cc.UnsoundRegions.Count == 0 ? "every conflict and clean merge is what it says" : $"{cc.UnsoundRegions.Count:N0} not what they say")}");
+            foreach (var u in cc.UnsoundRegions.Take(20)) Console.WriteLine($"        ! {u}");
+        }
         Console.WriteLine(cc.Ok
-            ? "  OK — 3-way verified (exact decomposition, or reconstruction with the same conflicted files)"
+            ? "  OK — 3-way verified (exact decomposition, or reconstruction with the same conflicted files and sound regions)"
             : "  FAIL — my merge does not reproduce the manifest's decomposition or its conflicted files");
         mergeOk = cc.Ok;
 
@@ -532,10 +541,11 @@ static int VerifyConflict(string[] args)
         var c3 = ConflictTreeCrossCheck.Compare3(r3, manifest);
         Console.WriteLine($"    [3] compare3 over the whole trees: {c3.Entries:N0} changed paths · {c3.Conflicts:N0} conflicts · " +
                           $"{c3.ConflictOnlyInCompare3.Count:N0} conflicted only in compare3 · {c3.ConflictOnlyInManifest.Count:N0} only in the manifest · " +
-                          $"{c3.Unchanged.Count:N0} manifest file(s) it found unchanged");
+                          $"{c3.Unchanged.Count:N0} manifest file(s) it found unchanged · {c3.MergedNotInManifest.Count:N0} merged file(s) the manifest leaves out");
         foreach (var p in c3.ConflictOnlyInCompare3.Take(20)) Console.WriteLine($"        + compare3-only conflicted file {p}");
         foreach (var p in c3.ConflictOnlyInManifest.Take(20)) Console.WriteLine($"        - manifest-only conflicted file {p}");
         foreach (var p in c3.Unchanged.Take(20)) Console.WriteLine($"        ? unchanged in compare3 {p}");
+        foreach (var p in c3.MergedNotInManifest.Take(20)) Console.WriteLine($"        - merged by compare3, not in the manifest {p}");
         if (c3.Unread > 0) Console.WriteLine($"        (compare3 could not read {c3.Unread:N0} file(s) / director(ies))");
         Console.WriteLine(c3.Ok
             ? "  OK — compare3 conflicts in exactly the manifest's files"

@@ -411,7 +411,7 @@ public static class HtmlReport
     private static void Prepare(string outDir, IEnumerable<string> trees)
     {
         foreach (var tree in trees)
-            if (ResultStore.IsUnder(outDir, tree) || ResultStore.IsUnder(tree, outDir))
+            if (ResultStore.Overlaps(outDir, tree))
                 throw new IOException($"the report directory {outDir} and the compared tree {tree} overlap; write the report somewhere else");
         if (Directory.Exists(outDir))
         {

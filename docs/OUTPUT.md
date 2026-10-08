@@ -259,6 +259,11 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - A command given an option it doesn't take (`--no-chache`), an extra word, or a flag without its value stops
   at once with the usage (exit 64), instead of running an hour without it; so does a bad `-U` / `--max-diffs`
   value, a results directory inside a compared tree, and `verify` given only one of `--base` / `--variant`.
+  "Inside" is by what the paths resolve to, not only their spelling: a tree named through a junction, symlink,
+  subst or mapped drive is the same tree, for the results directory, the overlay, the report and `apply-overlay`.
+- `results --prune` never deletes through a link: a junction or symlink in the results directory is not a saved
+  compare, whatever it points at. A saved path that could reach outside its tree (`../x`, rooted, a drive) is a
+  corrupt result, never acted on.
 - `whitespace` means only whitespace: the same lines but for indentation, trailing spaces / tabs and the
   spacing round punctuation (`x=1` → `x = 1`). A space that joins or splits a word (`return x` → `returnx`),
   a line joined, split or added, and NBSP / NEL (characters, not whitespace) are `content`. Whitespace is
@@ -277,8 +282,9 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - Text that isn't valid UTF-8 (a cp1252 / Latin-1 file) is read byte for byte, never with U+FFFD in place of
   the bad bytes: `25°C` → `25±C` is a `content` change, not "the same text, encoding changed". Such a file that
   only gained a UTF-8 BOM is `encoding`, small or large.
-- A file is binary when it has a NUL and no BOM: anywhere in it when it is read whole (up to 8 MB), in its first
-  8 KB past that. So text that turns binary further in is `binary`, and no patch ever carries raw NULs.
+- A file is binary when it has a NUL and no UTF-16/32 BOM (UTF-8 never needs a NUL, so a UTF-8 BOM excuses
+  none): anywhere in it when it is read whole (up to 8 MB), in its first 8 KB past that. So text that turns binary
+  further in is `binary`, and no patch ever carries raw NULs.
 - `codediffer diff` with a file that isn't there is an error (exit 2), never "the whole other file added": an
   added or deleted file is asked for with `/dev/null` (or `NUL`) as the absent side. Both sides get the right
   file's name, so `git apply` changes that file rather than renaming it.
@@ -289,7 +295,8 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   outside any `diff --git` section, which git skips, so the rest still applies; the summary counts them as
   NOT CARRIED. So is a file behind a link in the other tree (a patch would write or delete through it), and a
   path another change's path differs from only in case (`Foo.c` → `foo.c`, or a directory renamed so): on
-  Windows `git apply` refuses the whole patch over one of those. A byte-identical rename is a header-only rename, binary or not; a UTF-8 BOM is kept. A rename
+  Windows `git apply` refuses the whole patch over one of those, and so is a path with an unpaired surrogate
+  (a legal Windows name UTF-8 can't spell: git would look for another file). A byte-identical rename is a header-only rename, binary or not; a UTF-8 BOM is kept. A rename
   found by line similarity always carries its diff, even at "100% similar" (one line in 2,001, reordered lines,
   line endings only): the list says "(but edited)", and it never counts as pure.
 - A file over 8 MB is not decoded whole to find its reason: up to 64 MB it is compared streamed, as bytes
@@ -298,8 +305,11 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - `verify` checks CodeDiffer, not only the manifest: with the trees it runs CodeDiffer's own compare and
   requires exactly the manifest's files, reasons and rename similarities (death 1.0.9: 1,561/1,561 and
   1,354/1,354); the 3-way gate needs the exact decomposition, or reconstruction AND a merge conflicting in
-  exactly the manifest's files, AND compare3 itself — over the whole trees, lines with their endings —
-  conflicting in exactly the manifest's files (death 1.0.9: 941 of 941).
+  exactly the manifest's files AND every region being what it says against the trees (a conflict both sides
+  changed, differently; a clean merge its side changed, clear of the other side's changes), AND compare3 itself
+  — over the whole trees, lines with their endings — conflicting in exactly the manifest's files and merging
+  none it leaves out (death 1.0.9: 941 of 941). Every modified record's `oldSha`/`newSha`/`oldSize`/`newSize`
+  is checked against the trees' files, whatever its reason: the digest only proves the manifest agrees with itself.
 - Deterministic output: two runs over the same inputs are byte-identical, so a diff of results is real.
 
 ## 7. Defaults (tunable)

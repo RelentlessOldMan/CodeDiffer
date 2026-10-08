@@ -46,7 +46,7 @@ public static class OverlayApplier
             throw new ArgumentException($"{overlay} was written from an incomplete compare (see OVERLAY.txt): its deletes may be listing " +
                                         "failures — compare again and write a new overlay");
         if (!Directory.Exists(target)) throw new DirectoryNotFoundException($"target directory not found: {target}");
-        if (ResultStore.IsUnder(target, overlay) || ResultStore.IsUnder(overlay, target))
+        if (ResultStore.Overlaps(target, overlay))
             throw new ArgumentException($"the target {target} and the overlay {overlay} must not be inside each other");
         var madeFor = MadeForV1(overlay);
         if (write && !again && File.Exists(Path.Combine(overlay, AppliedName))

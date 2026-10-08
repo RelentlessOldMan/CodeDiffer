@@ -36,6 +36,14 @@ public sealed class DeltaTreeCrossCheckTests : IDisposable
     }
 
     // A content edit on odd (1-based) lines → five 1-line replaces, matching CodeSpawner's Coalesce.
+    /// <summary>The record with the trees' own shas and sizes (verify checks them).</summary>
+    private FileDelta Real(FileDelta f, string? from = null)
+    {
+        static string Sha(string p) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(p))).ToLowerInvariant();
+        string b = Path.Combine(_base, from ?? f.Path), v = Path.Combine(_variant, f.Path);
+        return f with { OldSha = Sha(b), NewSha = Sha(v), OldSize = new FileInfo(b).Length, NewSize = new FileInfo(v).Length };
+    }
+
     private FileDelta BuildContentFile(string rel, out string baseText, out string variantText)
     {
         var baseLines = Enumerable.Range(1, 10).Select(i => $"line {i}").ToArray();
@@ -56,7 +64,7 @@ public sealed class DeltaTreeCrossCheckTests : IDisposable
         Write(_base, "src/a.c", b);
         Write(_variant, "src/a.c", v);
 
-        var manifest = new DeltaManifest(1, [], [], [], [f], DiffTruthSha: null);
+        var manifest = new DeltaManifest(1, [], [], [], [Real(f)], DiffTruthSha: null);
         var result = DeltaTreeCrossCheck.Run(_base, _variant, manifest);
 
         Assert.True(result.Ok);
@@ -121,12 +129,14 @@ public sealed class DeltaTreeCrossCheckTests : IDisposable
     {
         Write(_base, "x.bin", "whatever");
         Write(_variant, "x.bin", "whatever2");
-        var binary = new FileDelta("x.bin", ChangeReason.Binary, "o", "n", 8, 9, [], []);
+        var binary = Real(new FileDelta("x.bin", ChangeReason.Binary, "o", "n", 8, 9, [], []));
         var manifest = new DeltaManifest(1, [], [], [], [binary], DiffTruthSha: null);
 
         var result = DeltaTreeCrossCheck.Run(_base, _variant, manifest);
         Assert.Equal(1, result.Skipped);
         Assert.Equal(0, result.Checked);
-        Assert.True(result.Ok); // nothing checked, nothing mismatched
+        Assert.True(result.Ok); // no hunks checked; its shas and sizes are the trees' files
+        var wrong = DeltaTreeCrossCheck.Run(_base, _variant, manifest with { Modified = [binary with { NewSha = new string('1', 64) }] });
+        Assert.False(wrong.Ok); // ...and checked, whatever the reason
     }
 }

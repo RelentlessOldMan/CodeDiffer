@@ -36,11 +36,12 @@ public sealed class PatchStats
 {
     /// <summary><see cref="OtherFiles"/>: text that is not UTF-8 (UTF-16, a legacy code page) — a UTF-8 patch can't
     /// carry its bytes. <see cref="UnreadableFiles"/>: a side could not be read, or is behind a link.
-    /// <see cref="CaseFiles"/>: a path another change's path differs from only in case.</summary>
-    public int TextFiles, BinaryFiles, GiantFiles, NoteFiles, CoarseFiles, OtherFiles, UnreadableFiles, CaseFiles;
+    /// <see cref="CaseFiles"/>: a path another change's path differs from only in case. <see cref="NameFiles"/>: a
+    /// path with an unpaired UTF-16 surrogate, which UTF-8 can't spell (git would look for another name).</summary>
+    public int TextFiles, BinaryFiles, GiantFiles, NoteFiles, CoarseFiles, OtherFiles, UnreadableFiles, CaseFiles, NameFiles;
 
     /// <summary>Files the patch describes in '#' comments but does not carry: copy them by hand.</summary>
-    public int NotCarried => BinaryFiles + GiantFiles + OtherFiles + UnreadableFiles + CaseFiles;
+    public int NotCarried => BinaryFiles + GiantFiles + OtherFiles + UnreadableFiles + CaseFiles + NameFiles;
 
     internal void Add(PatchStats o)
     {
@@ -52,6 +53,7 @@ public sealed class PatchStats
         OtherFiles += o.OtherFiles;
         UnreadableFiles += o.UnreadableFiles;
         CaseFiles += o.CaseFiles;
+        NameFiles += o.NameFiles;
     }
 
     /// <summary>The one-line summary of a written patch.</summary>
@@ -59,7 +61,8 @@ public sealed class PatchStats
         $"{TextFiles:N0} text · {NoteFiles:N0} eol/encoding note(s)" + (CoarseFiles > 0 ? $" · {CoarseFiles:N0} coarse (edit-distance budget exceeded)" : "") +
         (NotCarried > 0 ? $" · NOT CARRIED (described in '#' lines; copy them by hand): {BinaryFiles:N0} binary · {GiantFiles:N0} large · " +
                           $"{OtherFiles:N0} non-UTF-8 text · {UnreadableFiles:N0} unreadable" +
-                          (CaseFiles > 0 ? $" · {CaseFiles:N0} case-only path change(s)" : "") : "") +
+                          (CaseFiles > 0 ? $" · {CaseFiles:N0} case-only path change(s)" : "") +
+                          (NameFiles > 0 ? $" · {NameFiles:N0} path(s) UTF-8 can't spell" : "") : "") +
         (NoteFiles > 0 && !literal ? " · eol/encoding-only files are notes, not hunks (--literal / literal=true carries them)" : "");
 }
 
@@ -106,7 +109,15 @@ public static class PatchWriter
                 var c = changed[start + i];
                 try
                 {
-                    if (caseOnly.Contains(c.RelativePath) || (c.RenamedFrom is { } f && caseOnly.Contains(f)))
+                    if (Sessions.ResultStore.HasLoneSurrogate(c.RelativePath) || (c.RenamedFrom is { } r && Sessions.ResultStore.HasLoneSurrogate(r)))
+                    {
+                        // The patch is UTF-8: the name would come out with U+FFFD in it, git would look for that file and
+                        // refuse the whole patch.
+                        local[i].NameFiles = 1;
+                        sw.Write($"# {Name(c)}: the path has a character UTF-8 can't spell (an unpaired surrogate; shown as \uFFFD) — " +
+                                 "not in this patch; do it by hand\n");
+                    }
+                    else if (caseOnly.Contains(c.RelativePath) || (c.RenamedFrom is { } f && caseOnly.Contains(f)))
                     {
                         local[i].CaseFiles = 1;
                         sw.Write($"# {Name(c)}: another path in this patch differs from it only in case (one file on Windows, " +

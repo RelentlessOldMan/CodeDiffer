@@ -38,7 +38,7 @@ public static class MergeOverlay
     {
         dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
         foreach (var (name, root) in new[] { ("base", baseDir), ("v1", v1), ("v2", v2) })
-            if (ResultStore.IsUnder(dir, root))
+            if (ResultStore.Overlaps(dir, root, oneWay: true))
                 throw new ArgumentException($"the overlay directory {dir} is inside the {name} tree {root}; write it somewhere else");
         if (Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any())
             throw new ArgumentException($"{dir} is not empty; the overlay needs a new or empty directory");

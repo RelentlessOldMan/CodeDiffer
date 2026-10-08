@@ -35,10 +35,15 @@ internal static class TextInspector
         return false;
     }
 
-    /// <summary>A NUL with no BOM ⇒ treat as binary. (Checks the LEFT or RIGHT caller-side.) Given the whole file when it
-    /// was read whole — a NUL past the first 8 KB makes it binary too — else its head.</summary>
+    /// <summary>A NUL, unless a UTF-16/32 BOM says NULs are half its characters ⇒ treat as binary. UTF-8 never needs a
+    /// NUL, so a UTF-8 BOM excuses none. (Checks the LEFT or RIGHT caller-side.) Given the whole file when it was read
+    /// whole — a NUL past the first 8 KB makes it binary too — else its head.</summary>
     public static bool LooksBinary(ReadOnlySpan<byte> head)
-        => !HasBom(head) && head.IndexOf((byte)0) >= 0;
+        => !IsWideBom(head) && head.IndexOf((byte)0) >= 0;
+
+    private static bool IsWideBom(ReadOnlySpan<byte> h)
+        => h.Length >= 2 && ((h[0] == 0xFF && h[1] == 0xFE) || (h[0] == 0xFE && h[1] == 0xFF))       // UTF-16 (and UTF-32 LE)
+           || (h.Length >= 4 && h[0] == 0x00 && h[1] == 0x00 && h[2] == 0xFE && h[3] == 0xFF);       // UTF-32 BE
 
     /// <summary>Open for reading without getting in a writer's way: a log being appended to, or a file being deleted,
     /// is still readable (asking for FileShare.Read alone fails on any file open for writing).</summary>

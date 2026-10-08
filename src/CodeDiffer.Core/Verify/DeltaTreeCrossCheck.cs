@@ -10,15 +10,18 @@ namespace CodeDiffer.Core.Verify;
 public sealed record FileHunkCheck(
     string Path, string Reason, bool Checked, bool Reconstructs, bool ExactMatch, int ExpectedHunks, int ActualHunks, string? Problem = null);
 
-public sealed record TreeCrossCheckResult(IReadOnlyList<FileHunkCheck> Files)
+/// <param name="ContentMismatches">Modified records whose oldSha/oldSize or newSha/newSize (any reason) are not the
+/// trees' files: the digest proves only that the manifest agrees with itself.</param>
+public sealed record TreeCrossCheckResult(IReadOnlyList<FileHunkCheck> Files, IReadOnlyList<string> ContentMismatches)
 {
     public int Checked => Files.Count(f => f.Checked);
     public int Reconstructed => Files.Count(f => f.Checked && f.Reconstructs);
     public int ExactMatches => Files.Count(f => f.Checked && f.ExactMatch);
     public int Skipped => Files.Count(f => !f.Checked);
 
-    /// <summary>Pass iff every checked file's hunks reconstruct the variant. Exact-match is NOT required.</summary>
-    public bool Ok => Files.All(f => !f.Checked || f.Reconstructs);
+    /// <summary>Pass iff every checked file's hunks reconstruct the variant and every modified record's shas and sizes
+    /// are the trees' files. Exact-match is NOT required.</summary>
+    public bool Ok => Files.All(f => !f.Checked || f.Reconstructs) && ContentMismatches.Count == 0;
 }
 
 /// <summary>
@@ -41,10 +44,14 @@ public static class DeltaTreeCrossCheck
         var results = new List<FileHunkCheck>(manifest.Modified.Count);
         var renamedFrom = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var r in manifest.Renamed) renamedFrom[r.To] = r.From;
+        var content = new List<string>();
 
         foreach (var f in manifest.Modified)
         {
             var reason = CanonicalTokens.Token(f.Reason);
+            var oldPath = renamedFrom.TryGetValue(f.Path, out var was) ? was : f.Path;
+            if (Mismatch(baseDir, oldPath, f.OldSha, f.OldSize) is { } bm) content.Add($"{f.Path}: base {bm}");
+            if (Mismatch(variantDir, f.Path, f.NewSha, f.NewSize) is { } vm) content.Add($"{f.Path}: variant {vm}");
             bool comparable = f.Reason == ChangeReason.Content && f.RunHunks.Count == 0;
             if (!comparable)
             {
@@ -79,7 +86,23 @@ public static class DeltaTreeCrossCheck
                 f.Hunks.Count, mine.Count));
         }
 
-        return new TreeCrossCheckResult(results);
+        return new TreeCrossCheckResult(results, content);
+    }
+
+    /// <summary>Why the file is not the one the manifest names (size, then SHA-256 of its bytes), or null when it is.</summary>
+    private static string? Mismatch(string root, string rel, string sha, long size)
+    {
+        var path = Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists) return $"{rel} is missing";
+            if (info.Length != size) return $"{rel} is {info.Length:N0} bytes, the manifest says {size:N0}";
+            using var s = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
+            var actual = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(s)).ToLowerInvariant();
+            return string.Equals(actual, sha, StringComparison.OrdinalIgnoreCase) ? null : $"{rel} has SHA-256 {actual}, the manifest says {sha}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return $"{rel} can't be read ({ex.Message})"; }
     }
 
     private static bool Reconstructs(IReadOnlyList<string> baseLines, IReadOnlyList<string> variantLines, IReadOnlyList<Hunk> hunks)

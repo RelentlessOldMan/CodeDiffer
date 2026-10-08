@@ -17,9 +17,11 @@ public sealed record Compare3CrossCheck(
     IReadOnlyList<string> ConflictOnlyInCompare3,
     IReadOnlyList<string> ConflictOnlyInManifest,
     IReadOnlyList<string> Unchanged,
-    int Unread)
+    int Unread,
+    IReadOnlyList<string> MergedNotInManifest)
 {
-    public bool Ok => ConflictOnlyInCompare3.Count == 0 && ConflictOnlyInManifest.Count == 0 && Unchanged.Count == 0 && Unread == 0;
+    public bool Ok => ConflictOnlyInCompare3.Count == 0 && ConflictOnlyInManifest.Count == 0 && Unchanged.Count == 0 && Unread == 0
+                      && MergedNotInManifest.Count == 0;
 }
 
 /// <summary>Per-file reconstruction outcome (manifest's own per-side coords rebuild each variant).</summary>
@@ -39,7 +41,8 @@ public sealed record ConflictCrossCheckResult(
     IReadOnlyList<CleanMerge> CleanOnlyInMine,
     IReadOnlyList<CleanMerge> CleanOnlyInManifest,
     IReadOnlyList<string> ConflictPathsOnlyInMine,
-    IReadOnlyList<string> ConflictPathsOnlyInManifest)
+    IReadOnlyList<string> ConflictPathsOnlyInManifest,
+    IReadOnlyList<string> UnsoundRegions)
 {
     public int FilesChecked => Files.Count;
     public int V1Reconstructed => Files.Count(f => f.V1Reconstructs);
@@ -53,10 +56,12 @@ public sealed record ConflictCrossCheckResult(
     /// Pass if my own diff3 reproduces the exact decomposition (digest equality — achievable when the diff is
     /// unambiguous), OR — when a run of identical lines makes the minimal diff non-unique, so regions may
     /// legitimately sit elsewhere — the manifest's per-side coords rebuild both trees AND my merge conflicts in
-    /// exactly the same files. Reconstruction alone tests only the manifest; the file agreement keeps CodeDiffer's
-    /// own merge in the gate.
+    /// exactly the same files, AND every region is what it says against the trees (<see cref="UnsoundRegions"/>: a
+    /// conflict both sides changed, differently; a clean merge its side changed, clear of the other side's changes).
+    /// Reconstruction alone tests only the manifest; the file agreement keeps CodeDiffer's own merge in the gate, and
+    /// the region check keeps a clean edit from being passed off as a conflict (or the reverse).
     /// </summary>
-    public bool Ok => DecompositionMatches || (Reconstructs && ConflictPathsMatch);
+    public bool Ok => DecompositionMatches || (Reconstructs && ConflictPathsMatch && UnsoundRegions.Count == 0);
 }
 
 /// <summary>
@@ -87,6 +92,7 @@ public static class ConflictTreeCrossCheck
         // operations the conflict manifest doesn't describe.
         static bool InPlace(Merge3Entry e) => e.V1 is { Status: ChangeStatus.Modified } && e.V2 is { Status: ChangeStatus.Modified };
         var mine = report.Entries.Where(e => e.Outcome == Merge3Outcome.Conflict && InPlace(e)).Select(e => e.Path).ToHashSet(StringComparer.Ordinal);
+        var merged = report.Entries.Where(e => e.Outcome == Merge3Outcome.Merged && InPlace(e)).Select(e => e.Path).ToHashSet(StringComparer.Ordinal);
         var theirs = manifest.Conflicts.Select(c => c.Path).ToHashSet(StringComparer.Ordinal);
         var touched = report.Entries.Select(e => e.Path).ToHashSet(StringComparer.Ordinal);
         var named = manifest.Conflicts.Select(c => c.Path).Concat(manifest.CleanMerges.Select(m => m.Path)).ToHashSet(StringComparer.Ordinal);
@@ -95,7 +101,10 @@ public static class ConflictTreeCrossCheck
             mine.Except(theirs).Order(StringComparer.Ordinal).ToList(),
             theirs.Except(mine).Order(StringComparer.Ordinal).ToList(),
             named.Except(touched).Order(StringComparer.Ordinal).ToList(),
-            report.UnreadableFiles + report.DroppedDirectories);
+            report.UnreadableFiles + report.DroppedDirectories,
+            // A file both sides edited in place and compare3 merged cleanly is a merge the manifest must describe: one
+            // left out entirely would otherwise pass every gate (gates 1 and 2 only see the files the manifest names).
+            merged.Except(named).Order(StringComparer.Ordinal).ToList());
     }
 
     public static ConflictCrossCheckResult Run(
@@ -169,6 +178,10 @@ public static class ConflictTreeCrossCheck
             files.Add(new FileMergeCheck(path, v1Ok, v2Ok));
         }
 
+        var unsound = new List<string>();
+        foreach (var path in paths)
+            if (trees.TryGetValue(path, out var t)) unsound.AddRange(Unsound(path, t.b, t.v1, t.v2, manifest));
+
         var mineC = myConflicts.ToHashSet();
         var manC = manifest.Conflicts.ToHashSet();
         var mineM = myClean.ToHashSet();
@@ -181,8 +194,46 @@ public static class ConflictTreeCrossCheck
             mineC.Except(manC).Take(20).ToList(), manC.Except(mineC).Take(20).ToList(),
             mineM.Except(manM).Take(20).ToList(), manM.Except(mineM).Take(20).ToList(),
             myConflicts.Select(c => c.Path).Except(manifest.Conflicts.Select(c => c.Path), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(),
-            manifest.Conflicts.Select(c => c.Path).Except(myConflicts.Select(c => c.Path), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList());
+            manifest.Conflicts.Select(c => c.Path).Except(myConflicts.Select(c => c.Path), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(),
+            unsound);
     }
+
+    /// <summary>
+    /// The manifest's regions in one file that are not what they say, read against the trees: a conflict where a side
+    /// left the base as it was, or both sides made the same change; a clean merge whose side changed nothing there, or
+    /// that overlaps a change of the other side (a conflict, or the other side's own clean merge).
+    /// </summary>
+    private static IEnumerable<string> Unsound(string path, string[] b, string[] v1, string[] v2, ConflictManifest manifest)
+    {
+        var conflicts = manifest.Conflicts.Where(c => c.Path == path).ToList();
+        var clean = manifest.CleanMerges.Where(m => m.Path == path).ToList();
+        foreach (var c in conflicts)
+        {
+            bool v1Same = SeqEqual(v1, c.V1NewStart - 1, c.V1NewLines, b, c.BaseStart - 1, c.BaseLines);
+            bool v2Same = SeqEqual(v2, c.V2NewStart - 1, c.V2NewLines, b, c.BaseStart - 1, c.BaseLines);
+            bool agreed = SeqEqual(v1, c.V1NewStart - 1, c.V1NewLines, v2, c.V2NewStart - 1, c.V2NewLines);
+            if (v1Same || v2Same || agreed)
+                yield return $"conflict {path}:{c.BaseStart},{c.BaseLines}: " +
+                             (v1Same ? "v1 left the base as it was there" : v2Same ? "v2 left the base as it was there" : "both sides made the same change");
+        }
+        foreach (var m in clean)
+        {
+            var side = m.Side == "v2" ? v2 : v1;
+            if (SeqEqual(side, m.NewStart - 1, m.NewLines, b, m.OldStart - 1, m.OldLines))
+            {
+                yield return $"clean {m.Side} {path}:{m.OldStart},{m.OldLines}: {m.Side} changed nothing there";
+                continue;
+            }
+            bool clash = conflicts.Any(c => Overlap(m.OldStart, m.OldLines, c.BaseStart, c.BaseLines))
+                         || clean.Any(o => o.Side != m.Side && Overlap(m.OldStart, m.OldLines, o.OldStart, o.OldLines));
+            if (clash) yield return $"clean {m.Side} {path}:{m.OldStart},{m.OldLines}: it overlaps a change of the other side";
+        }
+    }
+
+    /// <summary>Two base regions that share a line, or two inserts at the same place (lenient about where an insert
+    /// next to a region sits, which conventions differ on).</summary>
+    private static bool Overlap(int s1, int n1, int s2, int n2)
+        => n1 > 0 && n2 > 0 ? s1 < s2 + n2 && s2 < s1 + n1 : n1 == 0 && n2 == 0 && s1 == s2;
 
     private static bool ReconstructsSide(
         IReadOnlyList<string> baseLines, IReadOnlyList<string> variantLines, List<Hunk>? hunks)

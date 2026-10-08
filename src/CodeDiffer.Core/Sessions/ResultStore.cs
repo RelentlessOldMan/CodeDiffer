@@ -58,7 +58,7 @@ public static class ResultStore
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         foreach (var r in roots)
-            if (IsUnder(root, r))
+            if (Overlaps(root, r, oneWay: true))
                 throw new ArgumentException($"the results directory {root} is inside the compared tree {r}; a compare never writes into " +
                                             "its own input — set CODEDIFFER_RESULTS_DIR to somewhere else");
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
@@ -162,6 +162,8 @@ public static class ResultStore
             if (list.Count >= max) break;
             try
             {
+                // A junction or symlink here is not a result: listing it would let prune delete what it points at.
+                if (new DirectoryInfo(dir).Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
                 using var doc = ReadMeta(dir);
                 var m = doc.RootElement;
                 var rootsEl = m.GetProperty("roots");
@@ -225,6 +227,8 @@ public static class ResultStore
         var parent = Path.GetDirectoryName(dir);
         if (!string.Equals(parent, Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException($"{dir} is not directly under the results directory {root}");
+        if (new DirectoryInfo(dir).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new ArgumentException($"{dir} is a link, not a saved compare; refusing to delete through it");
         using (ReadMeta(dir)) { } // throws unless it is a CodeDiffer result
         DeleteContents(new DirectoryInfo(dir), keep: MetaName);
         var meta = new FileInfo(Path.Combine(dir, MetaName));
@@ -453,7 +457,7 @@ public static class ResultStore
 
     private static List<CodeDiffer.Core.Walk.SkippedPath> ReadSkipped(JsonElement stats, string name)
         => stats.TryGetProperty(name, out var a)
-            ? a.EnumerateArray().Select(x => new CodeDiffer.Core.Walk.SkippedPath(PathOf(x, "path"),
+            ? a.EnumerateArray().Select(x => new CodeDiffer.Core.Walk.SkippedPath(RelOf(x, "path"),
                 Str(x, "kind") == "link" ? CodeDiffer.Core.Walk.SkipKind.Link : CodeDiffer.Core.Walk.SkipKind.Name,
                 x.TryGetProperty("dir", out var d) && d.GetBoolean())).ToList()
             : [];
@@ -541,12 +545,12 @@ public static class ResultStore
     }
 
     private static FileChange ReadChangeFields(JsonElement e) => new(
-        PathOf(e, "path"),
+        RelOf(e, "path"),
         Status(Str(e, "status")),
         e.TryGetProperty("reason", out var r) ? CanonicalTokens.Reason(r.GetString()!) : null,
         e.GetProperty("leftSize").GetInt64(),
         e.GetProperty("rightSize").GetInt64(),
-        e.TryGetProperty("from", out _) ? PathOf(e, "from") : null,
+        e.TryGetProperty("from", out _) ? RelOf(e, "from") : null,
         e.TryGetProperty("similarity", out var s) ? s.GetInt32() : null,
         e.TryGetProperty("unreadable", out var u) ? u.GetString() : null,
         e.TryGetProperty("edited", out var ed) && ed.GetBoolean(),
@@ -568,14 +572,14 @@ public static class ResultStore
     }
 
     private static Merge3Entry ReadEntry(JsonElement e) => new(
-        PathOf(e, "path"),
+        RelOf(e, "path"),
         e.TryGetProperty("v1", out var v1) ? ReadChange(v1) : null,
         e.TryGetProperty("v2", out var v2) ? ReadChange(v2) : null,
         Outcome(Str(e, "outcome")),
         e.TryGetProperty("kind", out var k) ? k.GetString() : null,
         e.GetProperty("conflicts").GetInt32(),
         e.GetProperty("clean").GetInt32(),
-        e.TryGetProperty("merged", out _) ? PathOf(e, "merged") : null,
+        e.TryGetProperty("merged", out _) ? RelOf(e, "merged") : null,
         e.TryGetProperty("note", out var n) ? n.GetString() : null);
 
     // ---- tokens / helpers ----
@@ -650,6 +654,20 @@ public static class ResultStore
         return new string(chars);
     }
 
+    /// <summary>A path inside a tree, as a compare saves it ('/'-separated, relative). Anything that could reach outside the
+    /// tree it is acted on in (rooted, a drive, an empty, "." or ".." part, a backslash on Windows) is a corrupt file.</summary>
+    private static string RelOf(JsonElement e, string name)
+    {
+        var p = PathOf(e, name);
+        if (!IsSafeRelative(p)) throw new FormatException($"{name} '{p}' is not a relative path inside the tree");
+        return p;
+    }
+
+    internal static bool IsSafeRelative(string p)
+        => p.Length > 0 && !Path.IsPathRooted(p) && p.IndexOf('\0') < 0
+           && !(OperatingSystem.IsWindows() && (p.Contains('\\') || p.Contains(':')))
+           && p.Split('/').All(s => s is not ("" or "." or ".."));
+
     internal static bool HasLoneSurrogate(string s)
     {
         for (int i = 0; i < s.Length; i++)
@@ -681,5 +699,15 @@ public static class ResultStore
             return Path.EndsInDirectorySeparator(d) ? d : d + Path.DirectorySeparatorChar;
         }
         return Dir(path).StartsWith(Dir(tree), cmp);
+    }
+
+    /// <summary>Is <paramref name="path"/> inside <paramref name="tree"/> (or, unless <paramref name="oneWay"/>, the other
+    /// way round), by name or by what the names resolve to — a junction, symlink, subst or mapped drive naming the tree
+    /// by another path counts. For the gates that keep an output out of an input, not for per-file checks.</summary>
+    internal static bool Overlaps(string path, string tree, bool oneWay = false)
+    {
+        if (IsUnder(path, tree) || (!oneWay && IsUnder(tree, path))) return true;
+        string rp = CodeDiffer.Core.Walk.RealPath.Of(path), rt = CodeDiffer.Core.Walk.RealPath.Of(tree);
+        return IsUnder(rp, rt) || (!oneWay && IsUnder(rt, rp));
     }
 }
