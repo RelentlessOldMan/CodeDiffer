@@ -142,6 +142,13 @@ public static class TreeMerger
         return new ThreeWayReport { V1Report = r1, V2Report = r2, Entries = entries, Timings = timings };
     }
 
+    /// <summary>Whose file is the merge, whole: 1 when v2 only moved it (byte-identical) and v1 changed it in place, 2 the
+    /// reverse, else 0. Such an entry is merged by taking that side's file, never line by line.</summary>
+    internal static int WholeFrom(FileChange? c1, FileChange? c2)
+        => c1 is null || c2 is null ? 0
+            : c2 is { Status: ChangeStatus.Renamed, PureRename: true } && c1.Status == ChangeStatus.Modified ? 1
+            : c1 is { Status: ChangeStatus.Renamed, PureRename: true } && c2.Status == ChangeStatus.Modified ? 2 : 0;
+
     /// <summary>How destination paths are told apart: ignoring case where the file system does.</summary>
     internal static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
@@ -196,12 +203,20 @@ public static class TreeMerger
 
         var f1 = Full(v1, d1);
         var f2 = Full(v2, d2);
+        // One side only moved it (a byte-identical rename), the other changed it in place: the change is the merge, at
+        // the new name — however it would merge line by line (a binary or large file can't, but needn't).
+        Merge3Entry? Whole() => WholeFrom(c1, c2) switch
+        {
+            1 => new(path, c1, c2, Merge3Outcome.Merged, null, 0, 0, dest, $"v2 only renamed it; v1's change is taken whole"),
+            2 => new(path, c1, c2, Merge3Outcome.Merged, null, 0, 0, dest, $"v1 only renamed it; v2's change is taken whole"),
+            _ => null,
+        };
         if (Math.Max(c1.RightSize, c2.RightSize) > maxText)
         {
             // Never loaded whole: a same-size pair is hashed in chunks (a cancel is seen between them).
             bool same = c1.RightSize == c2.RightSize && ContentHasher.HashFile(f1, ct) == ContentHasher.HashFile(f2, ct);
             return same ? new(path, c1, c2, Merge3Outcome.Agreed, null, 0, 0, dest, null)
-                : Conflict("large", "both changed a large file differently — not merged line by line");
+                : Whole() ?? Conflict("large", "both changed a large file differently — not merged line by line");
         }
         var bytes1 = File.ReadAllBytes(f1);
         var bytes2 = File.ReadAllBytes(f2);
@@ -211,11 +226,11 @@ public static class TreeMerger
         bool added = c1.Status == ChangeStatus.Added; // then both are adds (same key namespace)
 
         if (Math.Max(bytes1.Length, bytes2.Length) > maxText)
-            return Conflict("large", "both changed a large file differently — not merged line by line");
+            return Whole() ?? Conflict("large", "both changed a large file differently — not merged line by line");
         var baseBytes = added ? [] : File.ReadAllBytes(Full(b, path));
         if (!ChangePorter.Text.TryRead(baseBytes, out var tb) || !ChangePorter.Text.TryRead(bytes1, out var t1) || !ChangePorter.Text.TryRead(bytes2, out var t2)
             || LooksBinary(bytes1) || LooksBinary(bytes2) || LooksBinary(baseBytes))
-            return Conflict(added ? "add/add (binary)" : "binary", "both changed a binary (or non-text) file differently");
+            return Whole() ?? Conflict(added ? "add/add (binary)" : "binary", "both changed a binary (or non-text) file differently");
 
         var form = FormOf(tb, t1, t2, added);
         var lb = Split(tb.Content, form.Normalize);
@@ -274,6 +289,8 @@ public static class TreeMerger
     private static (string Base, string Merged, Form Form, int Conflicts)? Compose(Merge3Entry e, string b, string v1, string v2)
     {
         if (e.V1 is null || e.V2 is null || e.ConflictKind is not (null or "content" or "add/add") || e.Outcome == Merge3Outcome.Agreed) return null;
+        // Taken whole from one side (it may be binary or large): no line merge to show, and the file is never read whole.
+        if (e.Outcome == Merge3Outcome.Merged && e.CleanRegions == 0 && e.ConflictRegions == 0 && WholeFrom(e.V1, e.V2) != 0) return null;
         bool added = e.V1.Status == ChangeStatus.Added;
         if (!ChangePorter.Text.TryRead(added ? [] : File.ReadAllBytes(Full(b, e.Path)), out var tb)
             || !ChangePorter.Text.TryRead(File.ReadAllBytes(Full(v1, e.V1.RelativePath)), out var t1)
@@ -362,25 +379,31 @@ public static class TreeMerger
         }
         else if (!added && !Same(t1, tb)) notes.Add($"v1 changed the encoding ({Name(tb)} → {Name(t1)}); the merge keeps it");
 
-        string eb = added ? t1.Eol : tb.Eol;
+        // A file with no line break at all has no line-ending style (a one-line file without its newline is not "LF"):
+        // it takes the base's, or without one the other side's.
+        string e1 = t1.Eol, e2 = t2.Eol, eb = added ? "none" : tb.Eol;
+        if (e1 == "none") e1 = eb != "none" ? eb : e2;
+        if (e2 == "none") e2 = eb != "none" ? eb : e1;
+        bool noBase = eb == "none";
+        if (noBase) eb = e1 == "none" ? "LF" : e1;
         string eol = eb;
         int side = 0;
-        if (added && t1.Eol != t2.Eol)
+        if (noBase && e1 != e2)
         {
             conflict ??= "line endings";
-            notes.Add($"v1 added it with {t1.Eol} line endings, v2 with {t2.Eol}");
-            eol = t1.Eol;
+            notes.Add(added ? $"v1 added it with {e1} line endings, v2 with {e2}" : $"v1 gave it {e1} line endings, v2 {e2} (the base has no line break)");
+            eol = e1;
             side = 1;
         }
-        else if (!added && (t1.Eol != eb || t2.Eol != eb))
+        else if (!noBase && (e1 != eb || e2 != eb))
         {
-            if (t1.Eol == eb) (eol, side) = (t2.Eol, 2);
-            else if (t2.Eol == eb || t1.Eol == t2.Eol) (eol, side) = (t1.Eol, 1);
+            if (e1 == eb) (eol, side) = (e2, 2);
+            else if (e2 == eb || e1 == e2) (eol, side) = (e1, 1);
             else
             {
                 conflict ??= "line endings";
-                notes.Add($"v1 changed the line endings to {t1.Eol}, v2 to {t2.Eol}");
-                (eol, side) = (t1.Eol, 1);
+                notes.Add($"v1 changed the line endings to {e1}, v2 to {e2}");
+                (eol, side) = (e1, 1);
             }
             if (conflict != "line endings") notes.Add($"{(side == 1 ? "v1" : "v2")} changed the line endings ({eb} → {eol}); the merge keeps them");
         }
@@ -390,7 +413,7 @@ public static class TreeMerger
     /// <summary>Lines, each with its ending; <paramref name="normalize"/> reads CRLF as LF (a lone CR stays content).</summary>
     private static List<string> Split(string text, bool normalize) => ChangePorter.Lines(normalize ? text.Replace("\r\n", "\n") : text, false);
 
-    private static bool LooksBinary(byte[] bytes) => TextInspector.LooksBinary(bytes.AsSpan(0, Math.Min(bytes.Length, TextInspector.HeadBytes)));
+    private static bool LooksBinary(byte[] bytes) => TextInspector.LooksBinary(bytes); // read whole: sniffed whole
 
     private static string Full(string root, string rel) => System.IO.Path.Combine(root, rel.Replace('/', System.IO.Path.DirectorySeparatorChar));
 }

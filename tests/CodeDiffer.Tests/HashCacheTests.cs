@@ -301,6 +301,21 @@ public class HashCacheTests : IDisposable
     }
 
     [Fact]
+    public void AFinishedRehash_KeepsNoEntryDatedInTheFuture()
+    {
+        MakeTrees();
+        Run();
+        // An entry "hashed" a year from now (written while the clock was ahead), with a wrong hash.
+        var dir = Path.Combine(CacheBase, LedgerFormat.RootKey(Path.Combine(_dir, "L")));
+        var entries = OwnLedger("L").Entries.ToDictionary(kv => kv.Key, kv => kv.Key == "f0.txt"
+            ? kv.Value with { XxHash = new string('B', 32), Sha256 = "", HashedAtTicks = DateTime.UtcNow.AddYears(1).Ticks } : kv.Value);
+        LedgerFormat.Write(dir, entries);
+        Put("R/f0.txt", "longer than it was\n"); // the rehash never reads L/f0
+        Run(CacheMode.Rehash);
+        Assert.DoesNotContain("f0.txt", OwnLedger("L").Entries.Keys);
+    }
+
+    [Fact]
     public async Task CodeCompassV2Ledger_ForAncestorRoot_IsUsedReadOnly_ViaXxHash()
     {
         MakeTrees();

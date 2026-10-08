@@ -92,7 +92,9 @@ public static class MergeOverlay
                     }
                     break;
                 case Merge3Outcome.Merged:
-                    writes.Add((e.MergedPath!, Kind.Merged, e, inV1 != e.MergedPath ? inV1 : null));
+                    // One side only renamed it: the other side's file is the merge (binary or large ones too).
+                    var whole = e.ConflictRegions == 0 && e.CleanRegions == 0 ? TreeMerger.WholeFrom(e.V1, e.V2) switch { 1 => Kind.Moved, 2 => Kind.FromV2, _ => Kind.Merged } : Kind.Merged;
+                    writes.Add((e.MergedPath!, whole, e, inV1 != e.MergedPath ? inV1 : null));
                     break;
                 default:
                     if (e.ConflictKind is "content" or "add/add" && e.MergedPath is not null)
@@ -119,8 +121,8 @@ public static class MergeOverlay
                 // Written beside its name and moved into place, so a failure never leaves a truncated file in files\.
                 switch (w.Kind)
                 {
-                    case Kind.FromV2:
-                        File.Copy(Full(v2, w.Dest), temp, overwrite: true);
+                    case Kind.FromV2: // where v2 has it (a v2 change taken whole lands at v1's new name)
+                        File.Copy(Full(v2, w.E.V2?.Status == ChangeStatus.Modified ? w.E.V2.RelativePath : w.Dest), temp, overwrite: true);
                         break;
                     case Kind.Moved:
                         File.Copy(Full(v1, w.E.V1?.RelativePath ?? w.E.Path), temp, overwrite: true);

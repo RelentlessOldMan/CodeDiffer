@@ -34,7 +34,8 @@ public sealed class ReasonClassifier
         var leftBytes = large ? TextInspector.ReadHead(leftPath) : TextInspector.ReadAll(leftPath);
         var rightBytes = large ? TextInspector.ReadHead(rightPath) : TextInspector.ReadAll(rightPath);
 
-        if (TextInspector.LooksBinary(Head(leftBytes)) || TextInspector.LooksBinary(Head(rightBytes)))
+        // Read whole, the whole file is sniffed: text that turns binary past 8 KB is binary, never a text diff with NULs.
+        if (TextInspector.LooksBinary(leftBytes) || TextInspector.LooksBinary(rightBytes))
             return ChangeReason.Binary;
 
         if (large)

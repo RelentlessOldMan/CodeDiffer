@@ -181,6 +181,89 @@ public sealed class Round9Tests : IDisposable
         Assert.Equal(File.ReadAllBytes(P("R/f.txt")), File.ReadAllBytes(P("T/f.txt")));
     }
 
+    // ---- tier 2 ----
+
+    [Fact]
+    public void ALegacyFileThatOnlyGainedABom_IsEncoding_WholeOrStreamed()
+    {
+        byte[] latin = Encoding.Latin1.GetBytes("25\u00B0C is warm\n");
+        PutBytes("l.txt", latin);
+        PutBytes("r.txt", [0xEF, 0xBB, 0xBF, .. latin]);
+        long ll = latin.Length, rl = latin.Length + 3;
+        Assert.Equal(ChangeReason.Encoding, new ReasonClassifier().Classify(P("l.txt"), ll, P("r.txt"), rl));
+        Assert.Equal(ChangeReason.Encoding, new ReasonClassifier(maxClassifyBytes: 1).Classify(P("l.txt"), ll, P("r.txt"), rl));
+    }
+
+    [Fact]
+    public void TextThatTurnsBinaryPast8KB_IsBinary_AndNoNulReachesAPatch()
+    {
+        var text = string.Concat(Enumerable.Range(1, 1000).Select(i => $"line {i}\n"));
+        Put("L/f.dat", text);
+        PutBytes("R/f.dat", [.. Encoding.UTF8.GetBytes(text), 0, 1, 2, 0, 0x7F, 0]);
+        var r = new DirectoryComparer(NoCache).Compare(P("L"), P("R"));
+        Assert.Equal(ChangeReason.Binary, Assert.Single(r.Changes, c => c.Status == ChangeStatus.Modified).Reason);
+        var patch = Patch(r);
+        Assert.DoesNotContain('\0', patch);
+        Assert.Contains("# Binary files a/f.dat and b/f.dat differ", patch);
+    }
+
+    [Fact]
+    public void Compare3_ARenameOnOneSide_AndABinaryEditOnTheOther_IsTheEditAtTheNewName()
+    {
+        byte[] img = [0x89, 0x50, 0x4E, 0x47, 0, 0, 1, 2, 3], edited = [0x89, 0x50, 0x4E, 0x47, 0, 0, 9, 9, 9, 9];
+        PutBytes("B/img.bin", img);
+        PutBytes("V1/moved/img.bin", img);
+        PutBytes("V2/img.bin", edited);
+        var r = TreeMerger.Run(P("B"), P("V1"), P("V2"), NoCache);
+        var e = r.Entries.Single(x => x.Path == "img.bin");
+        Assert.Equal(Merge3Outcome.Merged, e.Outcome);
+        Assert.Equal("moved/img.bin", e.MergedPath);
+        Assert.Null(TreeMerger.MergedText(e, P("B"), P("V1"), P("V2")));
+
+        var o = MergeOverlay.Write(r, P("B"), P("V1"), P("V2"), P("OUT"));
+        Assert.Equal(0, o.Unresolved);
+        Assert.Equal(edited, File.ReadAllBytes(P("OUT/files/moved/img.bin")));
+    }
+
+    [Fact]
+    public void Compare3_ASideWithNoLineBreak_HasNoLineEndingStyle()
+    {
+        Put("B/c.txt", Ten.Replace("\n", "\r\n"));
+        Put("V1/c.txt", "x");
+        Put("V2/c.txt", Ten.Replace("line 5", "line five").Replace("\n", "\r\n"));
+        var r = TreeMerger.Run(P("B"), P("V1"), P("V2"), NoCache);
+        var e = r.Entries.Single(x => x.Path == "c.txt");
+        Assert.Equal(Merge3Outcome.Conflict, e.Outcome);
+        Assert.DoesNotContain("line endings", e.Note ?? "");
+        var markers = Encoding.UTF8.GetString(TreeMerger.MergedBytes(e, P("B"), P("V1"), P("V2"))!);
+        Assert.Contains("line five\r\n", markers);
+        Assert.DoesNotMatch("[^\r]\n", markers.Replace("x\n", "")); // v2's and the base's lines keep CRLF
+    }
+
+    [Fact]
+    public void Verify_AHunkWhoseOpDoesNotFitItsCounts_DoesNotRebuild()
+    {
+        string[] a = ["a", "b", "c"], b = ["a", "B", "c"];
+        Assert.True(HunkApplier.Rebuilds(a, b, [new Hunk(HunkOp.Replace, 2, 1, 2, 1)]));
+        Assert.False(HunkApplier.Rebuilds(a, b, [new Hunk(HunkOp.Insert, 2, 1, 2, 1)]));
+        Assert.False(HunkApplier.Rebuilds(a, b, [new Hunk(HunkOp.Delete, 2, 1, 2, 1)]));
+    }
+
+    [Fact]
+    public void ASavedRenameWithoutItsOldPath_IsACorruptResult()
+    {
+        Put("L/a.c", Ten);
+        Put("R/b.c", Ten);
+        var results = P("results");
+        var s = new CodeDiffer.Core.Sessions.SessionStore(resultsRoot: results).Start(P("L"), P("R"), NoCache);
+        Assert.True(s.Wait(TimeSpan.FromMinutes(1)));
+        var changes = Path.Combine(s.ResultDir!, "changes.jsonl");
+        var text = File.ReadAllText(changes);
+        Assert.Contains("\"from\"", text);
+        File.WriteAllText(changes, System.Text.RegularExpressions.Regex.Replace(text, "\"from\":\\s*\"[^\"]*\",?", ""));
+        Assert.Throws<InvalidDataException>(() => CodeDiffer.Core.Sessions.ResultStore.Load(s.ResultDir!));
+    }
+
     // ---- compare3 ----
 
     [Fact]

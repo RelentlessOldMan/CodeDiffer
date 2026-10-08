@@ -255,7 +255,9 @@ public static class ChangePorter
     {
         // Merge on raw lines (terminators kept, so a gained/lost final newline is a real line change). If the
         // target's line-ending style differs from the base's, merge EOL-normalized and write the target's style.
-        bool normalize = a.Eol != t.Eol && t.Eol != "mixed" && a.Eol != "mixed";
+        // A side with no line break has no style of its own: the target takes the change's (else the base's), the base the target's.
+        string tEol = t.Eol != "none" ? t.Eol : b.Eol != "none" ? b.Eol : a.Eol, aEol = a.Eol != "none" ? a.Eol : tEol;
+        bool normalize = aEol != tEol && tEol is not ("mixed" or "none") && aEol is not ("mixed" or "none");
         var al = Lines(a.Content, normalize);
         var bl = Lines(b.Content, normalize);
         var tl = Lines(t.Content, normalize);
@@ -299,7 +301,7 @@ public static class ChangePorter
             return (new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Already, "none", hunks, null), null);
 
         var text = merged.ToString();
-        if (normalize && t.Eol == "CRLF") text = text.Replace("\n", "\r\n");
+        if (normalize && tEol == "CRLF") text = text.Replace("\n", "\r\n");
         // The change may re-encode the file as well as edit it (a BOM dropped, UTF-16 → UTF-8): that is part of the
         // change, carried when the target still has the base's encoding. A target that re-encoded it its own way keeps
         // its own, and says so.
@@ -310,7 +312,7 @@ public static class ChangePorter
             if (reencode) { write = b; encNote = $"re-encoded {a.Kind} → {b.Kind}, as the change does"; }
             else if (t.Kind != b.Kind) encNote = $"the change re-encodes it {a.Kind} → {b.Kind}, but the target is {t.Kind} — kept the target's {t.Kind}";
         }
-        string? note = normalize ? $"merged ignoring line endings; written with the target's {t.Eol}" : null;
+        string? note = normalize ? $"merged ignoring line endings; written with the target's {tEol}" : null;
         if (encNote is not null) note = note is null ? encNote : note + "; " + encNote;
         return (new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Clean, action, hunks, note), write.Encode(text));
     }
@@ -424,7 +426,7 @@ public static class ChangePorter
             int crlf = 0, lf = 0;
             for (int i = 0; i < s.Length; i++)
                 if (s[i] == '\n') { if (i > 0 && s[i - 1] == '\r') crlf++; else lf++; }
-            return crlf > 0 && lf > 0 ? "mixed" : crlf > 0 ? "CRLF" : "LF";
+            return crlf > 0 && lf > 0 ? "mixed" : crlf > 0 ? "CRLF" : lf > 0 ? "LF" : "none"; // none: no line break at all
         }
     }
 }

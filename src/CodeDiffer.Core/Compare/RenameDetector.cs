@@ -280,8 +280,7 @@ public sealed class RenameDetector
             }
             Interlocked.Add(ref read, bytes.Length);
             if (bytes.Length == 0) return;
-            int head = Math.Min(bytes.Length, TextInspector.HeadBytes);
-            if (TextInspector.LooksBinary(bytes.AsSpan(0, head))) return;
+            if (TextInspector.LooksBinary(bytes)) return;
 
             var normalized = TextInspector.NormalizeEol(TextInspector.Decode(bytes));
             if (normalized.Length == 0) return; // only a BOM: empty text pairs with nothing, as an empty file

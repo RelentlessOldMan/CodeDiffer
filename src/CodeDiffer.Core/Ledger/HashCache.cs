@@ -224,13 +224,14 @@ public sealed class HashCache
             catch (IOException) { return; } // another CodeDiffer is writing this ledger — keep theirs
 
             var old = _own ?? _prior;
+            long now = DateTime.UtcNow.Ticks; // an entry "hashed" after now (a clock that was ahead) is not this run's
             var keep = new List<KeyValuePair<string, LedgerEntry>>();
             foreach (var e in walked)
             {
                 if (_fresh.TryGetValue(e.RelativePath, out var f) && Identity(e, f))
                     keep.Add(new(e.RelativePath, f));
                 else if (old is not null && old.Entries.TryGetValue(e.RelativePath, out var o) && Identity(e, o) && o.ChangeTicks != 0 &&
-                         (_mode != CacheMode.Rehash || !finished || o.HashedAtTicks >= _rehashSince))
+                         (_mode != CacheMode.Rehash || !finished || (o.HashedAtTicks >= _rehashSince && o.HashedAtTicks <= now)))
                     keep.Add(new(e.RelativePath, o));
             }
             LedgerFormat.Write(_ownDir, keep);

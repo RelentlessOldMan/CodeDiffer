@@ -35,7 +35,8 @@ internal static class TextInspector
         return false;
     }
 
-    /// <summary>A NUL in the head with no BOM ⇒ treat as binary. (Checks the LEFT or RIGHT caller-side.)</summary>
+    /// <summary>A NUL with no BOM ⇒ treat as binary. (Checks the LEFT or RIGHT caller-side.) Given the whole file when it
+    /// was read whole — a NUL past the first 8 KB makes it binary too — else its head.</summary>
     public static bool LooksBinary(ReadOnlySpan<byte> head)
         => !HasBom(head) && head.IndexOf((byte)0) >= 0;
 
@@ -102,7 +103,8 @@ internal static class TextInspector
             _ => (new UTF8Encoding(false, true), 0),
         };
         try { return enc.GetString(bytes, skip, bytes.Length - skip); }
-        catch (DecoderFallbackException) { return Encoding.Latin1.GetString(bytes); }
+        // A UTF-8 BOM before legacy bytes is still a BOM (the streamed check skips it too): only the rest is Latin-1.
+        catch (DecoderFallbackException) { int k = skip == 3 ? 3 : 0; return Encoding.Latin1.GetString(bytes, k, bytes.Length - k); }
     }
 
     public static string NormalizeEol(string s) => s.Replace("\r\n", "\n").Replace('\r', '\n');

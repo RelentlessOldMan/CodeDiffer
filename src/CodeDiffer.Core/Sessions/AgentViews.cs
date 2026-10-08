@@ -290,7 +290,7 @@ public static class AgentViews
             o.Append("---\n");
         }
         AppendWindow(o, all, startLine, end);
-        if (end < total) o.Append($"next: startLine={end + 1}\n");
+        if (end < total) o.Append($"next: start_line={end + 1}\n");
         return o.ToString();
     }
 

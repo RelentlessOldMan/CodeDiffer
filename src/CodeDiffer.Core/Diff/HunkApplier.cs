@@ -16,12 +16,22 @@ namespace CodeDiffer.Core.Diff;
 public static class HunkApplier
 {
     /// <summary>True when <paramref name="hunks"/> rebuild <paramref name="newLines"/> from <paramref name="oldLines"/>;
-    /// false too when a hunk points outside either file or overlaps another (a bad manifest is a failed check, not a crash).</summary>
+    /// false too when a hunk points outside either file or overlaps another, or its op doesn't fit its line counts (insert:
+    /// no old lines; delete: no new lines; replace: both) — a bad manifest is a failed check, not a crash.</summary>
     public static bool Rebuilds(IReadOnlyList<string> oldLines, IReadOnlyList<string> newLines, IReadOnlyList<Hunk> hunks)
     {
+        if (!hunks.All(OpFits)) return false;
         try { return Reconstruct(oldLines, newLines, hunks).SequenceEqual(newLines); }
         catch (FormatException) { return false; }
     }
+
+    /// <summary>The contract's op for a hunk's counts: insert = 0 old / ≥1 new, delete = ≥1 old / 0 new, replace = both ≥1.</summary>
+    public static bool OpFits(Hunk h) => h.Op switch
+    {
+        HunkOp.Insert => h.OldLines == 0 && h.NewLines > 0,
+        HunkOp.Delete => h.OldLines > 0 && h.NewLines == 0,
+        _ => h.OldLines > 0 && h.NewLines > 0,
+    };
 
     /// <exception cref="FormatException">A hunk points outside either file or overlaps the one before it.</exception>
     public static List<string> Reconstruct(

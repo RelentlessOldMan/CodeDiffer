@@ -532,7 +532,15 @@ public static class ResultStore
         w.WriteEndObject();
     }
 
-    private static FileChange ReadChange(JsonElement e) => new(
+    private static FileChange ReadChange(JsonElement e)
+    {
+        var c = ReadChangeFields(e);
+        if (c.Status == ChangeStatus.Renamed && c.RenamedFrom is null)
+            throw new FormatException($"rename of {c.RelativePath} without its old path");
+        return c;
+    }
+
+    private static FileChange ReadChangeFields(JsonElement e) => new(
         PathOf(e, "path"),
         Status(Str(e, "status")),
         e.TryGetProperty("reason", out var r) ? CanonicalTokens.Reason(r.GetString()!) : null,

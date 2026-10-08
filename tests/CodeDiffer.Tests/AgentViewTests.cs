@@ -108,7 +108,7 @@ public class AgentViewTests : IDisposable
 
         var big = AgentViews.FileDiff(s, "big.txt", maxLines: 100);
         Assert.Contains("capped: showing lines 1-100 of", big);
-        Assert.Contains("next: startLine=101", big);
+        Assert.Contains("next: start_line=101", big);
         Assert.Contains("hunks (", big);
         int at = big.IndexOf("full patch: ", StringComparison.Ordinal) + "full patch: ".Length;
         var file = big[at..big.IndexOf('\n', at)];

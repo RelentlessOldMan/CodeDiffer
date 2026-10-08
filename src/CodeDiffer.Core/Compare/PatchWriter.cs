@@ -225,8 +225,8 @@ public static class PatchWriter
         // One open per side: small files are read whole once (sniff + decode from the same bytes).
         var oldBytes = oldFull is null ? null : giant ? TextInspector.ReadHead(oldFull) : TextInspector.ReadAll(oldFull);
         var newBytes = newFull is null ? null : giant ? TextInspector.ReadHead(newFull) : TextInspector.ReadAll(newFull);
-        bool binary = (oldBytes is not null && TextInspector.LooksBinary(oldBytes.AsSpan(0, Math.Min(oldBytes.Length, TextInspector.HeadBytes)))) ||
-                      (newBytes is not null && TextInspector.LooksBinary(newBytes.AsSpan(0, Math.Min(newBytes.Length, TextInspector.HeadBytes))));
+        // A small file is sniffed whole (a NUL past 8 KB is binary too: a text diff must never carry raw NULs).
+        bool binary = (oldBytes is not null && TextInspector.LooksBinary(oldBytes)) || (newBytes is not null && TextInspector.LooksBinary(newBytes));
         if (binary)
         {
             var line = $"Binary files {(oldFull is null ? "/dev/null" : "a/" + oldRel)} and {(newFull is null ? "/dev/null" : "b/" + newRel)} differ";

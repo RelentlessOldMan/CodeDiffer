@@ -624,7 +624,7 @@ static void PrintChanges(CompareReport r)
 
 static int DiffFiles(string[] args)
 {
-    const string diffUsage = "usage: codediffer diff <left-file> <right-file> [-U N] [--literal]";
+    const string diffUsage = "usage: codediffer diff <left-file> <right-file> [-U N] [--literal]   (/dev/null for an absent side)";
     if (args.Length < 3 || !ArgsOk(args, 2, diffUsage, ["--literal"], ["-U"]))
     {
         if (args.Length < 3) Console.Error.WriteLine(diffUsage);
@@ -635,16 +635,26 @@ static int DiffFiles(string[] args)
         Console.Error.WriteLine("error: diff takes two files; for trees use `codediffer compare <left> <right> --patch`");
         return 64;
     }
-    var left = File.Exists(args[1]) ? args[1] : null;
-    var right = File.Exists(args[2]) ? args[2] : null;
+    // A side that isn't there is an error, never "the whole other file added": an absent side is asked for by name.
+    static bool Absent(string a) => a is "/dev/null" || a.Equals("NUL", StringComparison.OrdinalIgnoreCase);
+    foreach (var a in args[1..3])
+        if (!Absent(a) && !File.Exists(a))
+        {
+            Console.Error.WriteLine($"error: {a} not found (for an added or deleted file, give /dev/null as the absent side)");
+            return 2;
+        }
+    var left = Absent(args[1]) ? null : args[1];
+    var right = Absent(args[2]) ? null : args[2];
     if (left is null && right is null)
     {
-        Console.Error.WriteLine($"error: neither {args[1]} nor {args[2]} exists");
-        return 2;
+        Console.Error.WriteLine("error: both sides are absent");
+        return 64;
     }
     if (!TryPatchOptions(args, out var popt)) return 64;
     using var stdout = PatchStdout();
-    PatchWriter.WriteFiles(stdout, left, right, Path.GetFileName(args[1]), Path.GetFileName(args[2]), popt);
+    // One name for both sides — the file the patch changes (the right one's): two names would make git apply rename it.
+    var name = Path.GetFileName(right ?? left!);
+    PatchWriter.WriteFiles(stdout, left, right, name, name, popt);
     return 0;
 }
 

@@ -109,7 +109,8 @@ the same (a second one quits at once; exit 130). It stops within a chunk per fil
 including rename detection, the streamed reason check of a large file and compare3's merge (death, cold, 25 s
 in: stopped in 0.1 s), saves the hashes it already read to the ledgers, and is saved as state
 `cancelled`. So a cancelled cold run is not wasted: the next run of the same compare reads only the rest. A
-cancelled `--rehash` keeps the old ledger entries it didn't get to; a finished one keeps none it didn't re-read.
+cancelled `--rehash` keeps the old ledger entries it didn't get to; a finished one keeps none it didn't re-read
+(nor one dated after it ran, from a clock that was ahead).
 Stopping a report (Ctrl+C) stops a giant file's block diff mid-read too.
 
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
@@ -141,7 +142,10 @@ the first's base listing and the base hashes it proved (no re-listing, no re-rea
 stat of the base; both compares judge the same snapshot of it), then every touched path is
 v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content, modify/delete,
 add/add, rename/rename, path collision, file/directory clash (one side has a file where the other has a
-directory: v2 turns `D/` into a file `D` while v1 adds `D/z.txt`), binary, large. Renames are followed (renamed on one side, edited
+directory: v2 turns `D/` into a file `D` while v1 adds `D/z.txt`), binary, large. A file one side only moved
+(byte-identical) and the other changed in place merges to the change at the new name — binary and large files
+too, taken whole. A side with no line break at all has no line-ending style: it never "changes the line endings"
+(a CRLF file cut to one line is not CRLF → LF). Renames are followed (renamed on one side, edited
 on the other ⇒ merged at the new name). The same `get_summary` / `list_files` / `get_file_diff` / `get_stats`
 serve it; `get_file_diff` shows the merged file with diff3 markers (`<<<<<<< v1 / ||||||| base / ======= /
 >>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested). A file's encoding (BOM, UTF-16) and
@@ -271,7 +275,15 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - A malformed manifest, hunk coordinates outside the files, a manifest file missing from the tree and a
   corrupt saved result (a bad status, a number out of range) are errors or failed checks, never a crash.
 - Text that isn't valid UTF-8 (a cp1252 / Latin-1 file) is read byte for byte, never with U+FFFD in place of
-  the bad bytes: `25°C` → `25±C` is a `content` change, not "the same text, encoding changed".
+  the bad bytes: `25°C` → `25±C` is a `content` change, not "the same text, encoding changed". Such a file that
+  only gained a UTF-8 BOM is `encoding`, small or large.
+- A file is binary when it has a NUL and no BOM: anywhere in it when it is read whole (up to 8 MB), in its first
+  8 KB past that. So text that turns binary further in is `binary`, and no patch ever carries raw NULs.
+- `codediffer diff` with a file that isn't there is an error (exit 2), never "the whole other file added": an
+  added or deleted file is asked for with `/dev/null` (or `NUL`) as the absent side. Both sides get the right
+  file's name, so `git apply` changes that file rather than renaming it.
+- `verify` fails a hunk whose op doesn't fit its line counts (an `insert` with old lines, a `delete` with new
+  ones), as the contract defines them, even when its coordinates rebuild the file.
 - A whole patch (`--patch`, `export_changeset`) is for `git apply`: what it can't carry — binary and large
   files, text that isn't UTF-8, unreadable files, the eol/encoding-only notes — is described in `#` lines
   outside any `diff --git` section, which git skips, so the rest still applies; the summary counts them as
