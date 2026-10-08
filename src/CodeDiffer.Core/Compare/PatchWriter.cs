@@ -26,6 +26,9 @@ public sealed class PatchOptions
 
     /// <summary>Files rendered concurrently (output order is unchanged). Default min(cores, 8).</summary>
     public int Parallelism { get; init; } = Math.Min(Environment.ProcessorCount, 8);
+
+    /// <summary>Stops a giant file's block diff mid-read (it reads both files whole).</summary>
+    public CancellationToken Cancellation { get; init; }
 }
 
 /// <summary>Counts of what a patch run rendered, for the summary line.</summary>
@@ -254,7 +257,7 @@ public static class PatchWriter
             w.Write($"Large file {(oldFull is null ? "added" : "removed")}: {(oldFull is null ? "b/" + newRel : "a/" + oldRel)} ({Math.Max(oldLen, newLen):N0} bytes)\n");
             return;
         }
-        var r = GiantFileDiffer.Diff(oldFull, newFull);
+        var r = GiantFileDiffer.Diff(oldFull, newFull, ct: opt.Cancellation);
         w.Write($"Large files a/{oldRel} and b/{newRel} differ: {r.Changes.Count} changed region(s), " +
                 $"{r.ChangedOldBytes:N0} of {r.OldSize:N0} bytes ({100.0 * r.ChangedOldBytes / Math.Max(1, r.OldSize):F2}%) -> {r.NewSize:N0} bytes\n");
         foreach (var ch in r.Changes.Take(opt.MaxGiantRanges))

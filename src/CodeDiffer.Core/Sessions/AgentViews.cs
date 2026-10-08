@@ -534,6 +534,7 @@ public static class AgentViews
         if (r.SkippedNames > 0)
             yield return $"{pre}{r.SkippedNames:N0} name(s) ending in '.' or ' ' skipped — Windows opens another file by that path" +
                          Some(skipped.Where(t => t.x.Kind == Walk.SkipKind.Name).Select(t => $"{t.Item2} {t.x.Path}"));
+        if (r.RenameLimit is { } rl) yield return $"{pre}{rl}.";
         if (r.CacheSaveError is { } e) yield return $"{pre}the hash cache could not be saved ({e}) — the result stands; the next compare reads those files again.";
     }
 

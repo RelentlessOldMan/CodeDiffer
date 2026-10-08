@@ -9,14 +9,16 @@ namespace CodeDiffer.Core.Compare;
 /// <summary>A resolved rename plus the add/remove sets left over after pairing. <paramref name="Unreadable"/>:
 /// relative path → why, for files that could not be read (left out of the pairing). <paramref name="BytesRead"/>:
 /// what the pairing read (ledger hits read nothing). <paramref name="Edited"/>: the destination paths of the renames the
-/// similarity pass found (their bytes differ, whatever the similarity rounds to).</summary>
+/// similarity pass found (their bytes differ, whatever the similarity rounds to). <paramref name="EditedSkipped"/>: why the
+/// similarity pass was not run (too many candidates), or null.</summary>
 public sealed record RenameResult(
     IReadOnlyList<RenameOp> Renames,
     IReadOnlyList<FileEntry> UnmatchedRemoved,
     IReadOnlyList<FileEntry> UnmatchedAdded,
     IReadOnlyDictionary<string, string>? Unreadable = null,
     long BytesRead = 0,
-    IReadOnlySet<string>? Edited = null);
+    IReadOnlySet<string>? Edited = null,
+    string? EditedSkipped = null);
 
 /// <summary>
 /// Resolves renames out of a 2-way compare's left-only (removed) and right-only (added) sets, matching
@@ -29,7 +31,9 @@ public sealed record RenameResult(
 ///      <see cref="Similarity"/>; greedy best-match assignment by descending similarity, each file used
 ///      once, only pairs at or above <see cref="CompareOptions.RenameSimilarityThresholdMilli"/> kept.
 ///      Every pair is still scored exactly, but a pair whose line counts alone rule out the threshold is
-///      skipped, each file's lines are counted once (not per pair), and the scoring runs in parallel.
+///      skipped, each file's lines are counted once (not per pair), and the scoring runs in parallel. Bounded: past
+///      <see cref="CompareOptions.MaxEditedRenamePairs"/> candidate pairs or <see cref="CompareOptions.MaxEditedRenameBytes"/>
+///      of their text the pass is skipped, and said, rather than run for minutes or hold gigabytes.
 ///
 /// Decoys in the fixtures are near-duplicate ADDs whose source still exists on BOTH sides — those are
 /// never in the removed set, so they can't be falsely paired. Among genuine remove/add candidates we
@@ -61,13 +65,30 @@ public sealed class RenameDetector
         var addedLeft = new List<FileEntry>(added);
         var unreadable = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         long bytesRead = 0;
+        string? skipped = null;
 
         PairPureRenames(removedLeft, addedLeft, leftCache, rightCache, renames, unreadable, ref bytesRead, ct);
-        if (removedLeft.Count > 0 && addedLeft.Count > 0)
+        if (removedLeft.Count > 0 && addedLeft.Count > 0 && (skipped = OverLimit(removedLeft, addedLeft, unreadable)) is null)
             PairEditedRenames(removedLeft, addedLeft, renames, edited, unreadable, ref bytesRead, ct);
 
         return new RenameResult(renames, removedLeft, addedLeft,
-            new Dictionary<string, string>(unreadable, StringComparer.Ordinal), bytesRead, edited);
+            new Dictionary<string, string>(unreadable, StringComparer.Ordinal), bytesRead, edited, skipped);
+    }
+
+    /// <summary>Why the similarity pass would cost too much (by the candidates' count and size, before reading any), or null.</summary>
+    private string? OverLimit(List<FileEntry> removed, List<FileEntry> added, ConcurrentDictionary<string, string> unreadable)
+    {
+        bool Candidate(FileEntry e) => e.Length > 0 && e.Length <= _options.MaxClassifyBytes && !unreadable.ContainsKey(e.RelativePath);
+        long r = 0, a = 0, bytes = 0;
+        foreach (var e in removed) if (Candidate(e)) { r++; bytes += e.Length; }
+        foreach (var e in added) if (Candidate(e)) { a++; bytes += e.Length; }
+        if (r * a > _options.MaxEditedRenamePairs)
+            return $"edited renames not looked for: {r:N0} removed × {a:N0} added candidates is past the limit of " +
+                   $"{_options.MaxEditedRenamePairs:N0} pairs — they are listed as added and removed (identical renames are still found)";
+        if (bytes > _options.MaxEditedRenameBytes)
+            return $"edited renames not looked for: the {r + a:N0} candidates hold {bytes / (1024 * 1024):N0} MB of text, past the " +
+                   $"limit of {_options.MaxEditedRenameBytes / (1024 * 1024):N0} MB — they are listed as added and removed (identical renames are still found)";
+        return null;
     }
 
     /// <summary>

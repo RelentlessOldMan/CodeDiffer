@@ -25,8 +25,10 @@ public sealed class ReasonClassifier
         _maxStreamBytes = maxStreamBytes;
     }
 
-    public ChangeReason Classify(string leftPath, long leftLength, string rightPath, long rightLength)
+    /// <param name="ct">Checked per 64 KB read when streamed (up to three passes over 64 MB), and before reading.</param>
+    public ChangeReason Classify(string leftPath, long leftLength, string rightPath, long rightLength, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         // One open per side: a small file is read whole (its head is a prefix of it); a large one only its head.
         bool large = leftLength > _maxClassifyBytes || rightLength > _maxClassifyBytes;
         var leftBytes = large ? TextInspector.ReadHead(leftPath) : TextInspector.ReadAll(leftPath);
@@ -36,7 +38,7 @@ public sealed class ReasonClassifier
             return ChangeReason.Binary;
 
         if (large)
-            return Math.Max(leftLength, rightLength) <= _maxStreamBytes ? Streamed(leftPath, leftBytes, rightPath, rightBytes) : ChangeReason.Content;
+            return Math.Max(leftLength, rightLength) <= _maxStreamBytes ? Streamed(leftPath, leftBytes, rightPath, rightBytes, ct) : ChangeReason.Content;
 
         var leftText = TextInspector.Decode(leftBytes);
         var rightText = TextInspector.Decode(rightBytes);
@@ -60,23 +62,23 @@ public sealed class ReasonClassifier
     private enum Norm { None, Whitespace, Eol }
 
     /// <summary>The same precedence on a large file, by streamed byte comparison (UTF-8 or a single-byte code page).</summary>
-    private static ChangeReason Streamed(string leftPath, byte[] leftHead, string rightPath, byte[] rightHead)
+    private static ChangeReason Streamed(string leftPath, byte[] leftHead, string rightPath, byte[] rightHead, CancellationToken ct)
     {
         if (Wide(leftHead) || Wide(rightHead)) return ChangeReason.Content;
         int l = Utf8Bom(leftHead) ? 3 : 0, r = Utf8Bom(rightHead) ? 3 : 0;
-        if (l != r && Same(leftPath, l, rightPath, r, Norm.None)) return ChangeReason.Encoding;
+        if (l != r && Same(leftPath, l, rightPath, r, Norm.None, ct)) return ChangeReason.Encoding;
         // Whitespace-normalized first: it is implied by eol-equality, and a content change ends it at the first difference.
-        if (!Same(leftPath, l, rightPath, r, Norm.Whitespace)) return ChangeReason.Content;
-        return Same(leftPath, l, rightPath, r, Norm.Eol) ? ChangeReason.Eol : ChangeReason.Whitespace;
+        if (!Same(leftPath, l, rightPath, r, Norm.Whitespace, ct)) return ChangeReason.Content;
+        return Same(leftPath, l, rightPath, r, Norm.Eol, ct) ? ChangeReason.Eol : ChangeReason.Whitespace;
     }
 
     private static bool Utf8Bom(byte[] h) => h is [0xEF, 0xBB, 0xBF, ..];
     private static bool Wide(byte[] h) => h is [0xFF, 0xFE, ..] or [0xFE, 0xFF, ..] or [0x00, 0x00, 0xFE, 0xFF, ..];
 
-    private static bool Same(string a, int skipA, string b, int skipB, Norm norm)
+    private static bool Same(string a, int skipA, string b, int skipB, Norm norm, CancellationToken ct)
     {
-        using var fa = new Feed(a, skipA);
-        using var fb = new Feed(b, skipB);
+        using var fa = new Feed(a, skipA, ct);
+        using var fb = new Feed(b, skipB, ct);
         while (true)
         {
             int x = Next(fa, norm), y = Next(fb, norm);
@@ -113,6 +115,7 @@ public sealed class ReasonClassifier
     private sealed class Feed : IDisposable
     {
         private readonly FileStream _fs;
+        private readonly CancellationToken _ct;
         private readonly byte[] _buf = new byte[1 << 16];
         private int _n, _i;
 
@@ -122,8 +125,9 @@ public sealed class ReasonClassifier
         /// <summary>The last byte returned that wasn't whitespace (whitespace normalization).</summary>
         public int Last = -1;
 
-        public Feed(string path, int skip)
+        public Feed(string path, int skip, CancellationToken ct)
         {
+            _ct = ct;
             _fs = TextInspector.OpenShared(path, 1);
             _fs.Position = skip;
         }
@@ -134,6 +138,7 @@ public sealed class ReasonClassifier
 
         private bool Fill()
         {
+            _ct.ThrowIfCancellationRequested();
             _n = _fs.Read(_buf, 0, _buf.Length);
             _i = 0;
             return _n > 0;

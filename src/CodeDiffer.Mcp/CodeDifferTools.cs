@@ -146,7 +146,7 @@ public static class CodeDifferTools
                  "reproduces the right tree's text files exactly; binary and large files are described, not carried.")]
     public static string ExportChangeset(
         [Description("Compare id (default: the most recent).")] string? compare_id = null,
-        [Description("Output .patch path (default: a file in the temp dir).")] string? out_path = null,
+        [Description("Output .patch path, replaced if it exists (default: changeset.patch in the compare's saved result dir, replaced on each export).")] string? out_path = null,
         [Description("Context lines (default 3).")] int context = PatchOptions.DefaultContextLines,
         [Description("Carry eol/encoding-only changes as hunks instead of notes.")] bool literal = false)
     {

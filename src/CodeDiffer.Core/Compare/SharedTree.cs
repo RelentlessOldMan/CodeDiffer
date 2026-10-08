@@ -15,6 +15,9 @@ public sealed class SharedTree
     internal string? Root { get; private set; }
     internal WalkResult? Walk { get; private set; }
     internal ConcurrentDictionary<string, ContentId> Ids { get; } = new(StringComparer.Ordinal);
+    /// <summary>When the run sharing this tree began: a rehash keeps a ledger entry hashed since then (by an earlier
+    /// compare of the same run), never one from before.</summary>
+    internal long StartedUtcTicks { get; } = DateTime.UtcNow.Ticks;
 
     /// <summary>The walk to reuse for <paramref name="rootFull"/>, or null (nothing shared yet, or another root).</summary>
     internal WalkResult? For(string rootFull) => Walk is not null && string.Equals(Root, rootFull, StringComparison.OrdinalIgnoreCase) ? Walk : null;

@@ -233,6 +233,7 @@ static int Report(string[] args)
 static int Results(string[] args)
 {
     if (args.Contains("--prune")) return Prune(args);
+    if (!ArgsOk(args, 0, "usage: codediffer results [--max N] | results --prune [--keep N] [--older-than DAYS] [--yes]", [], ["--max"])) return 64;
     int max = 20;
     if (FlagValue(args, "--max", from: 1) is { } m && (!int.TryParse(m, out max) || max < 1))
     {
@@ -323,6 +324,7 @@ static int BlockDiff(string[] args)
         Console.Error.WriteLine("usage: codediffer blockdiff <left-file> <right-file>");
         return 64;
     }
+    if (!ArgsOk(args, 2, "usage: codediffer blockdiff <left-file> <right-file>", [], [])) return 64;
     if (!File.Exists(args[1]) || !File.Exists(args[2]))
     {
         Console.Error.WriteLine("error: both arguments must be existing files");
@@ -715,15 +717,13 @@ static int Apply(string[] args)
 /// <summary>apply-overlay: apply a compare3 --merge-out overlay to v1 (dry run unless --write). Exit 1 when a file failed.</summary>
 static int ApplyOverlay(string[] args)
 {
-    bool bad = args.Length < 3 || args[1].StartsWith("--") || args[2].StartsWith("--");
-    for (int i = 3; i < args.Length && !bad; i++)
-        if (args[i] == "--threads") i++; // its value is checked below
-        else bad = args[i] is not ("--write" or "--again");
-    if (bad)
+    const string overlayUsage = "usage: codediffer apply-overlay <overlay-dir> <target> [--write] [--again] [--threads N]";
+    if (args.Length < 3 || args[1].StartsWith("--") || args[2].StartsWith("--"))
     {
-        Console.Error.WriteLine("usage: codediffer apply-overlay <overlay-dir> <target> [--write] [--again] [--threads N]");
+        Console.Error.WriteLine(overlayUsage);
         return 64;
     }
+    if (!ArgsOk(args, 2, overlayUsage, ["--write", "--again"], ["--threads"])) return 64;
     int threads = new CompareOptions().Parallelism;
     if (FlagValue(args, "--threads", from: 3) is { } t && (!int.TryParse(t, out threads) || threads < 1))
     {

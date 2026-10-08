@@ -177,8 +177,11 @@ public static class ChangePorter
         string aPath = Full(leftRoot, fromRel), bPath = Full(rightRoot, path);
         if (!File.Exists(tFrom))
         {
-            if (renamed && File.Exists(tTo) && RenameDone(c, aPath, bPath, tTo, maxText))
-                return File1(c, PortStatus.Already, "none", HunkOutcome.Already, null);
+            if (renamed && File.Exists(tTo))
+                return RenameDone(c, aPath, bPath, tTo, maxText) is var (done, how) && done
+                    ? File1(c, PortStatus.Already, "none", HunkOutcome.Already, how)
+                    : File1(c, PortStatus.Conflict, "none", HunkOutcome.Conflict,
+                        $"target has no {fromRel}, and its {path} is not the renamed file — check by hand");
             return File1(c, PortStatus.Conflict, "none", HunkOutcome.Conflict, $"target has no {fromRel}");
         }
         // A rename that only changes case is the same file on Windows: writing the new name and deleting the old
@@ -226,17 +229,24 @@ public static class ChangePorter
 
     /// <summary>
     /// A rename whose old path is gone from the target and whose new path is there: did an earlier run do it? Yes when
-    /// the new path already has the whole change (merging it again changes nothing) and is that file — it holds the
-    /// right side exactly, or at least one of the change's regions, or (a rename without edits) still mostly the base.
+    /// the new path holds the right side exactly, or already has the whole change (merging it again changes nothing)
+    /// including at least one of its edited regions. A rename without edits (of a file the target had edited) has no
+    /// region to recognize it by: it is taken as done when the new path is still mostly the base — a judgement, so the
+    /// verdict says so (an unrelated file much like the base would pass it too).
     /// </summary>
-    private static bool RenameDone(FileChange c, string aPath, string bPath, string tTo, long maxText)
+    /// <returns>Done, and the note saying how it was judged when that was by likeness.</returns>
+    private static (bool Done, string? How) RenameDone(FileChange c, string aPath, string bPath, string tTo, long maxText)
     {
-        if (TextInspector.SameBytes(tTo, bPath)) return true;
+        if (TextInspector.SameBytes(tTo, bPath)) return (true, null);
         var (f, _) = Plan(c with { Status = ChangeStatus.Modified, RenamedFrom = null }, aPath, bPath, tTo, maxText);
-        if (f.Status != PortStatus.Already) return false;
-        if (f.Hunks.Any(h => h.Outcome == HunkOutcome.Already && h.BaseLine > 0)) return true;
-        if (Math.Max(new FileInfo(aPath).Length, new FileInfo(tTo).Length) > maxText) return false;
-        return Similarity.Milli(TextInspector.Decode(TextInspector.ReadAll(aPath)), TextInspector.Decode(TextInspector.ReadAll(tTo))) >= 500;
+        if (f.Status != PortStatus.Already) return (false, null);
+        if (f.Hunks.Any(h => h.Outcome == HunkOutcome.Already && h.BaseLine > 0)) return (true, null);
+        if (Math.Max(new FileInfo(aPath).Length, new FileInfo(tTo).Length) > maxText) return (false, null);
+        int milli = Similarity.Milli(TextInspector.Decode(TextInspector.ReadAll(aPath)), TextInspector.Decode(TextInspector.ReadAll(tTo)));
+        return milli >= 500
+            ? (true, $"taken as renamed by an earlier run: {c.RenamedFrom} is gone and {c.RelativePath} is {milli / 10.0:0.#}% like it " +
+                     "(not its exact bytes) — check it is that file")
+            : (false, null);
     }
 
     private static string Join(string? a, string b) => a is null ? b : a + "; " + b;

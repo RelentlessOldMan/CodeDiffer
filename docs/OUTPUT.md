@@ -89,7 +89,8 @@ Stopping `apply --write` part way is safe: Ctrl+C stops between files (the repor
 and how many were not reached), each file is written whole via `<file>.codediffer.tmp` and a rename, and
 running the same apply again finishes the job — what is done comes out "already", a rename stopped between
 writing the new path and deleting the old one is completed (and one already merged into the target's own
-edits comes out "already"), and a killed run's temp file is reused. A
+edits comes out "already"; a rename without edits, whose new path is only much like the file and not its exact
+bytes, is "already" with a note saying it was judged by likeness), and a killed run's temp file is reused. A
 case-only rename is left as a conflict (on Windows it is the same file).
 
 **Progress and partial answers (built):** while a compare runs, `get_summary` says what it is doing (listing
@@ -105,16 +106,20 @@ base→v1, warm: all 1,561 differences listed at 0:30 of a 1:40 run; "about 1:20
 
 **Cancel (built):** `cancel_compare(id)` stops a running compare or compare3; in the CLI the first Ctrl+C does
 the same (a second one quits at once; exit 130). It stops within a chunk per file in flight, in every phase
-including rename detection and compare3's merge (death, cold, 25 s in: stopped in 0.1 s), saves the hashes it already read to the ledgers, and is saved as state
-`cancelled`. So a cancelled cold run is not wasted: the next run of the same compare reads only the rest.
+including rename detection, the streamed reason check of a large file and compare3's merge (death, cold, 25 s
+in: stopped in 0.1 s), saves the hashes it already read to the ledgers, and is saved as state
+`cancelled`. So a cancelled cold run is not wasted: the next run of the same compare reads only the rest. A
+cancelled `--rehash` keeps the old ledger entries it didn't get to; a finished one keeps none it didn't re-read.
+Stopping a report (Ctrl+C) stops a giant file's block diff mid-read too.
 
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
 `<results>\yyyyMMdd-HHmmss-<id>\` (default `%LOCALAPPDATA%\CodeDiffer\results`, `CODEDIFFER_RESULTS_DIR`
 overrides; refused if it would land inside a compared tree). `compare.json` (format/version, kind, state
 running → done | failed | cancelled, roots, options, read cost, timings, counts) is written first as "running",
 with the process and machine running it, so a crashed compare leaves an honest trace: once that process is gone
-it is listed as `stopped` (and `results --prune` may delete it at once; a "running" one from another machine, or
-one whose process can't be checked, is kept a day). A compare still running in another process (another MCP
+it is listed as `stopped` (and `results --prune` may delete it at once; one whose process is seen still running
+is never pruned, however long it has run; a "running" one from another machine, or one whose process can't be
+checked, is kept a day). A compare still running in another process (another MCP
 server, a CLI run) is listed, but only that process can answer about it; it opens here once it is done.
 A malformed `compare.json` is reported as a corrupt result, never an error that ends the server; a path with an
 unpaired UTF-16 surrogate (legal on NTFS) is saved losslessly, so it reopens as the same file; `changes.jsonl` (2-way, every path) or `v1.jsonl`/`v2.jsonl`/
@@ -127,7 +132,9 @@ Renames cost little on a warm compare: the pure (byte-identical) pass hashes onl
 occurs on both sides, in parallel, and uses the hash ledgers (a second run reads nothing for it); the edited
 pass reads the text candidates in parallel, skips every pair whose line counts alone rule out the 50% threshold,
 and scores the rest in parallel — exactly the contract's similarity, the same pairs as scoring all of them. Both
-are counted in the bytes read.
+are counted in the bytes read. The edited pass is bounded, like git's rename limit: past 5,000 × 5,000 candidate
+pairs, or 1 GB of their text, it is skipped and a note says so — those files are listed as added and removed
+(identical renames are still found), rather than scored for minutes or held in memory.
 
 `start_compare3(base, v1, v2)` (CLI `compare3`): base→v1 then base→v2, sequential, and the second reuses
 the first's base listing and the base hashes it proved (no re-listing, no re-reading, not even a per-file

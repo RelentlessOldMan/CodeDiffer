@@ -11,7 +11,8 @@ public enum CacheMode
     On,
     /// <summary>--no-cache: never read or write a ledger; every same-size pair is proven byte by byte.</summary>
     Off,
-    /// <summary>--rehash: ignore cached hashes, read everything, and rewrite the ledger from scratch.</summary>
+    /// <summary>--rehash: ignore cached hashes, read everything, and rewrite the ledger from scratch (a cancelled
+    /// rehash keeps the old entries it didn't get to).</summary>
     Rehash,
 }
 
@@ -103,9 +104,11 @@ public sealed class HashCache
     private readonly bool _strict;
     private readonly string _ownDir;
     private readonly LedgerSnapshot? _own;
-    // Rehash: the old ledger, never trusted for a lookup, but kept by Save for files this run didn't read
-    // (a cancelled rehash, or compare3's second pass over the base) — so a rehash never loses hashes.
+    // Rehash: the old ledger, never trusted for a lookup. A cancelled rehash keeps it for the files it didn't get to;
+    // a finished one keeps only entries hashed since the run began (compare3's base->v1 pass, which base->v2 reuses
+    // without re-reading), never one from before it, whether or not this run read that file.
     private LedgerSnapshot? _prior;
+    private long _rehashSince;
     private readonly LedgerSnapshot? _codeCompass;
     private readonly string _ccPrefix; // root's path under the CodeCompass-indexed ancestor ("" = same root)
     private readonly TrustTiming _timing;
@@ -133,7 +136,9 @@ public sealed class HashCache
     public static HashCache Open(string root, CacheMode mode, bool strict = true, string? cacheBaseDir = null, string? codeCompassBaseDir = null)
         => Open(root, mode, strict, cacheBaseDir, codeCompassBaseDir, null);
 
-    internal static HashCache Open(string root, CacheMode mode, bool strict, string? cacheBaseDir, string? codeCompassBaseDir, TrustTiming? timing)
+    /// <param name="rehashSince">Rehash: when the run began (UTC ticks; default now).</param>
+    internal static HashCache Open(string root, CacheMode mode, bool strict, string? cacheBaseDir, string? codeCompassBaseDir, TrustTiming? timing,
+        long rehashSince = 0)
     {
         var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         var ownDir = Path.Combine(cacheBaseDir ?? DefaultBaseDir("CODEDIFFER_CACHE_DIR", "CodeDiffer"), LedgerFormat.RootKey(rootFull));
@@ -145,7 +150,7 @@ public sealed class HashCache
         if (own is not null && !File.Exists(Path.Combine(ownDir, RuleMarkerName)))
             own = Rejudge(own, t);
         if (mode == CacheMode.Rehash)
-            return new HashCache(mode, strict, ownDir, null, null, "", t) { _prior = own };
+            return new HashCache(mode, strict, ownDir, null, null, "", t) { _prior = own, _rehashSince = rehashSince > 0 ? rehashSince : DateTime.UtcNow.Ticks };
         var (cc, prefix) = FindCodeCompassLedger(rootFull, codeCompassBaseDir ?? DefaultBaseDir("CODECOMPASS_CACHE_DIR", "CodeCompass"));
         return new HashCache(mode, strict, ownDir, own, cc, prefix, t);
     }
@@ -206,7 +211,9 @@ public sealed class HashCache
     /// (trusted or pending) whose identity still matches the listing. Then mark it as judged by the record-time
     /// rule. Skipped (not fatal) if another CodeDiffer holds the lock.
     /// </summary>
-    public void Save(IEnumerable<FileEntry> walked)
+    /// <param name="finished">False for a cancelled or failed compare: a rehash then keeps the old entries it didn't
+    /// get to, rather than lose them.</param>
+    public void Save(IEnumerable<FileEntry> walked, bool finished = true)
     {
         if (_mode == CacheMode.Off) return;
         Directory.CreateDirectory(_ownDir);
@@ -222,7 +229,8 @@ public sealed class HashCache
             {
                 if (_fresh.TryGetValue(e.RelativePath, out var f) && Identity(e, f))
                     keep.Add(new(e.RelativePath, f));
-                else if (old is not null && old.Entries.TryGetValue(e.RelativePath, out var o) && Identity(e, o) && o.ChangeTicks != 0)
+                else if (old is not null && old.Entries.TryGetValue(e.RelativePath, out var o) && Identity(e, o) && o.ChangeTicks != 0 &&
+                         (_mode != CacheMode.Rehash || !finished || o.HashedAtTicks >= _rehashSince))
                     keep.Add(new(e.RelativePath, o));
             }
             LedgerFormat.Write(_ownDir, keep);

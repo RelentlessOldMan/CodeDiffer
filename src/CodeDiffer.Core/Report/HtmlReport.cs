@@ -64,7 +64,7 @@ public static class HtmlReport
 
         var items = s switch
         {
-            CompareSession c => Items2(c, opt),
+            CompareSession c => Items2(c, opt, ct),
             Compare3Session t => Items3(t),
             _ => throw new ArgumentException("unknown compare kind"),
         };
@@ -145,6 +145,12 @@ public static class HtmlReport
                 row["d"] = 1;
                 Interlocked.Increment(ref rendered);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Stopped mid-file (a giant block diff reads both files whole).
+                row["n"] = Join(row, "diff not rendered: the report was stopped — write it again for the rest");
+                Interlocked.Increment(ref stopped);
+            }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 row["n"] = Join(row, $"unreadable: {ex.Message}");
@@ -181,7 +187,7 @@ public static class HtmlReport
 
     private sealed record Item(Dictionary<string, object?> Row, bool Wants, bool Large, Func<(string Text, string Mode, string? Warn)>? Render);
 
-    private static List<Item> Items2(CompareSession s, HtmlReportOptions opt)
+    private static List<Item> Items2(CompareSession s, HtmlReportOptions opt, CancellationToken ct)
     {
         var r = s.Report!;
         long maxText = new PatchOptions().MaxTextBytes;
@@ -210,7 +216,7 @@ public static class HtmlReport
             {
                 var w = new StringWriter { NewLine = "\n" };
                 var stats = new PatchStats();
-                PatchWriter.WriteChange(w, c, s.Left, s.Right, new PatchOptions { Context = opt.Context }, stats);
+                PatchWriter.WriteChange(w, c, s.Left, s.Right, new PatchOptions { Context = opt.Context, Cancellation = ct }, stats);
                 var text = w.ToString();
                 var info = AgentViews.Count(text, stats);
                 row["k"] = info.Kind;

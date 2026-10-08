@@ -288,6 +288,19 @@ public class HashCacheTests : IDisposable
     }
 
     [Fact]
+    public void AFinishedRehash_KeepsNoEntryItDidNotReRead()
+    {
+        MakeTrees();
+        Run();
+        Assert.Contains("f0.txt", OwnLedger("L").Entries.Keys);
+        // f0 now differs in size: the rehash never reads it, so its old left entry is not vouched for again.
+        Put("R/f0.txt", "longer than it was\n");
+        Run(CacheMode.Rehash);
+        Assert.DoesNotContain("f0.txt", OwnLedger("L").Entries.Keys);
+        Assert.Contains("f1.txt", OwnLedger("L").Entries.Keys); // re-read: fresh
+    }
+
+    [Fact]
     public async Task CodeCompassV2Ledger_ForAncestorRoot_IsUsedReadOnly_ViaXxHash()
     {
         MakeTrees();

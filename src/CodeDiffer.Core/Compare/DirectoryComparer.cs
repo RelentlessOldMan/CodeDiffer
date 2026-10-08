@@ -19,6 +19,14 @@ public sealed class CompareOptions
     /// <summary>Minimum similarityMilli for an EDITED rename to be kept. 500 = git's -M50% default.</summary>
     public int RenameSimilarityThresholdMilli { get; init; } = 500;
 
+    /// <summary>Edited renames are looked for only up to this many (removed × added) text candidates — every pair is
+    /// scored, so the cost grows with the product (like git's renameLimit; 5,000 × 5,000 ≈ seconds). Past it the pass is
+    /// skipped and said (<see cref="CompareReport.RenameLimit"/>); pure renames are always found.</summary>
+    public long MaxEditedRenamePairs { get; init; } = 5_000L * 5_000;
+
+    /// <summary>... and up to this many bytes of candidate text, read and held at once to score them.</summary>
+    public long MaxEditedRenameBytes { get; init; } = 1L << 30;
+
     /// <summary>
     /// Concurrent directory listings / file-pair reads per side. Over SMB, overlapping round-trips is what
     /// fills the link; locally it washes. Default min(cores, 8) — CodeCompass's measured SMB sweet spot.
@@ -97,7 +105,8 @@ public sealed class DirectoryComparer
         var leftMap = lw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
         var rightMap = rw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
         var classifier = new ReasonClassifier(_options.MaxClassifyBytes);
-        var leftCache = HashCache.Open(left, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing);
+        var leftCache = HashCache.Open(left, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing,
+            sharedLeft?.StartedUtcTicks ?? 0);
         var rightCache = HashCache.Open(right, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing);
         long bytesRead = 0;
 
@@ -111,6 +120,7 @@ public sealed class DirectoryComparer
         var behindLink = new List<FileChange>();
         var sameSize = new List<(FileEntry L, FileEntry R)>();
         var sizeChanged = new List<(FileEntry L, FileEntry R)>();
+        string? renameLimit = null;
         try
         {
             // A path behind a link the other tree has in its place (not followed) is not known to be added or removed.
@@ -156,7 +166,7 @@ public sealed class DirectoryComparer
             var classified = new FileChange[sizeChanged.Count];
             Parallel.For(0, sizeChanged.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism, CancellationToken = ct }, i =>
             {
-                try { classified[i] = Modified(classifier, sizeChanged[i].L, sizeChanged[i].R); }
+                try { classified[i] = Modified(classifier, sizeChanged[i].L, sizeChanged[i].R, ct); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     classified[i] = Unknown(sizeChanged[i].L, sizeChanged[i].R, ex); // modified for sure; why is unknown
@@ -242,14 +252,14 @@ public sealed class DirectoryComparer
                 Interlocked.Add(ref bytesRead, read);
                 var verdict = equal
                     ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
-                    : Modified(classifier, le, re);
+                    : Modified(classifier, le, re, ct);
                 return (verdict, hasL, hasR);
             }
 
             Phase("same-size content");
             ct.ThrowIfCancellationRequested();
             progress?.SetPhase(ComparePhase.Renames);
-            long renameBytes = AddResolvedAddsRemovesAndRenames(changes, removed, added, leftCache, rightCache, ct);
+            (long renameBytes, renameLimit) = AddResolvedAddsRemovesAndRenames(changes, removed, added, leftCache, rightCache, ct);
             bytesRead += renameBytes;
             progress?.RenamesRead(renameBytes);
             Phase("renames");
@@ -258,7 +268,7 @@ public sealed class DirectoryComparer
         {
             // Keep what was read: every hash recorded so far goes into the ledgers, so re-running a cancelled (or
             // failed) cold compare only reads what this one didn't get to.
-            try { leftCache.Save(lw.Files); rightCache.Save(rw.Files); }
+            try { leftCache.Save(lw.Files, finished: false); rightCache.Save(rw.Files, finished: false); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             throw;
         }
@@ -283,6 +293,7 @@ public sealed class DirectoryComparer
             LeftSkipped = lw.SkippedPaths,
             RightSkipped = rw.SkippedPaths,
             CacheSaveError = saveError,
+            RenameLimit = renameLimit,
             CacheHits = leftCache.Hits + rightCache.Hits,
             CodeCompassHits = leftCache.CodeCompassHits + rightCache.CodeCompassHits,
             ReusedLeftFiles = reusedFiles,
@@ -305,9 +316,9 @@ public sealed class DirectoryComparer
         }
     }
 
-    private static FileChange Modified(ReasonClassifier classifier, FileEntry le, FileEntry re)
+    private static FileChange Modified(ReasonClassifier classifier, FileEntry le, FileEntry re, CancellationToken ct)
         => new(le.RelativePath, ChangeStatus.Modified,
-            classifier.Classify(le.FullPath, le.Length, re.FullPath, re.Length), le.Length, re.Length);
+            classifier.Classify(le.FullPath, le.Length, re.FullPath, re.Length, ct), le.Length, re.Length);
 
     /// <summary>A pair that could not be read: modified with no reason, and why.</summary>
     private static FileChange Unknown(FileEntry le, FileEntry re, Exception ex)
@@ -318,14 +329,15 @@ public sealed class DirectoryComparer
     /// leftover Added / Removed. A rename's destination path is its RelativePath; its source rides in
     /// RenamedFrom. Left/right sizes are carried so the summary can show both ends of a move.
     /// </summary>
-    /// <returns>The bytes rename detection read (ledger hits read none).</returns>
-    private long AddResolvedAddsRemovesAndRenames(List<FileChange> changes, List<FileEntry> removed, List<FileEntry> added,
+    /// <returns>The bytes rename detection read (ledger hits read none), and why edited renames weren't looked for.</returns>
+    private (long Read, string? Limit) AddResolvedAddsRemovesAndRenames(List<FileChange> changes, List<FileEntry> removed, List<FileEntry> added,
         HashCache leftCache, HashCache rightCache, CancellationToken ct)
     {
         IReadOnlyList<FileEntry> leftoverRemoved = removed;
         IReadOnlyList<FileEntry> leftoverAdded = added;
         IReadOnlyDictionary<string, string>? unreadable = null;
         long read = 0;
+        string? limit = null;
 
         if (_options.DetectRenames)
         {
@@ -334,6 +346,7 @@ public sealed class DirectoryComparer
             leftoverRemoved = result.UnmatchedRemoved;
             leftoverAdded = result.UnmatchedAdded;
             unreadable = result.Unreadable;
+            limit = result.EditedSkipped;
 
             var removedByPath = removed.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
             var addedByPath = added.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
@@ -351,6 +364,6 @@ public sealed class DirectoryComparer
             changes.Add(new FileChange(e.RelativePath, ChangeStatus.Removed, null, e.Length, 0, Unreadable: Why(e)));
         foreach (var e in leftoverAdded)
             changes.Add(new FileChange(e.RelativePath, ChangeStatus.Added, null, 0, e.Length, Unreadable: Why(e)));
-        return read;
+        return (read, limit);
     }
 }

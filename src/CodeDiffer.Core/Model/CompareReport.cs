@@ -56,6 +56,9 @@ public sealed class CompareReport
     public int SkippedNames => LeftSkipped.Concat(RightSkipped).Count(s => s.Kind == SkipKind.Name);
     /// <summary>Why the hash ledgers could not be saved after the compare (the result stands; the next run reads again).</summary>
     public string? CacheSaveError { get; init; }
+    /// <summary>Why edited renames were not looked for (too many candidates to score), or null: those files are listed
+    /// as added and removed.</summary>
+    public string? RenameLimit { get; init; }
 
     /// <summary>Same-size pairs that needed a content verdict (the only ones that can cost a read).</summary>
     public int ComparedPairs { get; init; }

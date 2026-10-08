@@ -74,6 +74,24 @@ public sealed class PruneTests : IDisposable
     }
 
     [Fact]
+    public void ARunningCompareSeenAlive_IsNeverPruned_HoweverOld()
+    {
+        // This test process stands in for an MCP server that has been running a compare for three days.
+        using var me = System.Diagnostics.Process.GetCurrentProcess();
+        var started = me.StartTime.ToUniversalTime();
+        var dir = Path.Combine(_root, $"{started:yyyyMMdd-HHmmss}-a11e");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, ResultStore.MetaName), $$"""
+            { "format": "{{ResultStore.Format}}", "version": {{ResultStore.FormatVersion}}, "kind": "compare", "id": "a11e",
+              "state": "running", "started": "{{started.ToString("O", CultureInfo.InvariantCulture)}}",
+              "pid": {{me.Id}}, "host": "{{Environment.MachineName}}", "roots": { "left": "L", "right": "R" } }
+            """);
+        var saved = ResultStore.List(_root).Single();
+        Assert.Equal(("running", true), (saved.State, saved.Alive));
+        Assert.Empty(ResultStore.PruneCandidates(_root, 0, null, started + TimeSpan.FromDays(3)));
+    }
+
+    [Fact]
     public void Delete_RefusesADirectoryOutsideTheRoot()
     {
         var dir = Saved("ddd1", 1);

@@ -59,8 +59,9 @@ public static class GiantFileDiffer
         return new BlockDiffResult(changes, oldChunks.Count, newChunks.Count, oldSize, newSize, changedOld, changedNew);
     }
 
-    public static BlockDiffResult Diff(string oldPath, string newPath, ChunkerOptions? options = null)
-        => Diff(BlockIndex.Build(oldPath, options), BlockIndex.Build(newPath, options));
+    /// <param name="ct">Stops the read of either file (throws <see cref="OperationCanceledException"/>).</param>
+    public static BlockDiffResult Diff(string oldPath, string newPath, ChunkerOptions? options = null, CancellationToken ct = default)
+        => Diff(BlockIndex.Build(oldPath, options, ct), BlockIndex.Build(newPath, options, ct));
 
     private static long TotalSize(IReadOnlyList<Chunk> chunks)
         => chunks.Count == 0 ? 0 : chunks[^1].Offset + chunks[^1].Length;

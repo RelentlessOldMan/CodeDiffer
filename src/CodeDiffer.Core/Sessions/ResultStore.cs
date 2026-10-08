@@ -14,7 +14,8 @@ namespace CodeDiffer.Core.Sessions;
 /// <summary>A saved compare as listed (from its compare.json only — the change lists are not read).</summary>
 public sealed record SavedCompare(
     string Dir, string Id, string Kind, string State, DateTime StartedUtc, TimeSpan Elapsed,
-    IReadOnlyList<(string Name, string Path)> Roots, IReadOnlyList<(string Name, long Count)> Counts, string? Error);
+    IReadOnlyList<(string Name, string Path)> Roots, IReadOnlyList<(string Name, long Count)> Counts, string? Error,
+    bool Alive = false);
 
 /// <summary>
 /// The on-disk result store (docs/OUTPUT.md §1). Each compare gets a fresh directory
@@ -167,8 +168,9 @@ public static class ResultStore
                 var roots = rootsEl.EnumerateObject().Where(p => !p.Name.EndsWith(Utf16Suffix, StringComparison.Ordinal))
                     .Select(p => (p.Name, PathOf(rootsEl, p.Name))).ToList();
                 var counts = m.TryGetProperty("counts", out var cs) ? cs.EnumerateObject().Select(p => (p.Name, p.Value.GetInt64())).ToList() : [];
-                list.Add(new SavedCompare(dir, Str(m, "id"), Str(m, "kind"), State(m), Started(m), Elapsed(m), roots, counts,
-                    m.TryGetProperty("error", out var e) ? e.GetString() : null));
+                var (state, alive) = Live(m);
+                list.Add(new SavedCompare(dir, Str(m, "id"), Str(m, "kind"), state, Started(m), Elapsed(m), roots, counts,
+                    m.TryGetProperty("error", out var e) ? e.GetString() : null, alive));
             }
             // A corrupt or foreign compare.json is left out of the list, whatever is wrong with it (a number out of range too).
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException
@@ -181,13 +183,14 @@ public static class ResultStore
     // ---- prune ----
 
     /// <summary>A "running" result younger than this may belong to a live process (an MCP server); prune leaves it. One whose
-    /// process is known to be gone is listed as "stopped" instead and needs no grace.</summary>
+    /// process is known to be gone is listed as "stopped" instead and needs no grace; one whose process is seen running
+    /// here is never pruned, however long it has run.</summary>
     public static readonly TimeSpan RunningGrace = TimeSpan.FromDays(1);
 
     /// <summary>
     /// The saved compares <c>results --prune</c> would delete: all but the newest <paramref name="keep"/>, and of those
-    /// only the ones older than <paramref name="olderThan"/> when it is given. A "running" result started within
-    /// <see cref="RunningGrace"/> is never picked (it may still be running elsewhere). Only directories that hold a
+    /// only the ones older than <paramref name="olderThan"/> when it is given. A "running" result is never picked while its
+    /// process is seen alive, nor within <see cref="RunningGrace"/> when that can't be checked (another host). Only directories that hold a
     /// CodeDiffer compare.json are considered, so nothing else under the root is ever touched.
     /// </summary>
     /// <remarks>Newest by start time (not by directory name, which is local time); only directories named the way a
@@ -198,7 +201,7 @@ public static class ResultStore
             .OrderByDescending(c => c.StartedUtc).ThenByDescending(c => Path.GetFileName(c.Dir), StringComparer.Ordinal)
             .Skip(Math.Max(0, keep))
             .Where(c => olderThan is not { } age || c.StartedUtc < nowUtc - age)
-            .Where(c => c.State != "running" || c.StartedUtc < nowUtc - RunningGrace)
+            .Where(c => c.State != "running" || (!c.Alive && c.StartedUtc < nowUtc - RunningGrace))
             .ToList();
 
     /// <summary>Bytes on disk under a result directory (its patches and report included; links not followed), or -1
@@ -359,21 +362,25 @@ public static class ResultStore
     /// same pid, started no later than the compare) no longer runs. One from another host, or without a pid (saved
     /// before 2026-10-07), stays "running" — it can't be checked from here.
     /// </summary>
-    private static string State(JsonElement m)
+    private static string State(JsonElement m) => Live(m).State;
+
+    /// <summary><see cref="State"/>, and whether a "running" compare's process was seen running here (false when it
+    /// can't be checked).</summary>
+    private static (string State, bool Alive) Live(JsonElement m)
     {
         var state = Str(m, "state");
         if (state != "running" || !m.TryGetProperty("pid", out var p) || !p.TryGetInt32(out int pid)
             || !string.Equals(m.TryGetProperty("host", out var h) ? h.GetString() : null, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
-            return state;
+            return (state, false);
         try
         {
             using var proc = System.Diagnostics.Process.GetProcessById(pid);
             // A pid is reused: a process that started after the compare did is not the one running it.
-            return proc.HasExited || proc.StartTime.ToUniversalTime() > Started(m).AddSeconds(5) ? "stopped" : state;
+            return proc.HasExited || proc.StartTime.ToUniversalTime() > Started(m).AddSeconds(5) ? ("stopped", false) : (state, true);
         }
-        catch (ArgumentException) { return "stopped"; }              // no such process
-        catch (InvalidOperationException) { return "stopped"; }      // it exited while we looked
-        catch (System.ComponentModel.Win32Exception) { return state; } // not allowed to look: can't tell
+        catch (ArgumentException) { return ("stopped", false); }              // no such process
+        catch (InvalidOperationException) { return ("stopped", false); }      // it exited while we looked
+        catch (System.ComponentModel.Win32Exception) { return (state, false); } // not allowed to look: can't tell
     }
 
     private static string Pid(JsonElement m) => m.TryGetProperty("pid", out var p) ? p.ToString() : "?";
@@ -411,6 +418,7 @@ public static class ResultStore
         Skipped(w, "leftSkipped", r.LeftSkipped);
         Skipped(w, "rightSkipped", r.RightSkipped);
         if (r.CacheSaveError is { } se) w.WriteString("cacheSaveError", se);
+        if (r.RenameLimit is { } rl) w.WriteString("renameLimit", rl);
         Timings(w, r.Timings);
         w.WriteEndObject();
     }
@@ -470,6 +478,7 @@ public static class ResultStore
             LeftSkipped = ReadSkipped(stats, "leftSkipped"), // absent before 2026-10-08
             RightSkipped = ReadSkipped(stats, "rightSkipped"),
             CacheSaveError = stats.TryGetProperty("cacheSaveError", out var cse) ? cse.GetString() : null,
+            RenameLimit = stats.TryGetProperty("renameLimit", out var rlim) ? rlim.GetString() : null,
             Timings = ReadTimings(stats),
         };
 

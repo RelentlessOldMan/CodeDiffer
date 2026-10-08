@@ -31,14 +31,15 @@ public sealed class ChunkerOptions
 /// </summary>
 public static class BlockIndex
 {
-    public static IReadOnlyList<Chunk> Build(string path, ChunkerOptions? options = null)
+    /// <param name="ct">Checked per read buffer (a multi-GB file takes minutes over SMB).</param>
+    public static IReadOnlyList<Chunk> Build(string path, ChunkerOptions? options = null, CancellationToken ct = default)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
             bufferSize: 1 << 16, FileOptions.SequentialScan);
-        return Build(fs, options);
+        return Build(fs, options, ct);
     }
 
-    public static IReadOnlyList<Chunk> Build(Stream stream, ChunkerOptions? options = null)
+    public static IReadOnlyList<Chunk> Build(Stream stream, ChunkerOptions? options = null, CancellationToken ct = default)
     {
         var o = options ?? ChunkerOptions.Default;
         ulong mask = o.MaskBits >= 64 ? ulong.MaxValue : (1UL << o.MaskBits) - 1;
@@ -54,6 +55,7 @@ public static class BlockIndex
         int read;
         while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
         {
+            ct.ThrowIfCancellationRequested();
             int segStart = 0; // start of the not-yet-hashed run within this buffer
             for (int i = 0; i < read; i++)
             {
