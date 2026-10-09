@@ -410,9 +410,7 @@ public static class HtmlReport
     /// holding one.</summary>
     private static void Prepare(string outDir, IEnumerable<string> trees)
     {
-        foreach (var tree in trees)
-            if (ResultStore.Overlaps(outDir, tree))
-                throw new IOException($"the report directory {outDir} and the compared tree {tree} overlap; write the report somewhere else");
+        if (OutDirProblem(outDir, trees) is { } problem) throw new IOException(problem);
         if (Directory.Exists(outDir))
         {
             if (!IsOurs(outDir)) throw new IOException($"{outDir} exists and is not a CodeDiffer report — refusing to overwrite it");
@@ -427,6 +425,13 @@ public static class HtmlReport
 
     /// <summary>Empty, marked as ours, or a report from before the marker: nothing but index.html, data\ and full\,
     /// with data\index.js as this writes it.</summary>
+    /// <summary>Why a report can't be written to <paramref name="outDir"/> (it overlaps a compared tree), or null —
+    /// checked before a compare that may take an hour as well as when the report is written.</summary>
+    public static string? OutDirProblem(string outDir, IEnumerable<string> trees)
+        => trees.FirstOrDefault(t => ResultStore.Overlaps(outDir, t)) is { } tree
+            ? $"the report directory {outDir} and the compared tree {tree} overlap; write the report somewhere else"
+            : null;
+
     private static bool IsOurs(string dir)
     {
         var entries = Directory.EnumerateFileSystemEntries(dir).Select(Path.GetFileName).ToList();

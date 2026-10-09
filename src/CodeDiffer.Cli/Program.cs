@@ -73,8 +73,14 @@ static int Compare(string[] args)
     // Every option is checked before a compare that may take an hour, not after it.
     bool patch = args.Contains("--patch");
     PatchOptions popt = new();
+    if (!patch && (FlagValue(args, "-U") is not null || args.Contains("--literal")))
+    {
+        Console.Error.WriteLine("error: -U and --literal go with --patch");
+        return 64;
+    }
     if (patch && !TryPatchOptions(args, out popt)) return 64;
-    if (args.Contains("--html") && !MaxDiffsOk(args, out _)) return 64;
+    popt = new PatchOptions { Context = popt.Context, Literal = popt.Literal, Parallelism = threads };
+    if (!HtmlOptionsOk(args, args[1], args[2])) return 64;
 
     // Run as a session, like compare3 and the MCP server: the result directory says "running" while it runs (a crash
     // leaves an honest trace), and "cancelled" or "failed" if it doesn't finish.
@@ -132,8 +138,6 @@ static int Compare(string[] args)
         info.WriteLine(session.SaveError is { } se ? $"  saved      NOT saved: {se}" : $"  saved      {session.ResultDir}  (id {session.Id})");
         if (args.Contains("--html") && session.SaveError is null) htmlCode = WriteHtml(session, args, info);
     }
-    else if (args.Contains("--html"))
-        Console.Error.WriteLine("note: --html needs a saved result; drop --no-save");
 
     if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
     {
@@ -195,6 +199,35 @@ static int? WriteHtml(Session s, string[] args, TextWriter info)
         return 2;
     }
     finally { Console.CancelKeyPress -= onCtrlC; }
+}
+
+/// <summary>The report's options go with --html (else they'd be ignored), which needs a saved result; its --max-diffs is a
+/// number and its --out clear of the trees — all checked before a compare that may take an hour (else the error is
+/// printed).</summary>
+static bool HtmlOptionsOk(string[] args, params string[] trees)
+{
+    if (!args.Contains("--html"))
+    {
+        foreach (var f in new[] { "--large", "--include-identical", "--max-diffs", "--out" })
+            if (args.Contains(f))
+            {
+                Console.Error.WriteLine($"error: {f} goes with --html");
+                return false;
+            }
+        return true;
+    }
+    if (args.Contains("--no-save"))
+    {
+        Console.Error.WriteLine("error: --html needs a saved result; drop --no-save");
+        return false;
+    }
+    if (!MaxDiffsOk(args, out _)) return false;
+    if (FlagValue(args, "--out") is { } o && HtmlReport.OutDirProblem(o, trees) is { } problem)
+    {
+        Console.Error.WriteLine($"error: {problem}");
+        return false;
+    }
+    return true;
 }
 
 /// <summary>--max-diffs, when given, is a non-negative integer (else the error is printed).</summary>
@@ -791,7 +824,7 @@ static int Compare3(string[] args)
         return 64;
     }
     var options = new CompareOptions { Parallelism = threads, Cache = args.Contains("--no-cache") ? CacheMode.Off : CacheMode.On };
-    if (args.Contains("--html") && !MaxDiffsOk(args, out _)) return 64;
+    if (!HtmlOptionsOk(args, args[1], args[2], args[3])) return 64;
     var store = new SessionStore(save: !args.Contains("--no-save"));
     var outDir = FlagValue(args, "--merge-out", from: 4);
     Compare3Session s;
@@ -825,7 +858,7 @@ static int Compare3(string[] args)
     int? failed = null;
     if (args.Contains("--html"))
     {
-        if (s.ResultDir is null || s.SaveError is not null) Console.Error.WriteLine("note: --html needs a saved result; drop --no-save");
+        if (s.ResultDir is null || s.SaveError is not null) Console.Error.WriteLine("note: no report: the result was not saved");
         else failed = WriteHtml(s, args, Console.Out);
     }
     if (outDir is not null)

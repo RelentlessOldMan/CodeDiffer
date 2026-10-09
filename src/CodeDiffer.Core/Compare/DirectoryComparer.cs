@@ -20,7 +20,8 @@ public sealed class CompareOptions
     public int RenameSimilarityThresholdMilli { get; init; } = 500;
 
     /// <summary>Edited renames are looked for only up to this many (removed × added) text candidates — every pair is
-    /// scored, so the cost grows with the product (like git's renameLimit; 5,000 × 5,000 ≈ seconds). Past it the pass is
+    /// scored, so the cost grows with the product (like git's renameLimit; at the bound, minutes: ~160 s for 5,000 × 5,000
+    /// files of 2,000 lines, ~6 s for 1,000 × 1,000). Past it the pass is
     /// skipped and said (<see cref="CompareReport.RenameLimit"/>); pure renames are always found.</summary>
     public long MaxEditedRenamePairs { get; init; } = 5_000L * 5_000;
 

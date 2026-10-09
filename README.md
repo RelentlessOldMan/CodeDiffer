@@ -23,8 +23,8 @@ exactly this case.
   loads from it. Nothing materializes the full diff up front.
 - **A cost-ordered funnel:** walk + stat → hash (cached) → reason → hunks, where only the last tier is
   lazy and per-file. A full 90 GB compare costs the agent ~a few hundred tokens plus the files it opens.
-- **Giant files diffed at the block level, never whole** — line-aligned ~1 MB blocks, hash-compared,
-  only differing blocks read; the full hunk set is emitted by reference as a `.patch`.
+- **Giant files diffed at the block level, never whole** — streamed once into content-defined chunks
+  (16–256 KB, SHA-256 each), matched, and reported as a bounded list of changed byte ranges.
 - **Honest at scale** — every cap/sample disclosed; every `modified` carries a reason
   (`content\|eol\|whitespace\|encoding\|binary\|metadata`); never "modified" with an empty diff.
 - **Change porting is first-class** — diff A→B, dry-run onto C with per-hunk `applied\|fuzzy\|conflict`;

@@ -31,20 +31,21 @@ it chooses to open.
 
 ## 3. Giant files — diffed at the block level, never whole
 
-Reusing CodeCompass's block/positional sidecar idea: the file is cut into line-aligned ~1 MB blocks,
-each with a content hash. To diff header_A vs header_B we compare *block hashes* and only read +
-line-diff the blocks that differ — a few MB, not a gigabyte, streamable over SMB. Then we **aggregate**
-and return a bounded summary with the full hunk set *by reference*:
+A file over 16 MB (either side) is never line-diffed or decoded whole. Both files are streamed once through a
+content-defined chunker (FastCDC-style cuts: chunks of 16–256 KB, ~64 KB on average, each SHA-256), in bounded
+memory whatever their size, and the two chunk lists are matched: an edit dirties only the chunks around it, so one
+inserted byte near the front doesn't shift everything after it. What comes back is a bounded list of **changed byte
+ranges**, not line hunks (e.g.):
 
 ```
-regmap_block0.h   reason=content   1.04 GB → 1.04 GB
-  52,341 replace hunks · +52,341 / −52,341 lines (5.0% of 1,047,000 lines)
-  spread: blocks 0–1046 (uniform, stride≈20)         ← the run-rule pattern, detected
-  showing hunks 1–20 of 52,341  ·  full patch: compare_7f3a/regmap_block0.h.patch
+Large files a/regmap_block0.h and b/regmap_block0.h differ: 1,047 changed region(s), 68,616,192 of 1,117,782,016 bytes (6.14%) -> 1,117,782,016 bytes
+  replace old[0, +65,536) -> new[0, +65,536)
+  replace old[1,048,576, +65,536) -> new[1,048,576, +65,536)
+  ... 1,027 more region(s)
 ```
 
-The agent sees ~15 lines; the human sees a collapsed row that virtualizes / links to the `.patch` on
-expand. Nobody loads 52k hunks into a context window or a browser DOM.
+The agent sees a few lines; nobody loads 52k hunks into a context window or a browser DOM. A patch describes such
+a file in `#` lines (copy it by hand); the HTML report lists it, its byte ranges only with `--large`.
 
 ## 4. What the agent gets (the anti-TMI surface)
 
@@ -136,7 +137,8 @@ occurs on both sides, in parallel, and uses the hash ledgers (a second run reads
 pass reads the text candidates in parallel, skips every pair whose line counts alone rule out the 50% threshold,
 and scores the rest in parallel — exactly the contract's similarity, the same pairs as scoring all of them. Both
 are counted in the bytes read. The edited pass is bounded, like git's rename limit: past 5,000 × 5,000 candidate
-pairs, or 1 GB of their text, it is skipped and a note says so — those files are listed as added and removed
+pairs (at the bound, minutes: ~160 s for 5,000 × 5,000 files of 2,000 lines; 1,000 × 1,000 takes ~6 s), or 1 GB of
+their text, it is skipped and a note says so — those files are listed as added and removed
 (identical renames are still found), rather than scored for minutes or held in memory.
 
 `start_compare3(base, v1, v2)` (CLI `compare3`): base→v1 then base→v2, sequential, and the second reuses
@@ -260,9 +262,17 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   result: the next compare reads those files again.
 - A command given an option it doesn't take (`--no-chache`), an extra word, or a flag without its value stops
   at once with the usage (exit 64), instead of running an hour without it; so does a bad `-U` / `--max-diffs`
-  value, a results directory inside a compared tree, and `verify` given only one of `--base` / `--variant`.
+  value, an option without the one it goes with (`-U` / `--literal` without `--patch`; `--out`, `--large`,
+  `--include-identical`, `--max-diffs` without `--html`; `--html` with `--no-save`), a report `--out` inside a
+  compared tree, and `verify` given only one of `--base` / `--variant`. A results directory inside a compared tree
+  is refused before the compare too (exit 2). `--patch` renders with `--threads` threads.
   "Inside" is by what the paths resolve to, not only their spelling: a tree named through a junction, symlink,
   subst or mapped drive is the same tree, for the results directory, the overlay, the report and `apply-overlay`.
+- `list_files(reason="unreadable")` lists the files the listings mark `[unreadable]`. `get_file_diff` given a path
+  as a listing shows it — an unpaired surrogate as U+FFFD — finds that file. A diff too big to show inline is saved
+  under the path mirrored, or, where the tree has a file `a` and a directory `a.patch/`, under `diffs/_clash/` by the
+  path's hash; one asked for with more context than the default never changes the hunk count a listing shows.
+  `export_changeset`'s `out_path` must be outside both trees.
 - `results --prune` never deletes through a link: a junction or symlink in the results directory is not a saved
   compare, whatever it points at. A saved path that could reach outside its tree (`../x`, rooted, a drive) is a
   corrupt result, never acted on.

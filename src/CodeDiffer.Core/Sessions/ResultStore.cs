@@ -630,18 +630,25 @@ public static class ResultStore
             w.WriteString(name, path);
             return;
         }
-        var shown = new System.Text.StringBuilder(path.Length);
         var hex = new System.Text.StringBuilder(path.Length * 4);
+        foreach (var ch in path) hex.Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
+        w.WriteString(name, Shown(path)); // readable, and what an older reader gets
+        w.WriteString(name + Utf16Suffix, hex.ToString());
+    }
+
+    /// <summary>A path as UTF-8 shows it: each unpaired surrogate as U+FFFD (what an agent reads in a listing, and so
+    /// may ask for).</summary>
+    internal static string Shown(string path)
+    {
+        if (!HasLoneSurrogate(path)) return path;
+        var shown = new System.Text.StringBuilder(path.Length);
         for (int i = 0; i < path.Length; i++)
         {
             bool pair = char.IsHighSurrogate(path[i]) && i + 1 < path.Length && char.IsLowSurrogate(path[i + 1]);
-            if (pair) shown.Append(path, i, 2);
+            if (pair) shown.Append(path, i++, 2);
             else shown.Append(char.IsSurrogate(path[i]) ? '\uFFFD' : path[i]);
-            hex.Append(((int)path[i]).ToString("X4", CultureInfo.InvariantCulture));
-            if (pair) hex.Append(((int)path[++i]).ToString("X4", CultureInfo.InvariantCulture));
         }
-        w.WriteString(name, shown.ToString()); // readable, and what an older reader gets
-        w.WriteString(name + Utf16Suffix, hex.ToString());
+        return shown.ToString();
     }
 
     private static string PathOf(JsonElement e, string name)

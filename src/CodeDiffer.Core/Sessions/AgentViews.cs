@@ -188,12 +188,15 @@ public static class AgentViews
         IReadOnlyList<FileChange> changes = found is null ? s.Report!.Changes : [.. found.Select(f => f.Change)];
         var maybeRename = found is null ? null : found.Where(f => f.MayBeRename).Select(f => f.Change.RelativePath).ToHashSet(StringComparer.Ordinal);
 
-        if (!TryStatuses(status, out var statuses, out var err) || !TryReason(reason, out var reasonFilter, out err))
+        // "unreadable" is what a listing marks a file whose verdict is unknown: not a reason, but asked for as one.
+        bool unreadableOnly = string.Equals(reason?.Trim(), "unreadable", StringComparison.OrdinalIgnoreCase);
+        ChangeReason? reasonFilter = null;
+        if (!TryStatuses(status, out var statuses, out var err) || (!unreadableOnly && !TryReason(reason, out reasonFilter, out err)))
             return $"error: {err}\n";
         var glob = string.IsNullOrWhiteSpace(pathGlob) ? null : Glob(pathGlob);
 
         var match = changes.Where(c => statuses.Contains(c.Status)
-            && (reasonFilter is null || c.Reason == reasonFilter)
+            && (unreadableOnly ? c.ReasonLabel == "unreadable" : reasonFilter is null || c.Reason == reasonFilter)
             && (glob is null || glob(c.RelativePath) || (c.RenamedFrom is { } f && glob(f)))).ToList();
 
         pageSize = Math.Clamp(pageSize, 1, MaxPageSize);
@@ -245,7 +248,8 @@ public static class AgentViews
         path = Normalize(path);
         var c = changes.FirstOrDefault(c => c.RelativePath == path)
              ?? changes.FirstOrDefault(c => c.RenamedFrom == path)
-             ?? changes.FirstOrDefault(c => string.Equals(c.RelativePath, path, StringComparison.OrdinalIgnoreCase));
+             ?? changes.FirstOrDefault(c => string.Equals(c.RelativePath, path, StringComparison.OrdinalIgnoreCase))
+             ?? ByShownName(changes, path);
         if (c is null)
         {
             if (found is not null)
@@ -354,12 +358,31 @@ public static class AgentViews
     /// files never share a name (flattening "a/b.c" and "a_b.c" to one name made one overwrite the other).
     /// </summary>
     internal static string OutFile(Session s, string sub, string rel, string suffix)
-        => Path.Combine(OutDir(s), sub, rel.Replace('/', Path.DirectorySeparatorChar)) + suffix;
+    {
+        var root = Path.Combine(OutDir(s), sub);
+        var mirrored = Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar)) + suffix;
+        // The path mirrored, unless the tree has a file where it needs a directory or the reverse (a file a and a
+        // directory a.patch/): then one flat name from the path's hash, never another file's.
+        bool clash = Directory.Exists(mirrored);
+        for (var dir = Path.GetDirectoryName(mirrored); !clash && dir is not null && dir.Length > root.Length; dir = Path.GetDirectoryName(dir))
+            clash = File.Exists(dir);
+        if (!clash) return mirrored;
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(rel)))[..16].ToLowerInvariant();
+        return Path.Combine(root, "_clash", $"{Path.GetFileName(rel)}.{hash}{suffix}");
+    }
+
+    /// <summary>The one change whose path, as UTF-8 shows it (an unpaired surrogate as U+FFFD), is this.</summary>
+    internal static FileChange? ByShownName(IReadOnlyList<FileChange> changes, string path)
+    {
+        if (!path.Contains('\uFFFD')) return null;
+        var hits = changes.Where(c => ResultStore.Shown(c.RelativePath) == path || (c.RenamedFrom is { } f && ResultStore.Shown(f) == path)).Take(2).ToList();
+        return hits.Count == 1 ? hits[0] : null;
+    }
 
     /// <summary>The whole A→B changeset as one git-style patch file (apply with `git apply`).</summary>
     public static string Export(CompareSession s, string? outPath = null, int context = PatchOptions.DefaultContextLines, bool literal = false)
     {
-        if (context < 0) return $"context must be 0 or more (got {context})";
+        if (context < 0) return $"error: context must be 0 or more (got {context})\n";
         if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
         var r = s.Report!;
         if (r.LeftDroppedDirectories + r.RightDroppedDirectories > 0)
@@ -367,6 +390,9 @@ public static class AgentViews
                    "could not be listed): its adds and removes there may be listing failures, which a patch would carry out as deletes — " +
                    "no patch written; compare again";
         var file = string.IsNullOrWhiteSpace(outPath) ? Path.Combine(OutDir(s), "changeset.patch") : Path.GetFullPath(outPath);
+        foreach (var tree in new[] { s.Left, s.Right })
+            if (ResultStore.Overlaps(file, tree, oneWay: true))
+                return $"error: {file} is inside the compared tree {tree} — the patch would become part of what it describes; write it somewhere else\n";
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         PatchStats ps;
         var tmp = file + ".tmp";
@@ -472,7 +498,9 @@ public static class AgentViews
         PatchWriter.WriteChange(w, c, s.Left, s.Right, new PatchOptions { Context = Math.Clamp(context, 0, 1000) }, stats);
         var text = w.ToString();
         var info = Count(text, stats);
-        if (remember && info.Kind != "unreadable") s.DiffInfo[c.RelativePath] = info; // it may be readable next time
+        // Remembered for the listings, which count hunks at the default context (more context merges hunks); not when
+        // unreadable, as it may be readable next time.
+        if (remember && context == PatchOptions.DefaultContextLines && info.Kind != "unreadable") s.DiffInfo[c.RelativePath] = info;
         return (text, info);
     }
 
@@ -585,7 +613,7 @@ public static class AgentViews
         var token = reason.Trim().ToLowerInvariant();
         foreach (var x in Enum.GetValues<ChangeReason>())
             if (CanonicalTokens.Token(x) == token) { value = x; return true; }
-        error = $"unknown reason '{reason}' (use content, eol, whitespace, encoding, binary, metadata)";
+        error = $"unknown reason '{reason}' (use content, eol, whitespace, encoding, binary, metadata, unreadable)";
         return false;
     }
 

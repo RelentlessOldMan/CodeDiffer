@@ -79,9 +79,9 @@ Locked decisions
     Tier 3  real line diff - ONLY for the one file a consumer opens, bounded by a per-file cap -> hunks.
   Tiers 0-2 run over the whole tree and emit only counts + per-file status. Tier 3 is lazy.
 - Giant files are diffed at the BLOCK level, never whole. Reusing CodeCompass's block/positional
-  sidecar idea: cut the file into line-aligned ~1 MB blocks, compare block content-hashes between the
-  two sides, and line-diff only the blocks that differ (a few MB, streamable over SMB). Aggregate to a
-  bounded summary; emit the full hunk set by reference (a .patch in the result store), never inline.
+  sidecar idea: stream each file once through a content-defined chunker (16-256 KB chunks, ~64 KB
+  average, SHA-256 each), match the two chunk lists, and report the changed byte ranges (bounded; never
+  line-diffed, never decoded whole). An edit dirties only its neighbourhood, not every block after it.
 - Hash discipline = SHA-256 of raw file bytes, lowercase hex. This is (a) the same hash the CodeSpawner
   delta contract uses, so our verify-adapter asserts directly; and (b) the loose-coupling point with a
   CodeCompass index (see interop) - a shared fact, not a shared binary.

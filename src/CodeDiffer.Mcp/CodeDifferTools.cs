@@ -142,13 +142,14 @@ public static class CodeDifferTools
 
     [McpServerTool(Name = "export_changeset")]
     [Description("2-way only. Write the whole left->right change set as one git-style patch file and return its path and counts " +
-                 "(never the patch itself). literal=true includes eol/encoding-only changes as real hunks, so `git apply` " +
-                 "reproduces the right tree's text files exactly; binary and large files are described, not carried.")]
+                 "(never the patch itself). literal=true carries eol-only and UTF-8 BOM changes as real hunks; binary and large files, " +
+                 "text that isn't UTF-8 (UTF-16, legacy code pages) and unreadable files are described in '#' lines, not carried, " +
+                 "and the summary counts them. out_path must be outside both trees.")]
     public static string ExportChangeset(
         [Description("Compare id (default: the most recent).")] string? compare_id = null,
         [Description("Output .patch path, replaced if it exists (default: changeset.patch in the compare's saved result dir, replaced on each export).")] string? out_path = null,
         [Description("Context lines (default 3).")] int context = PatchOptions.DefaultContextLines,
-        [Description("Carry eol/encoding-only changes as hunks instead of notes.")] bool literal = false)
+        [Description("Carry eol-only and UTF-8 BOM changes as hunks instead of notes (UTF-16 and legacy text are never carried).")] bool literal = false)
     {
         if (Find(compare_id, out var s) is { } err) return err;
         if (s is not CompareSession c) return $"error: compare {s!.Id} is 3-way; export_changeset needs a 2-way compare";

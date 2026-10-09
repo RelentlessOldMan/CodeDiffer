@@ -109,6 +109,12 @@ public static class ThreeWayViews
         var e = r.Entries.FirstOrDefault(x => x.Path == path)
              ?? r.Entries.FirstOrDefault(x => x.MergedPath == path || x.V1?.RelativePath == path || x.V2?.RelativePath == path)
              ?? r.Entries.FirstOrDefault(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (e is null && path.Contains('�'))
+        {
+            // As UTF-8 shows it: an unpaired surrogate reads as U+FFFD in a listing.
+            var hits = r.Entries.Where(x => ResultStore.Shown(x.Path) == path || (x.MergedPath is { } m && ResultStore.Shown(m) == path)).Take(2).ToList();
+            if (hits.Count == 1) e = hits[0];
+        }
         if (e is null) return $"not touched by either side in compare3 {s.Id}: {path}\n";
 
         var body = Body(s, e, out var kind, out _);

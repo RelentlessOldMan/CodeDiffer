@@ -1,3 +1,4 @@
+using System.Text;
 using CodeDiffer.Core.Model;
 
 namespace CodeDiffer.Core.Compare;
@@ -62,24 +63,60 @@ public sealed class ReasonClassifier
 
     private enum Norm { None, Whitespace, Eol }
 
-    /// <summary>The same precedence on a large file, by streamed byte comparison (UTF-8 or a single-byte code page).</summary>
+    /// <summary>The same precedence on a large file, by streamed comparison (UTF-8 or a single-byte code page). Read
+    /// byte for byte (Latin-1, one char a byte) — the same verdict as decoding, while both sides decode alike; when a
+    /// difference is found and one side is UTF-8 with the other not, again decoding each as a whole read does (a
+    /// cp1252 file re-saved as UTF-8 is the same text: <c>encoding</c>, at any size).</summary>
     private static ChangeReason Streamed(string leftPath, byte[] leftHead, string rightPath, byte[] rightHead, CancellationToken ct)
     {
         if (Wide(leftHead) || Wide(rightHead)) return ChangeReason.Content;
         int l = Utf8Bom(leftHead) ? 3 : 0, r = Utf8Bom(rightHead) ? 3 : 0;
-        if (l != r && Same(leftPath, l, rightPath, r, Norm.None, ct)) return ChangeReason.Encoding;
+        var reason = Verdict(leftPath, l, Encoding.Latin1, rightPath, r, Encoding.Latin1, l != r, ct);
+        if (reason != ChangeReason.Content) return reason;
+        bool lu = IsUtf8(leftPath, l, ct), ru = IsUtf8(rightPath, r, ct);
+        if (lu == ru) return reason;
+        return Verdict(leftPath, l, lu ? Utf8Strict : Encoding.Latin1, rightPath, r, ru ? Utf8Strict : Encoding.Latin1, true, ct);
+    }
+
+    private static readonly Encoding Utf8Strict = new UTF8Encoding(false, true);
+
+    private static ChangeReason Verdict(string a, int skipA, Encoding encA, string b, int skipB, Encoding encB, bool encodingMayDiffer, CancellationToken ct)
+    {
+        if (encodingMayDiffer && Same(a, skipA, encA, b, skipB, encB, Norm.None, ct)) return ChangeReason.Encoding;
         // Whitespace-normalized first: it is implied by eol-equality, and a content change ends it at the first difference.
-        if (!Same(leftPath, l, rightPath, r, Norm.Whitespace, ct)) return ChangeReason.Content;
-        return Same(leftPath, l, rightPath, r, Norm.Eol, ct) ? ChangeReason.Eol : ChangeReason.Whitespace;
+        if (!Same(a, skipA, encA, b, skipB, encB, Norm.Whitespace, ct)) return ChangeReason.Content;
+        return Same(a, skipA, encA, b, skipB, encB, Norm.Eol, ct) ? ChangeReason.Eol : ChangeReason.Whitespace;
+    }
+
+    /// <summary>Whether a file past <paramref name="skip"/> bytes is valid UTF-8, streamed.</summary>
+    private static bool IsUtf8(string path, int skip, CancellationToken ct)
+    {
+        using var fs = TextInspector.OpenShared(path, 1);
+        fs.Position = skip;
+        var d = Utf8Strict.GetDecoder();
+        var buf = new byte[1 << 16];
+        var chars = new char[(1 << 16) + 4];
+        try
+        {
+            int n;
+            while ((n = fs.Read(buf, 0, buf.Length)) > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                d.GetChars(buf, 0, n, chars, 0, flush: false);
+            }
+            d.GetChars(buf, 0, 0, chars, 0, flush: true); // a sequence cut off at the end is invalid too
+            return true;
+        }
+        catch (DecoderFallbackException) { return false; }
     }
 
     private static bool Utf8Bom(byte[] h) => h is [0xEF, 0xBB, 0xBF, ..];
     private static bool Wide(byte[] h) => h is [0xFF, 0xFE, ..] or [0xFE, 0xFF, ..] or [0x00, 0x00, 0xFE, 0xFF, ..];
 
-    private static bool Same(string a, int skipA, string b, int skipB, Norm norm, CancellationToken ct)
+    private static bool Same(string a, int skipA, Encoding encA, string b, int skipB, Encoding encB, Norm norm, CancellationToken ct)
     {
-        using var fa = new Feed(a, skipA, ct);
-        using var fb = new Feed(b, skipB, ct);
+        using var fa = new Feed(a, skipA, encA, ct);
+        using var fb = new Feed(b, skipB, encB, ct);
         while (true)
         {
             int x = Next(fa, norm), y = Next(fb, norm);
@@ -112,12 +149,12 @@ public sealed class ReasonClassifier
         }
     }
 
-    /// <summary>A file's bytes one at a time (-1 at the end), buffered.</summary>
+    /// <summary>A file's characters one at a time (-1 at the end), buffered: Latin-1 is its bytes.</summary>
     private sealed class Feed : IDisposable
     {
-        private readonly FileStream _fs;
+        private readonly StreamReader _r;
         private readonly CancellationToken _ct;
-        private readonly byte[] _buf = new byte[1 << 16];
+        private readonly char[] _buf = new char[1 << 16];
         private int _n, _i;
 
         /// <summary>Nothing but whitespace since the last line ending (or the start).</summary>
@@ -126,11 +163,12 @@ public sealed class ReasonClassifier
         /// <summary>The last byte returned that wasn't whitespace (whitespace normalization).</summary>
         public int Last = -1;
 
-        public Feed(string path, int skip, CancellationToken ct)
+        public Feed(string path, int skip, Encoding encoding, CancellationToken ct)
         {
             _ct = ct;
-            _fs = TextInspector.OpenShared(path, 1);
-            _fs.Position = skip;
+            var fs = TextInspector.OpenShared(path, 1);
+            fs.Position = skip;
+            _r = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: false, bufferSize: 1 << 16);
         }
 
         public int Peek() => _i < _n || Fill() ? _buf[_i] : -1;
@@ -140,11 +178,11 @@ public sealed class ReasonClassifier
         private bool Fill()
         {
             _ct.ThrowIfCancellationRequested();
-            _n = _fs.Read(_buf, 0, _buf.Length);
+            _n = _r.Read(_buf, 0, _buf.Length);
             _i = 0;
             return _n > 0;
         }
 
-        public void Dispose() => _fs.Dispose();
+        public void Dispose() => _r.Dispose();
     }
 }
