@@ -17,20 +17,28 @@ public sealed record FileOpsCheckResult(
 /// status, reason, rename pairing and similarity) against the manifest's fileOps. The digest tier checks the
 /// manifest, the hunk tier the line differ; this one checks the compare itself. A rename with edits is one operation:
 /// the contract lists its hunks as a <c>modified</c> record under the new path, which CodeDiffer reports as the rename
-/// (its similarity says it was edited), so that record is not a separate expected "modified".
+/// (its similarity says it was edited), so that record is not a separate expected "modified". Given the trees, a rename's
+/// reason is compared too: its modified record's reason, or "identical" without one, against CodeDiffer's classifier on
+/// the pair (a compare gives a rename no reason of its own).
 /// </summary>
 public static class DeltaFileOpsCheck
 {
-    public static FileOpsCheckResult Run(CompareReport report, DeltaManifest manifest, int maxListed = 20)
+    public static FileOpsCheckResult Run(CompareReport report, DeltaManifest manifest, int maxListed = 20, string? baseDir = null, string? variantDir = null)
     {
+        bool reasons = baseDir is not null && variantDir is not null;
         // Each operation as a key; its detail (reason / similarity) compared when both sides have it.
         var expected = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var p in manifest.Added) expected[$"added {p}"] = "";
         foreach (var p in manifest.Removed) expected[$"removed {p}"] = "";
-        foreach (var r in manifest.Renamed) expected[$"renamed {r.From} -> {r.To}"] = $"similarity {r.SimilarityMilli}";
+        var modifiedAt = new Dictionary<string, FileDelta>(StringComparer.Ordinal);
+        foreach (var m in manifest.Modified) modifiedAt.TryAdd(m.Path, m);
+        foreach (var r in manifest.Renamed)
+            expected[$"renamed {r.From} -> {r.To}"] = $"similarity {r.SimilarityMilli}" +
+                (!reasons ? "" : modifiedAt.TryGetValue(r.To, out var m) ? $", {CanonicalTokens.Token(m.Reason)}" : ", identical");
         var renameTo = manifest.Renamed.Select(r => r.To).ToHashSet(StringComparer.Ordinal);
         foreach (var m in manifest.Modified)
             if (!renameTo.Contains(m.Path)) expected[$"modified {m.Path}"] = CanonicalTokens.Token(m.Reason);
+        var classifier = new Compare.ReasonClassifier();
 
         var actual = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var c in report.Changes)
@@ -38,7 +46,10 @@ public static class DeltaFileOpsCheck
             {
                 case ChangeStatus.Added: actual[$"added {c.RelativePath}"] = ""; break;
                 case ChangeStatus.Removed: actual[$"removed {c.RelativePath}"] = ""; break;
-                case ChangeStatus.Renamed: actual[$"renamed {c.RenamedFrom} -> {c.RelativePath}"] = $"similarity {c.SimilarityMilli}"; break;
+                case ChangeStatus.Renamed:
+                    actual[$"renamed {c.RenamedFrom} -> {c.RelativePath}"] = $"similarity {c.SimilarityMilli}" +
+                        (!reasons ? "" : c.PureRename ? ", identical" : $", {RenameReason(classifier, baseDir!, variantDir!, c)}");
+                    break;
                 case ChangeStatus.Modified: actual[$"modified {c.RelativePath}"] = c.ReasonLabel ?? "?"; break;
             }
 
@@ -52,5 +63,12 @@ public static class DeltaFileOpsCheck
         return new FileOpsCheckResult(expected.Count, expected.Count - missing.Count - wrong.Count,
             missing.Take(maxListed).ToList(), extra.Take(maxListed).ToList(), reason.Take(maxListed).ToList(), sim.Take(maxListed).ToList(),
             missing.Count, extra.Count, reason.Count, sim.Count);
+    }
+
+    private static string RenameReason(Compare.ReasonClassifier classifier, string baseDir, string variantDir, FileChange c)
+    {
+        string Full(string root, string rel) => Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));
+        try { return CanonicalTokens.Token(classifier.Classify(Full(baseDir, c.RenamedFrom!), c.LeftSize, Full(variantDir, c.RelativePath), c.RightSize)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return "unreadable"; }
     }
 }

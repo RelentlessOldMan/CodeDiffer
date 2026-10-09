@@ -123,12 +123,23 @@ internal static class TextInspector
     /// '_', or anything non-ASCII (a decoded char, or a byte of one in the streamed comparison — the same verdict).</summary>
     public static bool IsWordChar(int c) => c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '_' or >= 0x80;
 
+    /// <summary>An ASCII operator character: two of them side by side can read as another token (<c>- -x</c> → <c>--x</c>,
+    /// <c>/ *</c> → <c>/*</c>, <c>&gt; =</c> → <c>&gt;=</c>). Brackets, commas, semicolons and quotes never fuse.</summary>
+    public static bool IsOperatorChar(int c) => c is '!' or '#' or '$' or '%' or '&' or '*' or '+' or '-' or '.' or '/'
+        or ':' or '<' or '=' or '>' or '?' or '@' or '\\' or '^' or '|' or '~';
+
+    /// <summary>Whether a run of whitespace between these two characters keeps them apart: two word characters, or two
+    /// operator characters. Between anything else it can vanish without changing a token.</summary>
+    public static bool Separates(int before, int after)
+        => (IsWordChar(before) && IsWordChar(after)) || (IsOperatorChar(before) && IsOperatorChar(after));
+
     /// <summary>
     /// What a whitespace-only change leaves alone, of EOL-normalized text: the same lines, each with its leading and
-    /// trailing whitespace dropped, and an inner run of it read as one space between two word characters and as
-    /// nothing elsewhere. So reindenting, trailing spaces and spacing round punctuation ("x=1" → "x = 1") are
-    /// whitespace; a space that joins or splits a token ("return x" → "returnx") and a line joined, split or added
-    /// are content.
+    /// trailing whitespace dropped, and an inner run of it read as one space where it <see cref="Separates"/> two
+    /// tokens (two word characters, or two operator characters) and as nothing elsewhere. So reindenting, trailing
+    /// spaces and spacing round punctuation ("x=1" → "x = 1") are whitespace; a space that joins or splits a token
+    /// ("return x" → "returnx", "- -x" → "--x", "/ *" → "/*") and a line joined, split or added are content. The
+    /// width of a run is never kept, so a run widened or narrowed inside a string literal reads as whitespace too.
     /// </summary>
     public static string WhitespaceKey(string s)
     {
@@ -140,7 +151,7 @@ internal static class TextInspector
             if (IsHorizontalSpace(c))
             {
                 while (i + 1 < s.Length && IsHorizontalSpace(s[i + 1])) i++;
-                if (!lineStart && i + 1 < s.Length && IsWordChar(sb[^1]) && IsWordChar(s[i + 1])) sb.Append(' ');
+                if (!lineStart && i + 1 < s.Length && Separates(sb[^1], s[i + 1])) sb.Append(' ');
                 continue;
             }
             lineStart = c == '\n';

@@ -84,7 +84,9 @@ merger the 3-way contract verifies. Per region applied | fuzzy (shifted line) | 
 strict: a change touching a target edit conflicts, like git). A file with any conflict is never written;
 others are replaced atomically. Binary / EOL- or encoding-only / >16 MB / non-round-trippable files apply
 only when C equals the base byte for byte (compared and copied streamed, so a file of any size works). A
-lone CR is content: merging across line endings converts only CRLF.
+lone CR is content: merging across line endings converts only CRLF. A target in another line-ending style than the
+base is merged ignoring line endings and written in its own style (a mixed base too); a target still in the base's
+style takes a change that converts the file to one style, its own new lines included, as compare3 does.
 Stopping `apply --write` part way is safe: Ctrl+C stops between files (the report says how many were written
 and how many were not reached), each file is written whole via `<file>.codediffer.tmp` and a rename, and
 running the same apply again finishes the job — what is done comes out "already", a rename stopped between
@@ -265,12 +267,19 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   compare, whatever it points at. A saved path that could reach outside its tree (`../x`, rooted, a drive) is a
   corrupt result, never acted on.
 - `whitespace` means only whitespace: the same lines but for indentation, trailing spaces / tabs and the
-  spacing round punctuation (`x=1` → `x = 1`). A space that joins or splits a word (`return x` → `returnx`),
-  a line joined, split or added, and NBSP / NEL (characters, not whitespace) are `content`. Whitespace is
-  ASCII space, tab, VT and FF, whole or streamed alike.
+  spacing round punctuation (`x=1` → `x = 1`). A space that joins or splits a word (`return x` → `returnx`) or
+  two operator characters (`- -x` → `--x`, `/ *` → `/*`, `> =` → `>=`), a line joined, split or added, and
+  NBSP / NEL (characters, not whitespace) are `content`. Whitespace is ASCII space, tab, VT and FF, whole or
+  streamed alike. Strings and comments aren't parsed: a run of spaces widened inside a string literal reads as
+  whitespace.
+- A reason is the text's: line endings changed along with the encoding (UTF-8 CRLF → UTF-16 LF) are `eol`, and
+  the patch note says the encoding changed too; a shown diff of a whitespace or content change says so as well.
+  Line endings in a note are counted in the file's own encoding (UTF-16's CRLF is not "LF").
 - Among identical files the rename is the best match, not the first listed: `a/LICENSE` and `b/LICENSE`
   identical, `b/LICENSE` renamed to `b/COPYING` and `a/` deleted gives `b/LICENSE → b/COPYING`. Empty files
   never pair as renames, and nor does a file that is only a BOM (an editor's "empty" `.cs`): that is empty text.
+  Equally similar edited renames are paired the same way: the same name and directory first, then the same name,
+  then the same directory, so `a/g.c`, `b/f.c` → `c/f.c`, `c/g.c` never cross-pair.
 - `apply` carries a change's re-encoding with its edits (the right side dropped the BOM, or went UTF-16 →
   UTF-8, and edited a line): the target, still in the base's encoding, is written in the right side's, and the
   note says so. A target that re-encoded the file its own way keeps its own encoding, also said.
@@ -289,7 +298,14 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   added or deleted file is asked for with `/dev/null` (or `NUL`) as the absent side. Both sides get the right
   file's name, so `git apply` changes that file rather than renaming it.
 - `verify` fails a hunk whose op doesn't fit its line counts (an `insert` with old lines, a `delete` with new
-  ones), as the contract defines them, even when its coordinates rebuild the file.
+  ones), as the contract defines them, even when its coordinates rebuild the file. A hunk takes its text from
+  the variant, so rebuilding is not enough: the hunks must be the canonical ones — coalesced (an unchanged line
+  between any two), each where the walk is on both sides (`newStart` = the new lines before it + 1, a delete's
+  too), and no replace wider than its change (its first and last lines differ on the two sides). `whitespace`
+  records are checked too (each hunk must change only whitespace), run-rule hunks are expanded and the files
+  streamed, and a renamed file's reason is compared with CodeDiffer's own verdict on the pair.
+- `get_file_diff` / `export_changeset` / `-U` context past the file's length is the whole file; a negative one is
+  refused (export) or none, never a corrupt hunk header.
 - A whole patch (`--patch`, `export_changeset`) is for `git apply`: what it can't carry — binary and large
   files, text that isn't UTF-8, unreadable files, the eol/encoding-only notes — is described in `#` lines
   outside any `diff --git` section, which git skips, so the rest still applies; the summary counts them as

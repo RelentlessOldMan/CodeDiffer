@@ -237,6 +237,7 @@ public static class AgentViews
     public static string FileDiff(CompareSession s, string path, int context = PatchOptions.DefaultContextLines,
         int maxLines = DefaultMaxLines, int startLine = 1)
     {
+        context = Math.Clamp(context, 0, 1000); // what is rendered, and so what the saved file's name says
         // While running, any difference found so far can be shown (diffs are rendered from the trees anyway).
         var found = Partial(s)?.Found();
         if (found is null && Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
@@ -358,6 +359,7 @@ public static class AgentViews
     /// <summary>The whole A→B changeset as one git-style patch file (apply with `git apply`).</summary>
     public static string Export(CompareSession s, string? outPath = null, int context = PatchOptions.DefaultContextLines, bool literal = false)
     {
+        if (context < 0) return $"context must be 0 or more (got {context})";
         if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
         var r = s.Report!;
         if (r.LeftDroppedDirectories + r.RightDroppedDirectories > 0)

@@ -52,6 +52,9 @@ public static class UnifiedDiff
     /// <summary>Render the coordinate hunks as unified-diff hunks with context.</summary>
     public static void WriteHunks(TextWriter w, IReadOnlyList<string> a, IReadOnlyList<string> b, IReadOnlyList<Hunk> hunks, int context)
     {
+        // More context than the longer file is the whole file; a negative one is none. Unclamped, -1 or int.MaxValue
+        // (overflowing the arithmetic below) wrote hunk headers git can't read.
+        context = Math.Clamp(context, 0, Math.Max(a.Count, b.Count));
         // Normalize each hunk to 0-based spans: old [o0, o0+ol), new [n0, n0+nl).
         var edits = hunks
             .Select(h => (O0: h.OldLines == 0 ? h.OldStart : h.OldStart - 1, Ol: h.OldLines, N0: h.NewStart - 1, Nl: h.NewLines))

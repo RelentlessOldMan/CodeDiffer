@@ -67,7 +67,7 @@ public sealed class DeltaTreeCrossCheckTests : IDisposable
         var manifest = new DeltaManifest(1, [], [], [], [Real(f)], DiffTruthSha: null);
         var result = DeltaTreeCrossCheck.Run(_base, _variant, manifest);
 
-        Assert.True(result.Ok);
+        Assert.True(result.Ok, string.Join("; ", result.Files.Select(x => x.Problem).Concat(result.ContentMismatches)));
         Assert.Equal(1, result.Reconstructed);
         Assert.Equal(1, result.ExactMatches); // distinct lines => unambiguous, so exact match too
     }

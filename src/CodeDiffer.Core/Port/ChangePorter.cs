@@ -257,7 +257,13 @@ public static class ChangePorter
         // target's line-ending style differs from the base's, merge EOL-normalized and write the target's style.
         // A side with no line break has no style of its own: the target takes the change's (else the base's), the base the target's.
         string tEol = t.Eol != "none" ? t.Eol : b.Eol != "none" ? b.Eol : a.Eol, aEol = a.Eol != "none" ? a.Eol : tEol;
-        bool normalize = aEol != tEol && tEol is not ("mixed" or "none") && aEol is not ("mixed" or "none");
+        // A mixed base still normalizes when the target has one style (a CRLF target took the change's LF lines raw). A
+        // target still in the base's style takes the change's conversion to one style, as compare3 does: the merge is
+        // written in the change's style, the target's own new lines too.
+        string bEol = b.Eol != "none" ? b.Eol : aEol, outEol = tEol;
+        bool normalize = aEol != tEol && tEol is not ("mixed" or "none") && aEol != "none";
+        bool converts = !normalize && aEol == tEol && bEol != aEol && bEol is "LF" or "CRLF";
+        if (converts) (normalize, outEol) = (true, bEol);
         var al = Lines(a.Content, normalize);
         var bl = Lines(b.Content, normalize);
         var tl = Lines(t.Content, normalize);
@@ -296,12 +302,12 @@ public static class ChangePorter
         if (hunks.Any(h => h.Outcome == HunkOutcome.Conflict))
             return (new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Conflict, "none", hunks, null), null);
         bool reencode = a.Kind != b.Kind && t.Kind == a.Kind; // the change's re-encoding, not yet in the target
-        bool nothing = hunks.All(h => h.Outcome == HunkOutcome.Already) && c.Status != ChangeStatus.Renamed && !reencode;
+        bool nothing = hunks.All(h => h.Outcome == HunkOutcome.Already) && c.Status != ChangeStatus.Renamed && !reencode && !converts;
         if (nothing)
             return (new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Already, "none", hunks, null), null);
 
         var text = merged.ToString();
-        if (normalize && tEol == "CRLF") text = text.Replace("\n", "\r\n");
+        if (normalize && outEol == "CRLF") text = text.Replace("\n", "\r\n");
         // The change may re-encode the file as well as edit it (a BOM dropped, UTF-16 → UTF-8): that is part of the
         // change, carried when the target still has the base's encoding. A target that re-encoded it its own way keeps
         // its own, and says so.
@@ -312,7 +318,8 @@ public static class ChangePorter
             if (reencode) { write = b; encNote = $"re-encoded {a.Kind} → {b.Kind}, as the change does"; }
             else if (t.Kind != b.Kind) encNote = $"the change re-encodes it {a.Kind} → {b.Kind}, but the target is {t.Kind} — kept the target's {t.Kind}";
         }
-        string? note = normalize ? $"merged ignoring line endings; written with the target's {tEol}" : null;
+        string? note = converts ? $"merged ignoring line endings; written with {outEol}, as the change converts them ({aEol} → {outEol})"
+            : normalize ? $"merged ignoring line endings; written with the target's {tEol}" : null;
         if (encNote is not null) note = note is null ? encNote : note + "; " + encNote;
         return (new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Clean, action, hunks, note), write.Encode(text));
     }

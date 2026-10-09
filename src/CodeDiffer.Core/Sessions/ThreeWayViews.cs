@@ -161,11 +161,14 @@ public static class ThreeWayViews
             kind = e.Outcome == Merge3Outcome.Agreed ? "patch (identical on both sides)" : $"patch base->{(v2 ? "v2" : "v1")}";
             return w.ToString();
         }
+        // A conflict can have one side only (a path collision, a file/directory clash, a side behind a link or unreadable).
         var both = new StringWriter { NewLine = "\n" };
         both.Write("--- v1's change ---\n");
-        PatchWriter.WriteChange(both, e.V1!, s.Base, s.V1, opt, new PatchStats());
+        if (e.V1 is { } c1) PatchWriter.WriteChange(both, c1, s.Base, s.V1, opt, new PatchStats());
+        else both.Write("(no change of v1's at this path)\n");
         both.Write("--- v2's change ---\n");
-        PatchWriter.WriteChange(both, e.V2!, s.Base, s.V2, opt, new PatchStats());
+        if (e.V2 is { } c2) PatchWriter.WriteChange(both, c2, s.Base, s.V2, opt, new PatchStats());
+        else both.Write("(no change of v2's at this path)\n");
         kind = "both sides' patches (no line-level merge for this conflict)";
         return both.ToString();
     }

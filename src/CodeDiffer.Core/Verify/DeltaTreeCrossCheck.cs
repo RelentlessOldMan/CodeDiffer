@@ -32,8 +32,10 @@ public sealed record TreeCrossCheckResult(IReadOnlyList<FileHunkCheck> Files, IR
 /// they may legitimately place hunks differently. So we assert that the manifest's hunks (and CodeDiffer's)
 /// each rebuild the variant from the base; coordinate-identical hunks are reported as a bonus signal.
 ///
-/// Only reason=content files with explicit hunks are line-comparable; giant run-rule files and
-/// binary/eol/encoding/metadata carry no comparable textual hunks and are reported as skipped (with reason).
+/// The manifest's hunks must also be the canonical ones (<see cref="HunkApplier.Problem"/>: coalesced, each where the
+/// walk is, no replace wider than its change), since a hunk takes its text from the variant and a loose one would still
+/// rebuild. Content and whitespace files are checked (a whitespace file's hunks must change only whitespace), run-rule
+/// hunks expanded and the files streamed; binary/eol/encoding/metadata carry no textual hunks and are skipped.
 /// A rename with edits has its hunks under the new path (the contract keys them by <c>to</c>): its old side is the
 /// base's <c>from</c>.
 /// </summary>
@@ -52,7 +54,7 @@ public static class DeltaTreeCrossCheck
             var oldPath = renamedFrom.TryGetValue(f.Path, out var was) ? was : f.Path;
             if (Mismatch(baseDir, oldPath, f.OldSha, f.OldSize) is { } bm) content.Add($"{f.Path}: base {bm}");
             if (Mismatch(variantDir, f.Path, f.NewSha, f.NewSize) is { } vm) content.Add($"{f.Path}: variant {vm}");
-            bool comparable = f.Reason == ChangeReason.Content && f.RunHunks.Count == 0;
+            bool comparable = f.Reason is ChangeReason.Content or ChangeReason.Whitespace;
             if (!comparable)
             {
                 results.Add(new FileHunkCheck(f.Path, reason, Checked: false, Reconstructs: false, ExactMatch: false, f.Hunks.Count, 0));
@@ -61,6 +63,23 @@ public static class DeltaTreeCrossCheck
 
             var relative = f.Path.Replace('/', Path.DirectorySeparatorChar);
             var baseRelative = (renamedFrom.TryGetValue(f.Path, out var from) ? from : f.Path).Replace('/', Path.DirectorySeparatorChar);
+            bool ws = f.Reason == ChangeReason.Whitespace;
+            if (f.RunHunks.Count > 0)
+            {
+                // A giant file: its run rules expanded, both files streamed; CodeDiffer's own line diff isn't run on it.
+                string? why;
+                try
+                {
+                    var all = f.Hunks.Concat(f.RunHunks.SelectMany(r => r.Expand())).ToList();
+                    why = HunkApplier.Problem(StreamLines(Path.Combine(baseDir, baseRelative)), StreamLines(Path.Combine(variantDir, relative)), all, ws);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or OverflowException)
+                {
+                    why = ex.Message;
+                }
+                results.Add(new FileHunkCheck(f.Path, reason, Checked: true, Reconstructs: why is null, ExactMatch: false, f.Hunks.Count + f.RunHunks.Count, 0, why));
+                continue;
+            }
             string[] baseLines, variantLines;
             try
             {
@@ -75,15 +94,16 @@ public static class DeltaTreeCrossCheck
 
             var mine = LineDiffer.Diff(baseLines, variantLines);
 
-            bool manifestRebuilds = Reconstructs(baseLines, variantLines, f.Hunks);
+            var problem = HunkApplier.Problem(baseLines, variantLines, f.Hunks, ws);
             bool mineRebuilds = Reconstructs(baseLines, variantLines, mine);
             bool exact = HunksEqual(mine, f.Hunks);
 
             results.Add(new FileHunkCheck(
                 f.Path, reason, Checked: true,
-                Reconstructs: manifestRebuilds && mineRebuilds,
+                Reconstructs: problem is null && mineRebuilds,
                 ExactMatch: exact,
-                f.Hunks.Count, mine.Count));
+                f.Hunks.Count, mine.Count,
+                problem ?? (mineRebuilds ? null : "CodeDiffer's own hunks do not rebuild the variant")));
         }
 
         return new TreeCrossCheckResult(results, content);
@@ -103,6 +123,24 @@ public static class DeltaTreeCrossCheck
             return string.Equals(actual, sha, StringComparison.OrdinalIgnoreCase) ? null : $"{rel} has SHA-256 {actual}, the manifest says {sha}";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return $"{rel} can't be read ({ex.Message})"; }
+    }
+
+    /// <summary>A file's lines as <see cref="LineText.SplitLines"/> gives them (split on '\n', a '\r' kept), streamed.</summary>
+    private static IEnumerable<string> StreamLines(string path)
+    {
+        using var r = new StreamReader(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16),
+            System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var sb = new System.Text.StringBuilder();
+        var buf = new char[1 << 15];
+        int got;
+        while ((got = r.Read(buf, 0, buf.Length)) > 0)
+            for (int i = 0; i < got; i++)
+            {
+                if (buf[i] != '\n') { sb.Append(buf[i]); continue; }
+                yield return sb.ToString();
+                sb.Clear();
+            }
+        if (sb.Length > 0) yield return sb.ToString();
     }
 
     private static bool Reconstructs(IReadOnlyList<string> baseLines, IReadOnlyList<string> variantLines, IReadOnlyList<Hunk> hunks)

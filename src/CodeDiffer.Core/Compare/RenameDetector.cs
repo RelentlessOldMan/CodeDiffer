@@ -125,7 +125,7 @@ public sealed class RenameDetector
                         pairs.Add((ri, ai));
         pairs.Sort((x, y) =>
         {
-            int c = Rank(x).CompareTo(Rank(y));
+            int c = Rank(removed[x.R], added[x.A]).CompareTo(Rank(removed[y.R], added[y.A]));
             if (c == 0) c = string.CompareOrdinal(removed[x.R].RelativePath, removed[y.R].RelativePath);
             if (c == 0) c = string.CompareOrdinal(added[x.A].RelativePath, added[y.A].RelativePath);
             return c;
@@ -150,12 +150,15 @@ public sealed class RenameDetector
         removed.AddRange(stillRemoved);
         added.Clear();
         added.AddRange(stillAdded);
-
-        int Rank((int R, int A) p) => (Name(added[p.A]) == Name(removed[p.R]) ? 0 : 2) + (Dir(added[p.A]) == Dir(removed[p.R]) ? 0 : 1);
-
-        static string Name(FileEntry e) => e.RelativePath[(e.RelativePath.LastIndexOf('/') + 1)..];
-        static string Dir(FileEntry e) => e.RelativePath[..Math.Max(0, e.RelativePath.LastIndexOf('/'))];
     }
+
+    /// <summary>How likely a pair is the rename, other things equal: the same name and directory first, then the same
+    /// name (moved), then the same directory (renamed in place), then neither.</summary>
+    private static int Rank(FileEntry removed, FileEntry added)
+        => (Name(added) == Name(removed) ? 0 : 2) + (Dir(added) == Dir(removed) ? 0 : 1);
+
+    private static string Name(FileEntry e) => e.RelativePath[(e.RelativePath.LastIndexOf('/') + 1)..];
+    private static string Dir(FileEntry e) => e.RelativePath[..Math.Max(0, e.RelativePath.LastIndexOf('/'))];
 
     /// <summary>The XxHash128 of each byte-order mark alone: a file with that content is empty text.</summary>
     private static readonly HashSet<string> BomOnly = new(
@@ -228,10 +231,14 @@ public sealed class RenameDetector
         });
         var scored = perRemoved.Where(l => l is not null).SelectMany(l => l!).ToList();
 
-        // Best first; ties broken by path so assignment is deterministic across runs/platforms.
+        // Best first; ties broken by name and directory (as identical files are paired), then by path so assignment is
+        // deterministic across runs/platforms. By path alone, a/x.c and b/x.c renamed to a/y.c and b/y.c, equally
+        // edited, could cross-pair (a/x.c → b/y.c), and compare3 follows renames.
         scored.Sort((x, y) =>
         {
             int c = y.milli.CompareTo(x.milli);
+            if (c != 0) return c;
+            c = Rank(removed[x.ri], added[x.ai]).CompareTo(Rank(removed[y.ri], added[y.ai]));
             if (c != 0) return c;
             c = string.CompareOrdinal(removed[x.ri].RelativePath, removed[y.ri].RelativePath);
             if (c != 0) return c;

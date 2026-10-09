@@ -424,14 +424,14 @@ static int Verify(string[] args)
         }
 
         var cc = DeltaTreeCrossCheck.Run(baseDir, variantDir, manifest);
-        Console.WriteLine($"  hunk cross-check: {cc.Reconstructed}/{cc.Checked} reconstructed · exact {cc.ExactMatches}/{cc.Checked} · {cc.Skipped} skipped (binary/eol/encoding/giant)");
+        Console.WriteLine($"  hunk cross-check: {cc.Reconstructed}/{cc.Checked} reconstructed · exact {cc.ExactMatches}/{cc.Checked} · {cc.Skipped} skipped (binary/eol/encoding/metadata)");
         foreach (var f in cc.Files.Where(f => f.Checked && !f.Reconstructs))
             Console.WriteLine($"    MISMATCH {f.Path} ({f.Problem ?? "manifest hunks do not rebuild the variant"})");
         Console.WriteLine($"  content cross-check: {manifest.Modified.Count:N0} modified record(s), shas and sizes against the trees · " +
                           $"{cc.ContentMismatches.Count:N0} wrong");
         foreach (var m in cc.ContentMismatches.Take(20)) Console.WriteLine($"    WRONG    {m}");
-        Console.WriteLine(cc.Ok ? "  OK — hunks reconstruct the variant, and the shas and sizes are the trees' files"
-                                : "  FAIL — a manifest hunk set does not rebuild the variant, or a sha or size is not the trees' file");
+        Console.WriteLine(cc.Ok ? "  OK — hunks are the canonical ones and reconstruct the variant, and the shas and sizes are the trees' files"
+                                : "  FAIL — a manifest hunk set does not rebuild the variant or is not canonical, or a sha or size is not the trees' file");
         crossOk = cc.Ok;
 
         // CodeDiffer's own compare of the two trees (hash cache on: warm, it reads only the changed files) against
@@ -445,9 +445,9 @@ static int Verify(string[] args)
                 () => ProgressView.Line(progress), stop.Cancel);
         }
         catch (OperationCanceledException) { return Cancelled(TimeSpan.Zero, CacheMode.On); }
-        var fo = DeltaFileOpsCheck.Run(report, manifest);
+        var fo = DeltaFileOpsCheck.Run(report, manifest, baseDir: baseDir, variantDir: variantDir);
         Console.WriteLine($"  file-ops cross-check (CodeDiffer's own compare): {fo.Matched:N0}/{fo.Expected:N0} match · " +
-                          $"{fo.MissingCount:N0} missing · {fo.ExtraCount:N0} extra · {fo.WrongReasonCount:N0} wrong reason · {fo.WrongSimilarityCount:N0} wrong rename similarity");
+                          $"{fo.MissingCount:N0} missing · {fo.ExtraCount:N0} extra · {fo.WrongReasonCount:N0} wrong reason · {fo.WrongSimilarityCount:N0} wrong rename similarity or reason");
         foreach (var m in fo.Missing) Console.WriteLine($"    MISSING  {m}");
         foreach (var x in fo.Extra) Console.WriteLine($"    EXTRA    {x}");
         foreach (var w in fo.WrongReason.Concat(fo.WrongSimilarity)) Console.WriteLine($"    WRONG    {w}");

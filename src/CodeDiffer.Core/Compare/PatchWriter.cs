@@ -204,15 +204,25 @@ public static class PatchWriter
             case ChangeStatus.Modified:
                 if (!opt.Literal && c.Reason is ChangeReason.Eol or ChangeReason.Encoding)
                 {
+                    var (l, r) = (Describe(Full(leftRoot, c.RelativePath)), Describe(Full(rightRoot, c.RelativePath)));
+                    // The reason is the text's: line endings changed with the encoding are "eol", and the note says both.
                     var note = c.Reason == ChangeReason.Eol
-                        ? $"Line endings differ: a/{c.RelativePath} ({Eol(Full(leftRoot, c.RelativePath))}) b/{c.RelativePath} ({Eol(Full(rightRoot, c.RelativePath))})\n"
-                        : $"Encoding differs: a/{c.RelativePath} ({Enc(Full(leftRoot, c.RelativePath))}) b/{c.RelativePath} ({Enc(Full(rightRoot, c.RelativePath))})\n";
+                        ? $"Line endings differ: a/{c.RelativePath} ({l.Eol}) b/{c.RelativePath} ({r.Eol})" +
+                          (l.Enc != r.Enc ? $"; encoding too: a ({l.Enc}) b ({r.Enc})" : "") + "\n"
+                        : $"Encoding differs: a/{c.RelativePath} ({l.Enc}) b/{c.RelativePath} ({r.Enc})\n";
                     if (forGit) w.Write($"# {note.TrimEnd('\n')} — a note, not a hunk (--literal carries it)\n");
                     else w.Write($"diff --git a/{c.RelativePath} b/{c.RelativePath}\n{note}");
                     stats.NoteFiles++;
                     break;
                 }
-                WriteFile(w, c.RelativePath, c.RelativePath, Full(leftRoot, c.RelativePath), Full(rightRoot, c.RelativePath), null, opt, stats, forGit);
+                string? encNote = null;
+                if (!forGit && c.Reason is ChangeReason.Whitespace or ChangeReason.Content)
+                {
+                    // A shown diff is of decoded text: an encoding change under it would be invisible.
+                    var (l, r) = (Describe(Full(leftRoot, c.RelativePath)), Describe(Full(rightRoot, c.RelativePath)));
+                    if (l.Enc != r.Enc) encNote = $"Encoding differs too: a/{c.RelativePath} ({l.Enc}) b/{c.RelativePath} ({r.Enc})\n";
+                }
+                WriteFile(w, c.RelativePath, c.RelativePath, Full(leftRoot, c.RelativePath), Full(rightRoot, c.RelativePath), encNote, opt, stats, forGit);
                 break;
         }
     }
@@ -318,26 +328,33 @@ public static class PatchWriter
 
     private static string Full(string root, string rel) => Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));
 
-    private static string Eol(string path)
+    /// <summary>A file's encoding and line-ending style, from its first 64 KB — line endings counted in its own
+    /// encoding (UTF-16's CR LF is four bytes, never a lone 0x0A).</summary>
+    private static (string Enc, string Eol) Describe(string path)
     {
-        var head = TextInspector.ReadHead(path, 64 * 1024);
-        int crlf = 0, lf = 0;
-        for (int i = 0; i < head.Length; i++)
-            if (head[i] == '\n') { if (i > 0 && head[i - 1] == '\r') crlf++; else lf++; }
-        return crlf > 0 && lf > 0 ? "mixed" : crlf > 0 ? "CRLF" : lf > 0 ? "LF" : "no newlines";
-    }
-
-    private static string Enc(string path)
-    {
-        var h = TextInspector.ReadHead(path, 4);
-        return h switch
+        var h = TextInspector.ReadHead(path, 64 * 1024);
+        var (name, enc, skip) = h switch
         {
-            [0xEF, 0xBB, 0xBF, ..] => "UTF-8 BOM",
-            [0xFF, 0xFE, 0x00, 0x00] => "UTF-32 LE",
-            [0x00, 0x00, 0xFE, 0xFF] => "UTF-32 BE",
-            [0xFF, 0xFE, ..] => "UTF-16 LE",
-            [0xFE, 0xFF, ..] => "UTF-16 BE",
-            _ => "UTF-8/ASCII, no BOM",
+            [0xFF, 0xFE, 0x00, 0x00, ..] => ("UTF-32 LE", (Encoding)new UTF32Encoding(false, false), 4),
+            [0x00, 0x00, 0xFE, 0xFF, ..] => ("UTF-32 BE", new UTF32Encoding(true, false), 4),
+            [0xFF, 0xFE, ..] => ("UTF-16 LE", new UnicodeEncoding(false, false), 2),
+            [0xFE, 0xFF, ..] => ("UTF-16 BE", new UnicodeEncoding(true, false), 2),
+            [0xEF, 0xBB, 0xBF, ..] => ("UTF-8 BOM", Encoding.Latin1, 3),
+            _ => ("UTF-8/ASCII, no BOM", Encoding.Latin1, 0),
         };
+        if (skip <= 3)
+        {
+            // CR and LF are single bytes here; the name says whether the rest is UTF-8 (a cut last character is fine).
+            try { StrictUtf8.GetDecoder().GetCharCount(h, skip, h.Length - skip, flush: false); }
+            catch (DecoderFallbackException) { name = skip == 3 ? "UTF-8 BOM before non-UTF-8 bytes" : "a legacy code page, not UTF-8"; }
+        }
+        var text = enc.GetString(h, skip, h.Length - skip);
+        int crlf = 0, lf = 0, cr = 0;
+        for (int i = 0; i < text.Length; i++)
+            if (text[i] == '\n') { if (i > 0 && text[i - 1] == '\r') crlf++; else lf++; }
+            else if (text[i] == '\r' && (i + 1 == text.Length || text[i + 1] != '\n')) cr++;
+        int kinds = (crlf > 0 ? 1 : 0) + (lf > 0 ? 1 : 0) + (cr > 0 ? 1 : 0);
+        var eol = kinds > 1 ? "mixed" : crlf > 0 ? "CRLF" : lf > 0 ? "LF" : cr > 0 ? "CR" : "no newlines";
+        return (name, eol);
     }
 }

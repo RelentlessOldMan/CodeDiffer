@@ -98,7 +98,7 @@ public sealed class ReasonClassifier
                 // TextInspector.WhitespaceKey, byte by byte (line endings normalized too).
                 case Norm.Whitespace when TextInspector.IsHorizontalSpace(c):
                     while (TextInspector.IsHorizontalSpace(f.Peek())) f.Next();
-                    if (f.LineStart || !TextInspector.IsWordChar(f.Last) || !TextInspector.IsWordChar(f.Peek())) continue;
+                    if (f.LineStart || !TextInspector.Separates(f.Last, f.Peek())) continue;
                     return ' ';
                 case Norm.Whitespace or Norm.Eol when c == '\r':
                     if (f.Peek() == '\n') f.Next();
