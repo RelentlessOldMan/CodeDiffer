@@ -79,7 +79,7 @@ Change-porting tools: `export_changeset(A→B)` and `apply_changeset(onto=C)` dr
 returns an id, optional wait), `get_summary`, `list_files` (`status`/`path_glob`/`reason`/page, `lines=true`
 renders ±lines for just that page), `get_file_diff` (cap `max_lines` and 256 KB, lines over 2,000 characters cut,
 page with `start_line`; overflow written whole to `diffs\<path>.patch` in the result directory — the path
-mirrored, so two files never share a name; a side gone or locked since the compare is said in one line), `get_stats`, `export_changeset` (to a file, `literal` for a byte-exact `git apply`).
+mirrored, so two files never share a name; one asked for with other context under `diffs-U<n>\`; a side gone or locked since the compare is said in one line), `get_stats`, `export_changeset` (to a file, `literal` for a byte-exact `git apply`).
 `apply_changeset(target, write=false)`: diff3 with base = left, change side = right, target = C, on the same
 merger the 3-way contract verifies. Per region applied | fuzzy (shifted line) | already | conflict (diff3 is
 strict: a change touching a target edit conflicts, like git). A file with any conflict is never written;
@@ -259,7 +259,11 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   `foo.c`) are left to do by hand by `apply`, and in compare3 a v2 file landing on a name a conflict keeps in v1
   is a `path collision`, never written over v1's file.
 - A hash ledger that can't be saved after the compare (disk full, a file held open) is a note, never a lost
-  result: the next compare reads those files again.
+  result: the next compare reads those files again. A ledger that is corrupt (an offset or length out of range)
+  is no cache, never a failed compare.
+- An HTML report written over an old one keeps the old one's marker until the rest is gone (read-only files
+  too; a link inside removed, never followed), so a replace that fails part way leaves a directory that is still
+  replaced next time, never one refused as not a report.
 - A command given an option it doesn't take (`--no-chache`), an extra word, or a flag without its value stops
   at once with the usage (exit 64), instead of running an hour without it; so does a bad `-U` / `--max-diffs`
   value, an option without the one it goes with (`-U` / `--literal` without `--patch`; `--out`, `--large`,
@@ -278,10 +282,14 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   corrupt result, never acted on.
 - `whitespace` means only whitespace: the same lines but for indentation, trailing spaces / tabs and the
   spacing round punctuation (`x=1` → `x = 1`). A space that joins or splits a word (`return x` → `returnx`) or
-  two operator characters (`- -x` → `--x`, `/ *` → `/*`, `> =` → `>=`), a line joined, split or added, and
-  NBSP / NEL (characters, not whitespace) are `content`. Whitespace is ASCII space, tab, VT and FF, whole or
-  streamed alike. Strings and comments aren't parsed: a run of spaces widened inside a string literal reads as
-  whitespace.
+  two operator characters (`- -x` → `--x`, `/ *` → `/*`, `> =` → `>=`), a word and a quote (`L "x"` → `L"x"`), a
+  digit and a dot (`1 .5` → `1.5`), a space taken out of a quoted string (`split(" ")` → `split("")`,
+  `"Total: "` → `"Total:"`), a line joined, split or added, and NBSP / NEL (characters, not whitespace) are
+  `content`. Whitespace is ASCII space, tab, VT and FF, whole or streamed alike. Strings and comments aren't
+  parsed: a quote not escaped by a backslash opens a string until the same quote or the line's end (so an
+  apostrophe in a comment only makes the rest of its line stricter), and a run of spaces widened inside a string
+  literal reads as whitespace. A whitespace-only change is diffed line for line (each changed line a replace of
+  itself), never a line paired with an identical one elsewhere.
 - A reason is the text's: line endings changed along with the encoding (UTF-8 CRLF → UTF-16 LF) are `eol`, and
   the patch note says the encoding changed too; a shown diff of a whitespace or content change says so as well.
   Line endings in a note are counted in the file's own encoding (UTF-16's CRLF is not "LF").
@@ -314,9 +322,12 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   too), and no replace wider than its change (its first and last lines differ on the two sides, and one that replaces
   lines line for line leaves none of them as it was). `whitespace`
   records are checked too (each hunk must change only whitespace), run-rule hunks are expanded and the files
-  streamed, and a renamed file's reason is compared with CodeDiffer's own verdict on the pair.
+  streamed, and a renamed file's reason is compared with CodeDiffer's own verdict on the pair. A `metadata`
+  record (content identical) expects the compare to report its file unchanged: CodeDiffer doesn't diff
+  metadata. A path twice in the delta (two `modified` records, or removed and renamed from) is refused (exit 2).
 - `get_file_diff` / `export_changeset` / `-U` context past the file's length is the whole file; a negative one is
-  refused (export) or none, never a corrupt hunk header.
+  refused (export) or none, never a corrupt hunk header. A patch written with no context (`-U 0`, `context=0`)
+  says in a `#` line at its top, and in its summary, that it needs `git apply --unidiff-zero`.
 - A whole patch (`--patch`, `export_changeset`) is for `git apply`: what it can't carry — binary and large
   files, text that isn't UTF-8, unreadable files, the eol/encoding-only notes — is described in `#` lines
   outside any `diff --git` section, which git skips, so the rest still applies; the summary counts them as

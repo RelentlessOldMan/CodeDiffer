@@ -240,7 +240,7 @@ public static class ResultStore
         Directory.Delete(dir);
     }
 
-    private static void DeleteContents(DirectoryInfo d, string? keep)
+    internal static void DeleteContents(DirectoryInfo d, string? keep)
     {
         foreach (var e in d.EnumerateFileSystemInfos())
         {

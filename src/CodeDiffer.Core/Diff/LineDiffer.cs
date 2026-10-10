@@ -41,6 +41,31 @@ public static class LineDiffer
         => Diff(a, b, DefaultMaxEditDistance, out _);
 
     /// <summary>
+    /// The hunks of a whitespace-only change, or null: when both sides have as many lines and each line is the other's
+    /// but for whitespace (<see cref="Compare.TextInspector.WhitespaceKey"/>, a line ending's CR aside), line i is line i
+    /// and each run of lines that differ is one replace. Myers, among repeated lines, may pair a line with an identical
+    /// one elsewhere instead (<c>x / ␠␠x</c> → <c>␠␠x / x</c>: a delete and an insert), hunks that change more than
+    /// whitespace in a file whose only change is whitespace.
+    /// </summary>
+    public static List<Hunk>? WhitespaceAligned(IReadOnlyList<string> a, IReadOnlyList<string> b)
+    {
+        if (a.Count != b.Count) return null;
+        static string Key(string line) => Compare.TextInspector.WhitespaceKey(line.EndsWith('\r') ? line[..^1] : line);
+        for (int i = 0; i < a.Count; i++)
+            if (!string.Equals(a[i], b[i], StringComparison.Ordinal) && !string.Equals(Key(a[i]), Key(b[i]), StringComparison.Ordinal))
+                return null;
+        var hunks = new List<Hunk>();
+        for (int i = 0; i < a.Count;)
+        {
+            if (string.Equals(a[i], b[i], StringComparison.Ordinal)) { i++; continue; }
+            int start = i;
+            while (i < a.Count && !string.Equals(a[i], b[i], StringComparison.Ordinal)) i++;
+            hunks.Add(new Hunk(HunkOp.Replace, start + 1, i - start, start + 1, i - start));
+        }
+        return hunks;
+    }
+
+    /// <summary>
     /// Diff with an explicit exact-trace budget: within it, classic Myers; past it, linear-space Myers; past
     /// <paramref name="maxWork"/> too, one coarse replace (<paramref name="coarse"/> = true).
     /// </summary>

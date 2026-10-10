@@ -85,9 +85,10 @@ public static class LedgerFormat
             }
             return null;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or EndOfStreamException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or EndOfStreamException
+                                       or ArgumentException or OverflowException or FormatException or OutOfMemoryException)
         {
-            return null; // unreadable ledger ⇒ no cache, never a wrong answer
+            return null; // unreadable or corrupt ledger (an offset out of range, a length too big to allocate) ⇒ no cache, never a wrong answer or a failed compare
         }
     }
 
@@ -206,7 +207,7 @@ public static class LedgerFormat
         for (int i = 0; i < count; i++)
         {
             long o0 = I64(s, off[0] + (long)i * 8), o1 = I64(s, off[0] + (long)(i + 1) * 8);
-            if (o0 < 0 || o1 < o0 || blobOff + o1 > blobEnd) return (null, 0);
+            if (o0 < 0 || o1 < o0 || o1 > blobEnd - blobOff) return (null, 0); // never blobOff + o1: it can overflow
             var p = Encoding.UTF8.GetString(s.Slice((int)(blobOff + o0), (int)(o1 - o0)));
             var xx = HashOrAbsent(Convert.ToHexString(s.Slice((int)(off[4] + (long)i * XxBytes), XxBytes)));
             map[p] = version == 1

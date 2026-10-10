@@ -484,6 +484,8 @@ static int Verify(string[] args)
         var fo = DeltaFileOpsCheck.Run(report, manifest, baseDir: baseDir, variantDir: variantDir);
         Console.WriteLine($"  file-ops cross-check (CodeDiffer's own compare): {fo.Matched:N0}/{fo.Expected:N0} match · " +
                           $"{fo.MissingCount:N0} missing · {fo.ExtraCount:N0} extra · {fo.WrongReasonCount:N0} wrong reason · {fo.WrongSimilarityCount:N0} wrong rename similarity or reason");
+        if (fo.MetadataCount > 0)
+            Console.WriteLine($"    ({fo.MetadataCount:N0} metadata record(s): content identical, so expected unchanged — CodeDiffer doesn't diff metadata)");
         foreach (var m in fo.Missing) Console.WriteLine($"    MISSING  {m}");
         foreach (var x in fo.Extra) Console.WriteLine($"    EXTRA    {x}");
         foreach (var w in fo.WrongReason.Concat(fo.WrongSimilarity)) Console.WriteLine($"    WRONG    {w}");

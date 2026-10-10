@@ -92,7 +92,7 @@ public static class DeltaTreeCrossCheck
                 continue;
             }
 
-            var mine = LineDiffer.Diff(baseLines, variantLines);
+            var mine = (ws ? LineDiffer.WhitespaceAligned(baseLines, variantLines) : null) ?? LineDiffer.Diff(baseLines, variantLines);
 
             var problem = HunkApplier.Problem(baseLines, variantLines, f.Hunks, ws);
             bool mineRebuilds = Reconstructs(baseLines, variantLines, mine);

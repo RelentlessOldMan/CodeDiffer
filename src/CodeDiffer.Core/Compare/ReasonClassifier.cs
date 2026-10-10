@@ -71,21 +71,27 @@ public sealed class ReasonClassifier
     {
         if (Wide(leftHead) || Wide(rightHead)) return ChangeReason.Content;
         int l = Utf8Bom(leftHead) ? 3 : 0, r = Utf8Bom(rightHead) ? 3 : 0;
-        var reason = Verdict(leftPath, l, Encoding.Latin1, rightPath, r, Encoding.Latin1, l != r, ct);
-        if (reason != ChangeReason.Content) return reason;
+        var reason = Verdict(leftPath, l, Encoding.Latin1, rightPath, r, Encoding.Latin1, l != r, ct, out bool decodingMatters);
+        // ASCII up to the first difference, and an ASCII character on one side of it: any decoding of either side reads
+        // the same there, so content it is — without reading both files whole to learn whether each is UTF-8.
+        if (reason != ChangeReason.Content || !decodingMatters) return reason;
         bool lu = IsUtf8(leftPath, l, ct), ru = IsUtf8(rightPath, r, ct);
         if (lu == ru) return reason;
-        return Verdict(leftPath, l, lu ? Utf8Strict : Encoding.Latin1, rightPath, r, ru ? Utf8Strict : Encoding.Latin1, true, ct);
+        return Verdict(leftPath, l, lu ? Utf8Strict : Encoding.Latin1, rightPath, r, ru ? Utf8Strict : Encoding.Latin1, true, ct, out _);
     }
 
     private static readonly Encoding Utf8Strict = new UTF8Encoding(false, true);
 
-    private static ChangeReason Verdict(string a, int skipA, Encoding encA, string b, int skipB, Encoding encB, bool encodingMayDiffer, CancellationToken ct)
+    /// <param name="decodingMatters">On <c>content</c>: whether another decoding of either side could read differently
+    /// up to the first difference (a non-ASCII byte before it, or on both sides of it).</param>
+    private static ChangeReason Verdict(string a, int skipA, Encoding encA, string b, int skipB, Encoding encB, bool encodingMayDiffer, CancellationToken ct,
+        out bool decodingMatters)
     {
-        if (encodingMayDiffer && Same(a, skipA, encA, b, skipB, encB, Norm.None, ct)) return ChangeReason.Encoding;
+        decodingMatters = true;
+        if (encodingMayDiffer && Same(a, skipA, encA, b, skipB, encB, Norm.None, ct, out _)) return ChangeReason.Encoding;
         // Whitespace-normalized first: it is implied by eol-equality, and a content change ends it at the first difference.
-        if (!Same(a, skipA, encA, b, skipB, encB, Norm.Whitespace, ct)) return ChangeReason.Content;
-        return Same(a, skipA, encA, b, skipB, encB, Norm.Eol, ct) ? ChangeReason.Eol : ChangeReason.Whitespace;
+        if (!Same(a, skipA, encA, b, skipB, encB, Norm.Whitespace, ct, out decodingMatters)) return ChangeReason.Content;
+        return Same(a, skipA, encA, b, skipB, encB, Norm.Eol, ct, out _) ? ChangeReason.Eol : ChangeReason.Whitespace;
     }
 
     /// <summary>Whether a file past <paramref name="skip"/> bytes is valid UTF-8, streamed.</summary>
@@ -113,15 +119,20 @@ public sealed class ReasonClassifier
     private static bool Utf8Bom(byte[] h) => h is [0xEF, 0xBB, 0xBF, ..];
     private static bool Wide(byte[] h) => h is [0xFF, 0xFE, ..] or [0xFE, 0xFF, ..] or [0x00, 0x00, 0xFE, 0xFF, ..];
 
-    private static bool Same(string a, int skipA, Encoding encA, string b, int skipB, Encoding encB, Norm norm, CancellationToken ct)
+    private static bool Same(string a, int skipA, Encoding encA, string b, int skipB, Encoding encB, Norm norm, CancellationToken ct,
+        out bool decodingMatters)
     {
         using var fa = new Feed(a, skipA, encA, ct);
         using var fb = new Feed(b, skipB, encB, ct);
         while (true)
         {
             int x = Next(fa, norm), y = Next(fb, norm);
-            if (x != y) return false;
-            if (x < 0) return true;
+            if (x != y)
+            {
+                decodingMatters = fa.HighBefore || fb.HighBefore || (x >= 0x80 && y >= 0x80);
+                return false;
+            }
+            if (x < 0) { decodingMatters = false; return true; }
         }
     }
 
@@ -135,14 +146,18 @@ public sealed class ReasonClassifier
                 // TextInspector.WhitespaceKey, byte by byte (line endings normalized too).
                 case Norm.Whitespace when TextInspector.IsHorizontalSpace(c):
                     while (TextInspector.IsHorizontalSpace(f.Peek())) f.Next();
-                    if (f.LineStart || !TextInspector.Separates(f.Last, f.Peek())) continue;
+                    int after = f.Peek();
+                    if (f.LineStart || after is '\n' or '\r' or -1 || (f.Quote == '\0' && !TextInspector.Separates(f.Last, after))) continue;
                     return ' ';
                 case Norm.Whitespace or Norm.Eol when c == '\r':
                     if (f.Peek() == '\n') f.Next();
                     f.LineStart = true;
+                    f.Quote = '\0';
                     return '\n';
                 default:
                     f.LineStart = c == '\n';
+                    if (f.LineStart) f.Quote = '\0';
+                    else if (TextInspector.IsQuote(c) && f.PrevRaw != '\\') f.Quote = TextInspector.Quote(f.Quote, c);
                     f.Last = c;
                     return c;
             }
@@ -163,6 +178,13 @@ public sealed class ReasonClassifier
         /// <summary>The last byte returned that wasn't whitespace (whitespace normalization).</summary>
         public int Last = -1;
 
+        /// <summary>The quote of the string on this line the comparison is in, or '\0' (whitespace normalization).</summary>
+        public char Quote;
+
+        /// <summary>The character before the last one <see cref="Next()"/> returned (-1 at the start).</summary>
+        public int PrevRaw { get; private set; } = -1;
+        private int _lastRaw = -1;
+
         public Feed(string path, int skip, Encoding encoding, CancellationToken ct)
         {
             _ct = ct;
@@ -173,7 +195,19 @@ public sealed class ReasonClassifier
 
         public int Peek() => _i < _n || Fill() ? _buf[_i] : -1;
 
-        public int Next() => _i < _n || Fill() ? _buf[_i++] : -1;
+        /// <summary>A non-ASCII character was read before the last one <see cref="Next()"/> returned.</summary>
+        public bool HighBefore { get; private set; }
+        private bool _high;
+
+        public int Next()
+        {
+            int c = _i < _n || Fill() ? _buf[_i++] : -1;
+            HighBefore = _high;
+            _high |= c >= 0x80;
+            PrevRaw = _lastRaw;
+            _lastRaw = c;
+            return c;
+        }
 
         private bool Fill()
         {

@@ -414,17 +414,31 @@ public static class HtmlReport
         if (Directory.Exists(outDir))
         {
             if (!IsOurs(outDir)) throw new IOException($"{outDir} exists and is not a CodeDiffer report — refusing to overwrite it");
-            Directory.Delete(outDir, recursive: true);
+            // Marked first (a report from before the marker too), then everything but the marker deleted (read-only files
+            // too, a link removed, never followed): a delete that fails part way leaves a directory still marked ours,
+            // replaced next time, never one refused forever.
+            if (new DirectoryInfo(outDir).Attributes.HasFlag(FileAttributes.ReparsePoint))
+                Directory.Delete(outDir); // the link itself, never what it points at
+            else
+            {
+                WriteMarker(outDir);
+                ResultStore.DeleteContents(new DirectoryInfo(outDir), keep: Marker);
+            }
         }
         Directory.CreateDirectory(outDir);
-        File.WriteAllText(Path.Combine(outDir, Marker), "A CodeDiffer HTML report (open index.html). Writing a new report here replaces this directory.\n",
-            new UTF8Encoding(false));
+        WriteMarker(outDir);
         Directory.CreateDirectory(Path.Combine(outDir, "data", "d"));
         Directory.CreateDirectory(Path.Combine(outDir, "full"));
     }
 
-    /// <summary>Empty, marked as ours, or a report from before the marker: nothing but index.html, data\ and full\,
-    /// with data\index.js as this writes it.</summary>
+    private static void WriteMarker(string outDir)
+    {
+        var marker = new FileInfo(Path.Combine(outDir, Marker));
+        if (marker.Exists && marker.Attributes.HasFlag(FileAttributes.ReadOnly)) marker.Attributes &= ~FileAttributes.ReadOnly;
+        File.WriteAllText(marker.FullName, "A CodeDiffer HTML report (open index.html). Writing a new report here replaces this directory.\n",
+            new UTF8Encoding(false));
+    }
+
     /// <summary>Why a report can't be written to <paramref name="outDir"/> (it overlaps a compared tree), or null —
     /// checked before a compare that may take an hour as well as when the report is written.</summary>
     public static string? OutDirProblem(string outDir, IEnumerable<string> trees)
@@ -432,6 +446,8 @@ public static class HtmlReport
             ? $"the report directory {outDir} and the compared tree {tree} overlap; write the report somewhere else"
             : null;
 
+    /// <summary>Empty, marked as ours, or a report from before the marker: nothing but index.html, data\ and full\,
+    /// with data\index.js as this writes it.</summary>
     private static bool IsOurs(string dir)
     {
         var entries = Directory.EnumerateFileSystemEntries(dir).Select(Path.GetFileName).ToList();

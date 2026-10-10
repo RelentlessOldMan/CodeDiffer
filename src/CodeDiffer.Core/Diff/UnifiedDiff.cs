@@ -35,7 +35,10 @@ public static class UnifiedDiff
     {
         var a = oldText is null ? [] : DiffLines(oldText);
         var b = newText is null ? [] : DiffLines(newText);
-        var hunks = LineDiffer.Diff(a, b, LineDiffer.DefaultMaxEditDistance, out bool coarse);
+        // A whitespace-only change line for line is shown line for line (never a line paired with an identical one elsewhere).
+        bool coarse = false;
+        var hunks = (oldText is null || newText is null ? null : LineDiffer.WhitespaceAligned(a, b))
+                    ?? LineDiffer.Diff(a, b, LineDiffer.DefaultMaxEditDistance, out coarse);
         if (hunks.Count == 0 && oldText is not null && newText is not null && extraHeader is null) return false;
 
         w.Write($"diff --git a/{oldPath} b/{newPath}\n");

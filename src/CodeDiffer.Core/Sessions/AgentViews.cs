@@ -282,8 +282,9 @@ public static class AgentViews
         if (startLine == 1 && Fits(all, total, maxLines))
             return o.Append(section).ToString();
 
-        // Capped: write the whole section once, then show the requested window plus the hunk map.
-        var file = OutFile(s, "diffs", c.RelativePath, (context == PatchOptions.DefaultContextLines ? "" : $".U{context}") + ".patch");
+        // Capped: write the whole section once, then show the requested window plus the hunk map. Another context is a
+        // sibling directory, never a suffix: x at context 5 and a file named x.U5 would share one name.
+        var file = OutFile(s, context == PatchOptions.DefaultContextLines ? "diffs" : $"diffs-U{context}", c.RelativePath, ".patch");
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         File.WriteAllText(file, section, new UTF8Encoding(false));
         int end = WindowEnd(all, total, startLine, maxLines);

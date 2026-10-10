@@ -40,6 +40,10 @@ public sealed class PatchStats
     /// path with an unpaired UTF-16 surrogate, which UTF-8 can't spell (git would look for another name).</summary>
     public int TextFiles, BinaryFiles, GiantFiles, NoteFiles, CoarseFiles, OtherFiles, UnreadableFiles, CaseFiles, NameFiles;
 
+    /// <summary>Written with no context lines: plain <c>git apply</c> refuses such hunks (it wants
+    /// <c>--unidiff-zero</c>).</summary>
+    public bool ZeroContext;
+
     /// <summary>Files the patch describes in '#' comments but does not carry: copy them by hand.</summary>
     public int NotCarried => BinaryFiles + GiantFiles + OtherFiles + UnreadableFiles + CaseFiles + NameFiles;
 
@@ -63,7 +67,8 @@ public sealed class PatchStats
                           $"{OtherFiles:N0} non-UTF-8 text · {UnreadableFiles:N0} unreadable" +
                           (CaseFiles > 0 ? $" · {CaseFiles:N0} case-only path change(s)" : "") +
                           (NameFiles > 0 ? $" · {NameFiles:N0} path(s) UTF-8 can't spell" : "") : "") +
-        (NoteFiles > 0 && !literal ? " · eol/encoding-only files are notes, not hunks (--literal / literal=true carries them)" : "");
+        (NoteFiles > 0 && !literal ? " · eol/encoding-only files are notes, not hunks (--literal / literal=true carries them)" : "") +
+        (ZeroContext ? " · no context lines: apply with `git apply --unidiff-zero`" : "");
 }
 
 /// <summary>
@@ -91,6 +96,7 @@ public static class PatchWriter
                                         "refusing to write it as a patch; compare again");
         var opt = options ?? new PatchOptions();
         var stats = new PatchStats();
+        ZeroContextNote(w, opt, stats);
         var changed = report.Changes.Where(c => c.Status != ChangeStatus.Identical).ToList();
         var caseOnly = CaseOnly(changed);
 
@@ -230,9 +236,20 @@ public static class PatchWriter
     /// <summary>Diff two individual files (either may be null = absent), as a patch for <c>git apply</c>.</summary>
     public static PatchStats WriteFiles(TextWriter w, string? left, string? right, string displayLeft, string displayRight, PatchOptions? options = null)
     {
+        var opt = options ?? new PatchOptions();
         var stats = new PatchStats();
-        WriteFile(w, displayLeft, displayRight, left, right, null, options ?? new PatchOptions(), stats, forGit: true);
+        ZeroContextNote(w, opt, stats);
+        WriteFile(w, displayLeft, displayRight, left, right, null, opt, stats, forGit: true);
         return stats;
+    }
+
+    /// <summary>A patch with no context says so in a '#' line before its first section (git skips it): plain
+    /// <c>git apply</c> rejects a hunk without context, and nothing else in the file tells why.</summary>
+    private static void ZeroContextNote(TextWriter w, PatchOptions opt, PatchStats stats)
+    {
+        if (opt.Context != 0) return;
+        stats.ZeroContext = true;
+        w.Write("# written with no context lines (-U 0): apply with `git apply --unidiff-zero`\n");
     }
 
     private static void WriteFile(TextWriter w, string oldRel, string newRel, string? oldFull, string? newFull,

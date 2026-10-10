@@ -6,7 +6,7 @@ namespace CodeDiffer.Core.Verify;
 public sealed record FileOpsCheckResult(
     int Expected, int Matched,
     IReadOnlyList<string> Missing, IReadOnlyList<string> Extra, IReadOnlyList<string> WrongReason, IReadOnlyList<string> WrongSimilarity,
-    int MissingCount, int ExtraCount, int WrongReasonCount, int WrongSimilarityCount)
+    int MissingCount, int ExtraCount, int WrongReasonCount, int WrongSimilarityCount, int MetadataCount = 0)
 {
     /// <summary>Pass iff CodeDiffer reports exactly the manifest's file operations, with the same reasons and rename similarities.</summary>
     public bool Ok => MissingCount + ExtraCount + WrongReasonCount + WrongSimilarityCount == 0;
@@ -19,7 +19,9 @@ public sealed record FileOpsCheckResult(
 /// the contract lists its hunks as a <c>modified</c> record under the new path, which CodeDiffer reports as the rename
 /// (its similarity says it was edited), so that record is not a separate expected "modified". Given the trees, a rename's
 /// reason is compared too: its modified record's reason, or "identical" without one, against CodeDiffer's classifier on
-/// the pair (a compare gives a rename no reason of its own).
+/// the pair (a compare gives a rename no reason of its own). A <c>metadata</c> record is content identical
+/// (<c>oldSha==newSha</c>) and CodeDiffer doesn't diff metadata, so the compare must report that file unchanged (a rename
+/// with one, identical).
 /// </summary>
 public static class DeltaFileOpsCheck
 {
@@ -34,10 +36,13 @@ public static class DeltaFileOpsCheck
         foreach (var m in manifest.Modified) modifiedAt.TryAdd(m.Path, m);
         foreach (var r in manifest.Renamed)
             expected[$"renamed {r.From} -> {r.To}"] = $"similarity {r.SimilarityMilli}" +
-                (!reasons ? "" : modifiedAt.TryGetValue(r.To, out var m) ? $", {CanonicalTokens.Token(m.Reason)}" : ", identical");
+                (!reasons ? "" : modifiedAt.TryGetValue(r.To, out var m) && m.Reason != ChangeReason.Metadata ? $", {CanonicalTokens.Token(m.Reason)}" : ", identical");
         var renameTo = manifest.Renamed.Select(r => r.To).ToHashSet(StringComparer.Ordinal);
+        var metadata = new List<string>();
         foreach (var m in manifest.Modified)
-            if (!renameTo.Contains(m.Path)) expected[$"modified {m.Path}"] = CanonicalTokens.Token(m.Reason);
+            if (renameTo.Contains(m.Path)) continue;
+            else if (m.Reason == ChangeReason.Metadata) { expected[$"unchanged {m.Path} (metadata)"] = ""; metadata.Add(m.Path); }
+            else expected[$"modified {m.Path}"] = CanonicalTokens.Token(m.Reason);
         var classifier = new Compare.ReasonClassifier();
 
         var actual = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -52,6 +57,13 @@ public static class DeltaFileOpsCheck
                     break;
                 case ChangeStatus.Modified: actual[$"modified {c.RelativePath}"] = c.ReasonLabel ?? "?"; break;
             }
+        if (metadata.Count > 0)
+        {
+            var changed = report.Changes.Where(c => c.Status != ChangeStatus.Identical).SelectMany(c => c.RenamedFrom is { } from ? [c.RelativePath, from] : new[] { c.RelativePath })
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var p in metadata)
+                if (!changed.Contains(p)) actual[$"unchanged {p} (metadata)"] = "";
+        }
 
         var missing = expected.Keys.Where(k => !actual.ContainsKey(k)).Order(StringComparer.Ordinal).ToList();
         var extra = actual.Keys.Where(k => !expected.ContainsKey(k)).Order(StringComparer.Ordinal).ToList();
@@ -62,7 +74,7 @@ public static class DeltaFileOpsCheck
 
         return new FileOpsCheckResult(expected.Count, expected.Count - missing.Count - wrong.Count,
             missing.Take(maxListed).ToList(), extra.Take(maxListed).ToList(), reason.Take(maxListed).ToList(), sim.Take(maxListed).ToList(),
-            missing.Count, extra.Count, reason.Count, sim.Count);
+            missing.Count, extra.Count, reason.Count, sim.Count, metadata.Count);
     }
 
     private static string RenameReason(Compare.ReasonClassifier classifier, string baseDir, string variantDir, FileChange c)

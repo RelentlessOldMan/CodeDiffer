@@ -76,6 +76,7 @@ public static class DeltaManifestParser
             // Pages without the marker would verify as a delta with nothing modified.
             if (root.TryGetProperty("shards", out _))
                 throw new FormatException("a shards[] catalog without _meta.shardSize: a sharded delta's index carries both");
+            NoPathTwice(added, removed, renamed, modified);
             return new DeltaManifest(version, added, removed, renamed, modified, diffSha);
         }
 
@@ -89,6 +90,7 @@ public static class DeltaManifestParser
             throw new FormatException("a sharded delta's index carries fileOps.modified: only its pages may");
 
         var pages = ReadPages(root, indexPath, shardSize);
+        NoPathTwice(added, removed, renamed, pages.Modified);
         return new DeltaManifest(version, added, removed, renamed, pages.Modified, diffSha, new DeltaPaging(shardSize, pages.Count));
     }
 
@@ -178,6 +180,28 @@ public static class DeltaManifestParser
         if (own != count || records.Count != count)
             throw new FormatException($"{where}: the catalog says {count} record(s), the page says {own} and holds {records.Count}");
         return records;
+    }
+
+    /// <summary>
+    /// One operation per path: a path twice in a list (two <c>modified</c> records with different reasons — the check
+    /// would take one and never see the other), or claimed by two operations on one side (removed and renamed from,
+    /// added and renamed to), is a contradiction, refused rather than verified by whichever record is read first.
+    /// </summary>
+    private static void NoPathTwice(List<string> added, List<string> removed, List<RenameOp> renamed, List<FileDelta> modified)
+    {
+        static void Once(IEnumerable<string> paths, string what)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var p in paths)
+                if (!seen.Add(p)) throw new FormatException($"'{p}' is {what} more than once");
+        }
+        Once(added, "in fileOps.added");
+        Once(removed, "in fileOps.removed");
+        Once(modified.Select(m => m.Path), "a fileOps.modified record");
+        Once(renamed.Select(r => r.From), "renamed from");
+        Once(renamed.Select(r => r.To), "renamed to");
+        Once(removed.Concat(renamed.Select(r => r.From)), "removed or renamed from");
+        Once(added.Concat(renamed.Select(r => r.To)), "added or renamed to");
     }
 
     private static FileDelta ReadFileDelta(JsonElement f)

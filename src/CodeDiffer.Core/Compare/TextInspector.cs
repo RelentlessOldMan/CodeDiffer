@@ -124,37 +124,55 @@ internal static class TextInspector
     public static bool IsWordChar(int c) => c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '_' or >= 0x80;
 
     /// <summary>An ASCII operator character: two of them side by side can read as another token (<c>- -x</c> → <c>--x</c>,
-    /// <c>/ *</c> → <c>/*</c>, <c>&gt; =</c> → <c>&gt;=</c>). Brackets, commas, semicolons and quotes never fuse.</summary>
+    /// <c>/ *</c> → <c>/*</c>, <c>&gt; =</c> → <c>&gt;=</c>). Brackets, commas and semicolons never fuse.</summary>
     public static bool IsOperatorChar(int c) => c is '!' or '#' or '$' or '%' or '&' or '*' or '+' or '-' or '.' or '/'
         or ':' or '<' or '=' or '>' or '?' or '@' or '\\' or '^' or '|' or '~';
 
-    /// <summary>Whether a run of whitespace between these two characters keeps them apart: two word characters, or two
-    /// operator characters. Between anything else it can vanish without changing a token.</summary>
+    /// <summary>A quote character: it opens or closes a string literal (a char, a template), and a word character before it
+    /// can be the literal's prefix (<c>L"x"</c>, <c>u8"x"</c>, <c>f"x"</c>).</summary>
+    public static bool IsQuote(int c) => c is '"' or '\'' or '`';
+
+    /// <summary>The string a scan is in after an unescaped quote <paramref name="c"/>: none opens one, its own quote closes
+    /// it, another quote inside it is text ('\0' = none).</summary>
+    public static char Quote(char open, int c) => open == '\0' ? (char)c : open == c ? '\0' : open;
+
+    /// <summary>Whether a run of whitespace between these two characters keeps them apart: two word characters or quotes
+    /// (<c>L "x"</c> is not <c>L"x"</c>), two operator characters, or a digit and a '.' (<c>1 .5</c> is not <c>1.5</c>).
+    /// Between anything else it can vanish without changing a token.</summary>
     public static bool Separates(int before, int after)
-        => (IsWordChar(before) && IsWordChar(after)) || (IsOperatorChar(before) && IsOperatorChar(after));
+        => ((IsWordChar(before) || IsQuote(before)) && (IsWordChar(after) || IsQuote(after)))
+           || (IsOperatorChar(before) && IsOperatorChar(after))
+           || (before is >= '0' and <= '9' && after == '.') || (before == '.' && after is >= '0' and <= '9');
 
     /// <summary>
     /// What a whitespace-only change leaves alone, of EOL-normalized text: the same lines, each with its leading and
     /// trailing whitespace dropped, and an inner run of it read as one space where it <see cref="Separates"/> two
-    /// tokens (two word characters, or two operator characters) and as nothing elsewhere. So reindenting, trailing
-    /// spaces and spacing round punctuation ("x=1" → "x = 1") are whitespace; a space that joins or splits a token
-    /// ("return x" → "returnx", "- -x" → "--x", "/ *" → "/*") and a line joined, split or added are content. The
-    /// width of a run is never kept, so a run widened or narrowed inside a string literal reads as whitespace too.
+    /// tokens (two word characters, or two operator characters) or is inside a quoted string on its line, and as nothing
+    /// elsewhere. So reindenting, trailing spaces and spacing round punctuation ("x=1" → "x = 1") are whitespace; a
+    /// space that joins or splits a token ("return x" → "returnx", "- -x" → "--x", "/ *" → "/*", "1 .5" → "1.5") or is
+    /// taken out of a string (<c>split(" ")</c> → <c>split("")</c>, <c>"Total: "</c> → <c>"Total:"</c>) and a line
+    /// joined, split or added are content. A quote not escaped by a backslash opens a string, the same quote closes it,
+    /// and so does a line ending (an apostrophe in prose only makes the rest of its line stricter). The width of a run is never kept,
+    /// so a run widened or narrowed inside a string literal reads as whitespace too.
     /// </summary>
     public static string WhitespaceKey(string s)
     {
         var sb = new StringBuilder(s.Length);
         bool lineStart = true;
+        char quote = '\0'; // the quote of the string the scan is in, or none
         for (int i = 0; i < s.Length; i++)
         {
             char c = s[i];
             if (IsHorizontalSpace(c))
             {
                 while (i + 1 < s.Length && IsHorizontalSpace(s[i + 1])) i++;
-                if (!lineStart && i + 1 < s.Length && Separates(sb[^1], s[i + 1])) sb.Append(' ');
+                bool lineEnd = i + 1 >= s.Length || s[i + 1] is '\n' or '\r';
+                if (!lineStart && !lineEnd && (quote != '\0' || Separates(sb[^1], s[i + 1]))) sb.Append(' ');
                 continue;
             }
             lineStart = c == '\n';
+            if (lineStart) quote = '\0';
+            else if (IsQuote(c) && (i == 0 || s[i - 1] != '\\')) quote = Quote(quote, c);
             sb.Append(c);
         }
         return sb.ToString();
