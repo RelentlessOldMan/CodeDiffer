@@ -336,6 +336,12 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   — over the whole trees, lines with their endings — conflicting in exactly the manifest's files and merging
   none it leaves out (death 1.0.9: 941 of 941). Every modified record's `oldSha`/`newSha`/`oldSize`/`newSize`
   is checked against the trees' files, whatever its reason: the digest only proves the manifest agrees with itself.
+- `verify` reads a sharded delta (CodeSpawner 1.1.x `--shard-size`) from its index, `<corpus>-delta.index.json`;
+  a page alone is refused. Each page in the index's catalog must be beside it with the catalog's sha256, index,
+  count and first/last path, every page but the last full, the records in ascending path order across the pages,
+  and no `<corpus>-delta.shard-*.json` the catalog leaves out: a missing, extra, altered or misplaced page is an
+  error (exit 2), never a partial verify. The pages in order are the delta's `modified`, so the digest and the
+  tree checks run exactly as on the monolithic delta.
 - Deterministic output: two runs over the same inputs are byte-identical, so a diff of results is real.
 
 ## 7. Defaults (tunable)

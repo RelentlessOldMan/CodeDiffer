@@ -91,6 +91,25 @@ at build step 4), kept off `diffTruthSha` exactly as `indirectTruthSha` is kept 
 CodeDiffer reproduces it independently before we call a build step locked (the bar CodeCarver held
 CodeSpawner to for the first digest).
 
+## Sharded transport (additive, CodeSpawner 1.1.x)
+
+`mutate --shard-size N` pages a 2-way diff delta's `modified` out of the manifest; 3-way artifacts are never
+sharded. `manifestVersion` stays `1`, `deltaKind` stays `"diff"`, and `diffTruthSha` is sharding-invariant
+(computed over the whole record set exactly as for the monolithic delta).
+
+- **Index** `<corpus>-delta.index.json`: `_meta` (as today plus `shardSize`, present only here), `fileOps` with
+  `added`/`removed`/`renamed` inline and no `modified`, and `shards[]` = `{ file, firstPath, lastPath, count,
+  shardSha }` in page order. `shardSha` = sha256 of the page file's bytes.
+- **Page** `<corpus>-delta.shard-NNN.json`: `{ shardIndex, count, modified[] }`, no `_meta`. The records are
+  path-ordinal sorted and sliced in order: every page but the last holds exactly `shardSize`.
+
+CodeDiffer routes on `deltaKind == "diff"` **and** `_meta.shardSize`, refuses a page passed alone, and checks
+each page against the catalog (beside the index, by file name only; sha256, `shardIndex`, `count`, first and last
+path), the records ascending across pages with no path twice, and no `<corpus>-delta.shard-*.json` beside the
+index that the catalog leaves out. The pages in order are `modified`, and the digest must reproduce. A missing,
+extra, altered or misplaced page is a hard error, never a partial verify. Fixture: `\\IRISH\TestHole\codediffer-fixtures\sharded-delta`
+(250 modified in 3 pages of 100; the monolithic delta beside it carries the same `diffTruthSha`).
+
 ## Build sequence
 
 CodeSpawner ships each with a labeled fixture + golden vector before the next:

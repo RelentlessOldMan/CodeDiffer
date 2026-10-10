@@ -136,4 +136,8 @@ public sealed record DeltaManifest(
     IReadOnlyList<string> Removed,
     IReadOnlyList<RenameOp> Renamed,
     IReadOnlyList<FileDelta> Modified,
-    string? DiffTruthSha);
+    string? DiffTruthSha,
+    DeltaPaging? Paging = null);
+
+/// <summary>How a sharded delta was read: its index's <c>shardSize</c> and the pages its <c>modified</c> came from.</summary>
+public sealed record DeltaPaging(int ShardSize, int Pages);

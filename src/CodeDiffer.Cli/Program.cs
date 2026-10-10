@@ -443,6 +443,9 @@ static int Verify(string[] args)
     Console.WriteLine($"verify: {args[1]}");
     Console.WriteLine($"  manifestVersion {manifest.ManifestVersion}");
     Console.WriteLine($"  modified {manifest.Modified.Count} · added {manifest.Added.Count} · removed {manifest.Removed.Count} · renamed {manifest.Renamed.Count}");
+    if (manifest.Paging is { } paging)
+        Console.WriteLine($"  sharded: modified read from {paging.Pages} page(s) of up to {paging.ShardSize:N0} · each page's sha, " +
+                          "index, count and path range match the index's catalog, no page missing or extra");
     Console.WriteLine($"  diffTruthSha stated     {v.Stated ?? "(none)"}");
     Console.WriteLine($"  diffTruthSha recomputed {v.Recomputed}");
     Console.WriteLine(v.Ok ? "  OK — digest reproduced" : "  FAIL — digest mismatch");
@@ -1003,7 +1006,8 @@ static void PrintUsage()
           codediffer blockdiff <a> <b>         content-defined block diff of two large files
                                                (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]
-                                               reproduce a delta's diffTruthSha; with trees,
+                                               reproduce a delta's diffTruthSha (a sharded
+                                               delta: pass its index.json); with trees,
                                                also assert CodeDiffer's hunks match the manifest
                                                and that its own compare reports exactly the
                                                manifest's files, reasons and renames
