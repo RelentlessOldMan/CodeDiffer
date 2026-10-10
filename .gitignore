@@ -38,3 +38,7 @@ compare-*/
 .idea/
 Thumbs.db
 .DS_Store
+
+# Local MCP server config at the repo root (e.g. the Discordinator relay): machine-specific and may hold
+# tokens/channel ids; never commit it.
+/.mcp.json
