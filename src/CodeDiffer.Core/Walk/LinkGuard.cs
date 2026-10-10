@@ -14,25 +14,27 @@ internal sealed class LinkGuard(string root)
     private readonly ConcurrentDictionary<string, bool> _isLink = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The first link (as a full path) among <paramref name="fullPath"/>'s directories under the root — or the
-    /// path itself when it is a link to a directory — else null. Directories that don't exist yet are no links.</summary>
+    /// path itself when it is a link, to a file or a directory, even a dangling one — else null. What doesn't exist yet
+    /// is no link.</summary>
     public string? LinkOnTheWay(string fullPath)
     {
         var dirs = new List<string>();
         for (var d = Path.GetDirectoryName(fullPath); d is not null && d.Length > _root.Length; d = Path.GetDirectoryName(d))
             dirs.Add(d);
         dirs.Reverse(); // from the root down: report the outermost link
-        if (Directory.Exists(fullPath)) dirs.Add(fullPath);
+        dirs.Add(fullPath); // a file symlink at the path: reading or replacing it would act on its target
         foreach (var d in dirs)
             if (_isLink.GetOrAdd(d, IsLink)) return d;
         return null;
     }
 
-    private static bool IsLink(string dir)
+    private static bool IsLink(string path)
     {
         try
         {
-            var info = new DirectoryInfo(dir);
-            return info.Exists && (info.Attributes & FileAttributes.ReparsePoint) != 0 && info.LinkTarget is not null;
+            // The link's own attributes (not its target's), so a dangling link counts; a missing path has no LinkTarget.
+            FileSystemInfo info = Directory.Exists(path) ? new DirectoryInfo(path) : new FileInfo(path);
+            return (info.Attributes & FileAttributes.ReparsePoint) != 0 && info.LinkTarget is not null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }

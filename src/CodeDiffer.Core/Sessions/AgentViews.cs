@@ -245,11 +245,13 @@ public static class AgentViews
         var found = Partial(s)?.Found();
         if (found is null && Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
         IReadOnlyList<FileChange> changes = found is null ? s.Report!.Changes : [.. found.Select(f => f.Change)];
-        path = Normalize(path);
-        var c = changes.FirstOrDefault(c => c.RelativePath == path)
-             ?? changes.FirstOrDefault(c => c.RenamedFrom == path)
-             ?? changes.FirstOrDefault(c => string.Equals(c.RelativePath, path, StringComparison.OrdinalIgnoreCase))
-             ?? ByShownName(changes, path);
+        FileChange? Find(string p) => changes.FirstOrDefault(c => c.RelativePath == p)
+             ?? changes.FirstOrDefault(c => c.RenamedFrom == p)
+             ?? changes.FirstOrDefault(c => string.Equals(c.RelativePath, p, StringComparison.OrdinalIgnoreCase))
+             ?? ByShownName(changes, p);
+        // The path as given first: " a.txt" is a name of its own, not a.txt with a stray space.
+        var c = Find(path = Normalize(path, trim: false));
+        if (c is null && Normalize(path) is var trimmed && trimmed != path) c = Find(path = trimmed);
         if (c is null)
         {
             if (found is not null)
@@ -623,7 +625,7 @@ public static class AgentViews
     /// </summary>
     internal static Func<string, bool> Glob(string pattern)
     {
-        pattern = Normalize(pattern);
+        pattern = Normalize(pattern, trim: false); // a space in a glob is part of the name it matches
         bool nameOnly = !pattern.Contains('/');
         var rx = new StringBuilder("^");
         for (int i = 0; i < pattern.Length; i++)
@@ -643,7 +645,7 @@ public static class AgentViews
         return nameOnly ? p => re.IsMatch(p[(p.LastIndexOf('/') + 1)..]) : p => re.IsMatch(p);
     }
 
-    private static string Normalize(string path) => path.Trim().Replace('\\', '/').TrimStart('/');
+    internal static string Normalize(string path, bool trim = true) => (trim ? path.Trim() : path).Replace('\\', '/').TrimStart('/');
 
     private static string StatusToken(ChangeStatus st) => st.ToString().ToLowerInvariant();
 

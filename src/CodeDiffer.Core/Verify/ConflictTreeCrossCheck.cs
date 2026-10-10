@@ -57,7 +57,8 @@ public sealed record ConflictCrossCheckResult(
     /// unambiguous), OR — when a run of identical lines makes the minimal diff non-unique, so regions may
     /// legitimately sit elsewhere — the manifest's per-side coords rebuild both trees AND my merge conflicts in
     /// exactly the same files, AND every region is what it says against the trees (<see cref="UnsoundRegions"/>: a
-    /// conflict both sides changed, differently; a clean merge its side changed, clear of the other side's changes).
+    /// conflict both sides changed, differently, not splitting into clean parts; a clean merge its side changed, neither
+    /// overlapping nor abutting the other side's changes).
     /// Reconstruction alone tests only the manifest; the file agreement keeps CodeDiffer's own merge in the gate, and
     /// the region check keeps a clean edit from being passed off as a conflict (or the reverse).
     /// </summary>
@@ -174,7 +175,7 @@ public static class ConflictTreeCrossCheck
         {
             if (!trees.TryGetValue(path, out var t)) { files.Add(new FileMergeCheck(path, false, false)); continue; }
             bool v1Ok = ReconstructsSide(t.b, t.v1, v1ByPath.GetValueOrDefault(path));
-            bool v2Ok = ReconstructsV2(t.b, t.v2, v2DefByPath.GetValueOrDefault(path), cleanV1ByPath.GetValueOrDefault(path));
+            bool v2Ok = ReconstructsV2(t.b, t.v1, t.v2, v2DefByPath.GetValueOrDefault(path), cleanV1ByPath.GetValueOrDefault(path));
             files.Add(new FileMergeCheck(path, v1Ok, v2Ok));
         }
 
@@ -200,8 +201,9 @@ public static class ConflictTreeCrossCheck
 
     /// <summary>
     /// The manifest's regions in one file that are not what they say, read against the trees: a conflict where a side
-    /// left the base as it was, or both sides made the same change; a clean merge whose side changed nothing there, or
-    /// that overlaps a change of the other side (a conflict, or the other side's own clean merge).
+    /// left the base as it was, or both sides made the same change, or that splits at lines both sides keep into
+    /// changes diff3 merges cleanly; a clean merge whose side changed nothing there, or that overlaps or abuts a change
+    /// of the other side (a conflict, or the other side's own clean merge: the union-span rule makes those one region).
     /// </summary>
     private static IEnumerable<string> Unsound(string path, string[] b, string[] v1, string[] v2, ConflictManifest manifest)
     {
@@ -215,6 +217,9 @@ public static class ConflictTreeCrossCheck
             if (v1Same || v2Same || agreed)
                 yield return $"conflict {path}:{c.BaseStart},{c.BaseLines}: " +
                              (v1Same ? "v1 left the base as it was there" : v2Same ? "v2 left the base as it was there" : "both sides made the same change");
+            else if (SplitsClean(b, c.BaseStart - 1, c.BaseLines, v1, c.V1NewStart - 1, c.V1NewLines, v2, c.V2NewStart - 1, c.V2NewLines))
+                yield return $"conflict {path}:{c.BaseStart},{c.BaseLines}: it splits, at lines both sides keep, into changes " +
+                             "that merge cleanly (each part changed by one side, or by both alike)";
         }
         foreach (var m in clean)
         {
@@ -226,14 +231,58 @@ public static class ConflictTreeCrossCheck
             }
             bool clash = conflicts.Any(c => Overlap(m.OldStart, m.OldLines, c.BaseStart, c.BaseLines))
                          || clean.Any(o => o.Side != m.Side && Overlap(m.OldStart, m.OldLines, o.OldStart, o.OldLines));
-            if (clash) yield return $"clean {m.Side} {path}:{m.OldStart},{m.OldLines}: it overlaps a change of the other side";
+            if (clash) yield return $"clean {m.Side} {path}:{m.OldStart},{m.OldLines}: it overlaps or abuts a change of the other side";
         }
     }
 
-    /// <summary>Two base regions that share a line, or two inserts at the same place (lenient about where an insert
-    /// next to a region sits, which conventions differ on).</summary>
+    /// <summary>
+    /// Two base regions diff3 makes one: they share a line or abut (the locked union-span rule, as
+    /// <see cref="ThreeWayMerger"/> coalesces). Each is a half-open span of base positions: an insert sits in the gap
+    /// after line <c>start</c> (<c>[start, start)</c>), a replace or delete covers <c>[start-1, start-1+lines)</c>.
+    /// </summary>
     private static bool Overlap(int s1, int n1, int s2, int n2)
-        => n1 > 0 && n2 > 0 ? s1 < s2 + n2 && s2 < s1 + n1 : n1 == 0 && n2 == 0 && s1 == s2;
+    {
+        int a = n1 == 0 ? s1 : s1 - 1, b = n2 == 0 ? s2 : s2 - 1;
+        return a <= b + n2 && b <= a + n1;
+    }
+
+    /// <summary>
+    /// Whether a conflict's region splits, at base lines both sides keep, into parts that each merge cleanly (one side
+    /// left the base as it was there, or both made the same change): then diff3 has no conflict there — a clean edit of
+    /// each side passed off as one. Any alignment that does it counts (with repeated lines there may be several), so a
+    /// region whose own changes chain together is never flagged. Bounded: a search past its budget leaves the region be.
+    /// </summary>
+    private static bool SplitsClean(string[] b, int bs, int bn, string[] v1, int s1, int n1, string[] v2, int s2, int n2)
+    {
+        if (bs < 0 || s1 < 0 || s2 < 0 || bs + bn > b.Length || s1 + n1 > v1.Length || s2 + n2 > v2.Length) return false;
+        int budget = 200_000;
+        var failed = new HashSet<(int, int, int)>();
+
+        bool Clean(int i, int p, int j, int q, int k, int r)
+            => SeqEqual(v1, s1 + j, q - j, b, bs + i, p - i) || SeqEqual(v2, s2 + k, r - k, b, bs + i, p - i)
+               || SeqEqual(v1, s1 + j, q - j, v2, s2 + k, r - k);
+
+        // The rest from (i, j, k) splits into clean parts: it is one, or a clean part, a line all three keep, and the rest.
+        bool Rest(int i, int j, int k, bool mustSplit)
+        {
+            if (!mustSplit && Clean(i, bn, j, n1, k, n2)) return true;
+            if (failed.Contains((i, j, k))) return false;
+            for (int p = i; p < bn; p++)
+                for (int q = j; q < n1; q++)
+                {
+                    if (b[bs + p] != v1[s1 + q]) continue;
+                    for (int r = k; r < n2; r++)
+                    {
+                        if (--budget < 0) return false;
+                        if (b[bs + p] == v2[s2 + r] && Clean(i, p, j, q, k, r) && Rest(p + 1, q + 1, r + 1, false)) return true;
+                    }
+                }
+            failed.Add((i, j, k));
+            return false;
+        }
+
+        return Rest(0, 0, 0, true);
+    }
 
     private static bool ReconstructsSide(
         IReadOnlyList<string> baseLines, IReadOnlyList<string> variantLines, List<Hunk>? hunks)
@@ -248,12 +297,13 @@ public static class ConflictTreeCrossCheck
     /// Reconstruct V2, folding in identical-overlap regions that the manifest records only once (clean
     /// side "v1"). Walking the v2 changes in base order keeps a running V2 line-offset; at each clean-v1
     /// region we ask the trees whether V2 is unchanged there (one-sided v1 ⇒ skip) or changed to the same
-    /// content (agreed ⇒ apply at the offset position, reading V2's own bytes). Agreed INSERTS (base-lines
+    /// content as V1 (agreed ⇒ apply at the offset position, reading V2's own bytes; anything else there is a V2 change
+    /// the manifest doesn't record, and fails). Agreed INSERTS (base-lines
     /// 0) are not folded — the contract's identical-overlap case is a modify; such a region would show as
     /// a V2 shortfall and is out of scope for this gate.
     /// </summary>
     private static bool ReconstructsV2(
-        IReadOnlyList<string> baseLines, IReadOnlyList<string> v2Lines, List<Hunk>? v2Def, List<Hunk>? cleanV1)
+        IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines, IReadOnlyList<string> v2Lines, List<Hunk>? v2Def, List<Hunk>? cleanV1)
     {
         var events = new List<(Hunk h, bool definite)>();
         if (v2Def is not null) foreach (var h in v2Def) events.Add((h, true));
@@ -276,7 +326,8 @@ public static class ConflictTreeCrossCheck
             bool v2Unchanged = SeqEqual(v2Lines, pos - 1, h.OldLines, baseLines, h.OldStart - 1, h.OldLines);
             if (v2Unchanged) continue; // v2 did not touch it — nothing to apply
 
-            // agreed: V2 holds the same edit (h.NewLines lines) at pos; read it from V2's own tree.
+            // Agreed only if V2 holds exactly V1's edit there: a V2 change the manifest doesn't record is no agreed edit.
+            if (!SeqEqual(v2Lines, pos - 1, h.NewLines, v1Lines, h.NewStart - 1, h.NewLines)) return false;
             v2Hunks.Add(new Hunk(h.Op, h.OldStart, h.OldLines, pos, h.NewLines));
             offset += h.NewLines - h.OldLines;
         }

@@ -105,10 +105,12 @@ public static class ThreeWayViews
     {
         if (Pending(s) is { } pending) return $"compare3 {s.Id}: {pending}";
         var r = s.Report!;
-        path = path.Trim().Replace('\\', '/').TrimStart('/');
-        var e = r.Entries.FirstOrDefault(x => x.Path == path)
-             ?? r.Entries.FirstOrDefault(x => x.MergedPath == path || x.V1?.RelativePath == path || x.V2?.RelativePath == path)
-             ?? r.Entries.FirstOrDefault(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase));
+        Merge3Entry? Find(string p) => r.Entries.FirstOrDefault(x => x.Path == p)
+             ?? r.Entries.FirstOrDefault(x => x.MergedPath == p || x.V1?.RelativePath == p || x.V2?.RelativePath == p)
+             ?? r.Entries.FirstOrDefault(x => string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase));
+        // The path as given first: " a.txt" is a name of its own, not a.txt with a stray space.
+        var e = Find(path = AgentViews.Normalize(path, trim: false));
+        if (e is null && AgentViews.Normalize(path) is var trimmed && trimmed != path) e = Find(path = trimmed);
         if (e is null && path.Contains('�'))
         {
             // As UTF-8 shows it: an unpaired surrogate reads as U+FFFD in a listing.

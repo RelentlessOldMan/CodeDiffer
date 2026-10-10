@@ -311,7 +311,8 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   ones), as the contract defines them, even when its coordinates rebuild the file. A hunk takes its text from
   the variant, so rebuilding is not enough: the hunks must be the canonical ones — coalesced (an unchanged line
   between any two), each where the walk is on both sides (`newStart` = the new lines before it + 1, a delete's
-  too), and no replace wider than its change (its first and last lines differ on the two sides). `whitespace`
+  too), and no replace wider than its change (its first and last lines differ on the two sides, and one that replaces
+  lines line for line leaves none of them as it was). `whitespace`
   records are checked too (each hunk must change only whitespace), run-rule hunks are expanded and the files
   streamed, and a renamed file's reason is compared with CodeDiffer's own verdict on the pair.
 - `get_file_diff` / `export_changeset` / `-U` context past the file's length is the whole file; a negative one is
@@ -332,7 +333,9 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   requires exactly the manifest's files, reasons and rename similarities (death 1.0.9: 1,561/1,561 and
   1,354/1,354); the 3-way gate needs the exact decomposition, or reconstruction AND a merge conflicting in
   exactly the manifest's files AND every region being what it says against the trees (a conflict both sides
-  changed, differently; a clean merge its side changed, clear of the other side's changes), AND compare3 itself
+  changed, differently, that doesn't split at lines both sides keep into parts that merge cleanly; a clean merge its
+  side changed, neither overlapping nor abutting a change of the other side; an edit both sides made alike only where
+  they really did), AND compare3 itself
   — over the whole trees, lines with their endings — conflicting in exactly the manifest's files and merging
   none it leaves out (death 1.0.9: 941 of 941). Every modified record's `oldSha`/`newSha`/`oldSize`/`newSize`
   is checked against the trees' files, whatever its reason: the digest only proves the manifest agrees with itself.

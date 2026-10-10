@@ -709,12 +709,14 @@ public static class ResultStore
     }
 
     /// <summary>Is <paramref name="path"/> inside <paramref name="tree"/> (or, unless <paramref name="oneWay"/>, the other
-    /// way round), by name or by what the names resolve to — a junction, symlink, subst or mapped drive naming the tree
-    /// by another path counts. For the gates that keep an output out of an input, not for per-file checks.</summary>
+    /// way round), by name, by what the names resolve to — a junction, symlink, subst or mapped drive naming the tree
+    /// by another path counts — or by file identity, which also sees the tree through a share (\\localhost\C$\...).
+    /// For the gates that keep an output out of an input, not for per-file checks.</summary>
     internal static bool Overlaps(string path, string tree, bool oneWay = false)
     {
         if (IsUnder(path, tree) || (!oneWay && IsUnder(tree, path))) return true;
         string rp = CodeDiffer.Core.Walk.RealPath.Of(path), rt = CodeDiffer.Core.Walk.RealPath.Of(tree);
-        return IsUnder(rp, rt) || (!oneWay && IsUnder(rt, rp));
+        if (IsUnder(rp, rt) || (!oneWay && IsUnder(rt, rp))) return true;
+        return CodeDiffer.Core.Walk.RealPath.InsideByIdentity(path, tree) || (!oneWay && CodeDiffer.Core.Walk.RealPath.InsideByIdentity(tree, path));
     }
 }

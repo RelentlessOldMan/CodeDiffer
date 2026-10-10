@@ -108,44 +108,77 @@ public sealed class RenameDetector
         var removedIds = Ids(removed, addedSizes, leftCache, unreadable, ref bytesRead, ct);
         var addedIds = Ids(added, removedSizes, rightCache, unreadable, ref bytesRead, ct);
 
-        var addsByXx = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        // The identical files, grouped by content: removed and added files with one XxHash128.
+        var groups = new Dictionary<string, (List<int> R, List<int> A)>(StringComparer.Ordinal);
         for (int ai = 0; ai < added.Count; ai++)
         {
             if (addedIds[ai] is not { } id) continue;
-            if (!addsByXx.TryGetValue(id.XxHash, out var list)) addsByXx[id.XxHash] = list = [];
-            list.Add(ai);
+            if (!groups.TryGetValue(id.XxHash, out var g)) groups[id.XxHash] = g = ([], []);
+            g.A.Add(ai);
+        }
+        for (int ri = 0; ri < removed.Count; ri++)
+            if (removedIds[ri] is { } rid && !(removed[ri].Length <= 4 && BomOnly.Contains(rid.XxHash)) && groups.TryGetValue(rid.XxHash, out var g))
+                g.R.Add(ri);
+
+        var rName = removed.Select(e => Name(e.RelativePath)).ToArray();
+        var rDir = removed.Select(e => Dir(e.RelativePath)).ToArray();
+        var aName = added.Select(e => Name(e.RelativePath)).ToArray();
+        var aDir = added.Select(e => Dir(e.RelativePath)).ToArray();
+        var usedRemoved = new bool[removed.Count];
+        var usedAdded = new bool[added.Count];
+        var found = new List<(int R, RenameOp Op)>();
+        void Pair(int ri, int ai)
+        {
+            usedRemoved[ri] = usedAdded[ai] = true;
+            found.Add((ri, new RenameOp(removed[ri].RelativePath, added[ai].RelativePath, 1000)));
         }
 
-        // Every identical (removed, added) pair, best first; each file is used once.
-        var pairs = new List<(int R, int A)>();
-        for (int ri = 0; ri < removed.Count; ri++)
-            if (removedIds[ri] is { } rid && !(removed[ri].Length <= 4 && BomOnly.Contains(rid.XxHash)) && addsByXx.TryGetValue(rid.XxHash, out var list))
-                foreach (var ai in list)
-                    if (ContentId.Same(addedIds[ai]!.Value, rid) == true)
-                        pairs.Add((ri, ai));
-        pairs.Sort((x, y) =>
+        foreach (var (rs, adds) in groups.Values)
         {
-            int c = Rank(removed[x.R], added[x.A]).CompareTo(Rank(removed[y.R], added[y.A]));
-            if (c == 0) c = string.CompareOrdinal(removed[x.R].RelativePath, removed[y.R].RelativePath);
-            if (c == 0) c = string.CompareOrdinal(added[x.A].RelativePath, added[y.A].RelativePath);
-            return c;
-        });
+            ct.ThrowIfCancellationRequested();
+            if (rs.Count == 0) continue;
+            rs.Sort((x, y) => string.CompareOrdinal(removed[x].RelativePath, removed[y].RelativePath));
+            adds.Sort((x, y) => string.CompareOrdinal(added[x].RelativePath, added[y].RelativePath));
 
-        var usedRemoved = new HashSet<int>();
-        var usedAdded = new HashSet<int>();
-        var found = new List<(int R, RenameOp Op)>();
-        foreach (var (ri, ai) in pairs)
-        {
-            if (usedRemoved.Contains(ri) || usedAdded.Contains(ai)) continue;
-            usedRemoved.Add(ri);
-            usedAdded.Add(ai);
-            found.Add((ri, new RenameOp(removed[ri].RelativePath, added[ai].RelativePath, 1000)));
+            // One content (no two SHA-256s that differ under the one XxHash128): every pair is identical. Best first, as
+            // one sort of every pair would take them, but in O(k) — thousands of identical files moved make millions of
+            // pairs: same name and directory, then same name, then same directory, then any; at each, the removed files
+            // in path order take the first free added file in path order.
+            if (rs.Select(r => removedIds[r]!.Value.Sha256).Concat(adds.Select(a => addedIds[a]!.Value.Sha256))
+                  .Where(s => s.Length > 0).Distinct(StringComparer.Ordinal).Count() <= 1)
+            {
+                foreach (var key in new Func<string, string, string>[] { (n, d) => n + "/" + d, (n, _) => n, (_, d) => d, (_, _) => "" })
+                {
+                    var free = new Dictionary<string, Queue<int>>(StringComparer.Ordinal);
+                    foreach (var a in adds)
+                        if (!usedAdded[a])
+                        {
+                            var k = key(aName[a], aDir[a]);
+                            if (!free.TryGetValue(k, out var q)) free[k] = q = new Queue<int>();
+                            q.Enqueue(a);
+                        }
+                    foreach (var r in rs)
+                        if (!usedRemoved[r] && free.TryGetValue(key(rName[r], rDir[r]), out var q) && q.Count > 0)
+                            Pair(r, q.Dequeue());
+                }
+                continue;
+            }
+
+            // A hash collision: compare every pair of the group, best first.
+            var pairs = new List<(int Rank, int R, int A)>();
+            foreach (var r in rs)
+                foreach (var a in adds)
+                    if (ContentId.Same(addedIds[a]!.Value, removedIds[r]!.Value) == true)
+                        pairs.Add((Rank(rName[r], rDir[r], aName[a], aDir[a]), r, a));
+            foreach (var (_, r, a) in pairs.OrderBy(p => p.Rank)) // stable: rs and adds are in path order
+                if (!usedRemoved[r] && !usedAdded[a])
+                    Pair(r, a);
         }
         // Listed in removed order, as before.
         renames.AddRange(found.OrderBy(f => f.R).Select(f => f.Op));
 
-        var stillRemoved = removed.Where((_, i) => !usedRemoved.Contains(i)).ToList();
-        var stillAdded = added.Where((_, i) => !usedAdded.Contains(i)).ToList();
+        var stillRemoved = removed.Where((_, i) => !usedRemoved[i]).ToList();
+        var stillAdded = added.Where((_, i) => !usedAdded[i]).ToList();
         removed.Clear();
         removed.AddRange(stillRemoved);
         added.Clear();
@@ -154,11 +187,11 @@ public sealed class RenameDetector
 
     /// <summary>How likely a pair is the rename, other things equal: the same name and directory first, then the same
     /// name (moved), then the same directory (renamed in place), then neither.</summary>
-    private static int Rank(FileEntry removed, FileEntry added)
-        => (Name(added) == Name(removed) ? 0 : 2) + (Dir(added) == Dir(removed) ? 0 : 1);
+    private static int Rank(string removedName, string removedDir, string addedName, string addedDir)
+        => (addedName == removedName ? 0 : 2) + (addedDir == removedDir ? 0 : 1);
 
-    private static string Name(FileEntry e) => e.RelativePath[(e.RelativePath.LastIndexOf('/') + 1)..];
-    private static string Dir(FileEntry e) => e.RelativePath[..Math.Max(0, e.RelativePath.LastIndexOf('/'))];
+    private static string Name(string path) => path[(path.LastIndexOf('/') + 1)..];
+    private static string Dir(string path) => path[..Math.Max(0, path.LastIndexOf('/'))];
 
     /// <summary>The XxHash128 of each byte-order mark alone: a file with that content is empty text.</summary>
     private static readonly HashSet<string> BomOnly = new(
@@ -212,6 +245,11 @@ public sealed class RenameDetector
         var addedLines = ReadLines(added, intern, unreadable, ref bytesRead, ct);
         int threshold = _options.RenameSimilarityThresholdMilli;
 
+        var rName = removed.Select(e => Name(e.RelativePath)).ToArray();
+        var rDir = removed.Select(e => Dir(e.RelativePath)).ToArray();
+        var aName = added.Select(e => Name(e.RelativePath)).ToArray();
+        var aDir = added.Select(e => Dir(e.RelativePath)).ToArray();
+
         var perRemoved = new List<(int milli, int ri, int ai)>?[removed.Count];
         Parallel.For(0, removed.Count, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = ct }, ri =>
         {
@@ -238,7 +276,7 @@ public sealed class RenameDetector
         {
             int c = y.milli.CompareTo(x.milli);
             if (c != 0) return c;
-            c = Rank(removed[x.ri], added[x.ai]).CompareTo(Rank(removed[y.ri], added[y.ai]));
+            c = Rank(rName[x.ri], rDir[x.ri], aName[x.ai], aDir[x.ai]).CompareTo(Rank(rName[y.ri], rDir[y.ri], aName[y.ai], aDir[y.ai]));
             if (c != 0) return c;
             c = string.CompareOrdinal(removed[x.ri].RelativePath, removed[y.ri].RelativePath);
             if (c != 0) return c;

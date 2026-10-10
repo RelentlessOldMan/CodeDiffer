@@ -40,7 +40,8 @@ public static class HunkApplier
     /// line between them, or a delete placed anywhere would all still rebuild. So, besides rebuilding: every op fits its
     /// counts; hunks are coalesced (an unchanged line between any two); each starts where the walk is on both sides
     /// (insert: <c>oldStart</c> = old lines before it; every hunk: <c>newStart</c> = new lines before it + 1, a delete
-    /// too); and a replace's first and last lines differ on the two sides (else it is wider than the change). With
+    /// too); a replace's first and last lines differ on the two sides (else it is wider than the change), and a replace
+    /// of as many lines as it replaces leaves none of them as it was (that line would split it in two). With
     /// <paramref name="whitespaceOnly"/>, each hunk must also change only whitespace
     /// (<see cref="Compare.TextInspector.WhitespaceKey"/>).
     /// </summary>
@@ -81,6 +82,11 @@ public static class HunkApplier
             }
             if (h.Op == HunkOp.Replace && (oldBlock[0] == newBlock[0] || oldBlock[^1] == newBlock[^1]))
                 return $"{Show(h)}: wider than the change (its {(oldBlock[0] == newBlock[0] ? "first" : "last")} line is the same on both sides)";
+            // Lines edited in place, line for line: one left as it was is no part of the change, and splits the hunk.
+            if (h.Op == HunkOp.Replace && h.OldLines == h.NewLines)
+                for (int k = 1; k < h.OldLines - 1; k++)
+                    if (oldBlock[k] == newBlock[k])
+                        return $"{Show(h)}: spans old line {h.OldStart + k:N0}, which is unchanged (two hunks, not one)";
             if (whitespaceOnly && !string.Equals(WsKey(oldBlock), WsKey(newBlock), StringComparison.Ordinal))
                 return $"{Show(h)}: changes more than whitespace";
         }
