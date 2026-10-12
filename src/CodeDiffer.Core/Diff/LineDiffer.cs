@@ -28,11 +28,11 @@ public static class LineDiffer
     public const int DefaultMaxEditDistance = 3000;
 
     /// <summary>
-    /// Work cap for the linear-space pass, in diagonal steps (≈ (N+M)·D). 2·10⁹ is a few seconds for real
-    /// files; a pathological input past it falls back to ONE replace over the differing middle — still a
-    /// correct diff, flagged coarse.
+    /// Work cap for the linear-space pass, in diagonal steps (≈ (N+M)·D). 2·10⁸ is a few seconds (a 50,000-line pair
+    /// of unrelated lines reaches it in about 4); a pathological input past it falls back to ONE replace over the differing
+    /// middle — still a correct diff, flagged coarse.
     /// </summary>
-    public const long DefaultMaxWork = 2_000_000_000;
+    public const long DefaultMaxWork = 200_000_000;
 
     public static List<Hunk> Diff(string oldText, string newText)
         => Diff(LineText.SplitLines(oldText), LineText.SplitLines(newText));
@@ -67,12 +67,13 @@ public static class LineDiffer
 
     /// <summary>
     /// Diff with an explicit exact-trace budget: within it, classic Myers; past it, linear-space Myers; past
-    /// <paramref name="maxWork"/> too, one coarse replace (<paramref name="coarse"/> = true).
+    /// <paramref name="maxWork"/> too, one coarse replace (<paramref name="coarse"/> = true). Cancellable at every
+    /// edit-distance step.
     /// </summary>
     public static List<Hunk> Diff(IReadOnlyList<string> a, IReadOnlyList<string> b, int maxEditDistance, out bool coarse,
-        long maxWork = DefaultMaxWork)
+        long maxWork = DefaultMaxWork, CancellationToken ct = default)
     {
-        var moves = ShortestEdit(a, b, maxEditDistance) ?? LinearSpace.Moves(a, b, maxWork);
+        var moves = ShortestEdit(a, b, maxEditDistance, ct) ?? LinearSpace.Moves(a, b, maxWork, ct);
         coarse = moves is null;
         return moves is null ? CoarseHunks(a, b) : BuildHunks(moves);
     }
@@ -86,7 +87,7 @@ public static class LineDiffer
     /// </summary>
     private static class LinearSpace
     {
-        public static List<Edit>? Moves(IReadOnlyList<string> a, IReadOnlyList<string> b, long maxWork)
+        public static List<Edit>? Moves(IReadOnlyList<string> a, IReadOnlyList<string> b, long maxWork, CancellationToken ct)
         {
             var ids = new Dictionary<string, int>(StringComparer.Ordinal);
             int[] A = Intern(a, ids), B = Intern(b, ids);
@@ -95,7 +96,7 @@ public static class LineDiffer
             var vb = new int[2 * max + 2];
             var moves = new List<Edit>(A.Length + B.Length);
             long work = 0;
-            return Solve(A, 0, A.Length, B, 0, B.Length, vf, vb, moves, ref work, maxWork) ? moves : null;
+            return Solve(A, 0, A.Length, B, 0, B.Length, vf, vb, moves, ref work, maxWork, ct) ? moves : null;
         }
 
         private static int[] Intern(IReadOnlyList<string> lines, Dictionary<string, int> ids)
@@ -110,7 +111,7 @@ public static class LineDiffer
         }
 
         private static bool Solve(int[] A, int aLo, int aHi, int[] B, int bLo, int bHi,
-            int[] vf, int[] vb, List<Edit> moves, ref long work, long maxWork)
+            int[] vf, int[] vb, List<Edit> moves, ref long work, long maxWork, CancellationToken ct)
         {
             int pre = 0;
             while (aLo + pre < aHi && bLo + pre < bHi && A[aLo + pre] == B[bLo + pre]) pre++;
@@ -125,12 +126,12 @@ public static class LineDiffer
             else if (m == 0) { for (int i = 0; i < n; i++) moves.Add(Edit.Delete); }
             else
             {
-                var snake = MiddleSnake(A, aLo, n, B, bLo, m, vf, vb, ref work, maxWork);
+                var snake = MiddleSnake(A, aLo, n, B, bLo, m, vf, vb, ref work, maxWork, ct);
                 if (snake is not { } sn) return false;
                 var (x, y, u, v) = sn;
-                if (!Solve(A, aLo, aLo + x, B, bLo, bLo + y, vf, vb, moves, ref work, maxWork)) return false;
+                if (!Solve(A, aLo, aLo + x, B, bLo, bLo + y, vf, vb, moves, ref work, maxWork, ct)) return false;
                 for (int i = x; i < u; i++) moves.Add(Edit.Equal);
-                if (!Solve(A, aLo + u, aHi, B, bLo + v, bHi, vf, vb, moves, ref work, maxWork)) return false;
+                if (!Solve(A, aLo + u, aHi, B, bLo + v, bHi, vf, vb, moves, ref work, maxWork, ct)) return false;
             }
             for (int i = 0; i < suf; i++) moves.Add(Edit.Equal);
             return true;
@@ -138,7 +139,7 @@ public static class LineDiffer
 
         /// <summary>The middle snake (x,y)→(u,v), relative to (aLo,bLo); null when the work cap is hit.</summary>
         private static (int, int, int, int)? MiddleSnake(int[] A, int aLo, int n, int[] B, int bLo, int m,
-            int[] vf, int[] vb, ref long work, long maxWork)
+            int[] vf, int[] vb, ref long work, long maxWork, CancellationToken ct)
         {
             int delta = n - m;
             bool odd = (delta & 1) != 0;
@@ -148,6 +149,7 @@ public static class LineDiffer
             vb[o + 1] = 0;
             for (int d = 0; d <= dMax; d++)
             {
+                ct.ThrowIfCancellationRequested();
                 // Forward search: furthest-reaching path on each diagonal k = x - y.
                 for (int k = -d; k <= d; k += 2)
                 {
@@ -221,7 +223,7 @@ public static class LineDiffer
     /// distance exceeds <paramref name="maxD"/>. The trace keeps only each step's live diagonals (k ∈ [-d, d],
     /// 2d+3 ints) instead of a full copy of V, so memory is O(D²), not O(D·(N+M)) — same moves, same output.
     /// </summary>
-    private static List<Edit>? ShortestEdit(IReadOnlyList<string> a, IReadOnlyList<string> b, int maxD)
+    private static List<Edit>? ShortestEdit(IReadOnlyList<string> a, IReadOnlyList<string> b, int maxD, CancellationToken ct)
     {
         int n = a.Count, m = b.Count, max = n + m;
         var moves = new List<Edit>();
@@ -235,6 +237,7 @@ public static class LineDiffer
         for (int d = 0; d <= max && !done; d++)
         {
             if (d > maxD) return null;
+            ct.ThrowIfCancellationRequested();
             trace.Add(v.AsSpan(off - d - 1, 2 * d + 3).ToArray()); // diagonals -d-1..d+1 (state after step d-1)
             for (int k = -d; k <= d; k += 2)
             {

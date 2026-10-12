@@ -303,7 +303,7 @@ public static class PatchWriter
             oldText = oldBytes is null ? null : TextInspector.Decode(oldBytes);
             newText = newBytes is null ? null : TextInspector.Decode(newBytes);
         }
-        if (UnifiedDiff.Write(w, oldRel, newRel, oldText, newText, opt.Context, extraHeader)) stats.CoarseFiles++;
+        if (UnifiedDiff.Write(w, oldRel, newRel, oldText, newText, opt.Context, extraHeader, opt.Cancellation)) stats.CoarseFiles++;
         stats.TextFiles++;
     }
 

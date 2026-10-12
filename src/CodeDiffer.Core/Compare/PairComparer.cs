@@ -55,8 +55,9 @@ public static class PairComparer
             long offL = 0, offR = 0;
             while (offL < lenL || offR < lenR)
             {
-                var tl = offL < lenL ? RandomAccess.ReadAsync(lh, bufL.AsMemory(0, ChunkBytes), offL, ct) : ValueTask.FromResult(0);
-                var tr = offR < lenR ? RandomAccess.ReadAsync(rh, bufR.AsMemory(0, ChunkBytes), offR, ct) : ValueTask.FromResult(0);
+                // Each side's chunk read in full (a read may return less, over SMB too): chunks of two equal files line up.
+                var tl = offL < lenL ? Fill(lh, bufL.AsMemory(0, (int)Math.Min(ChunkBytes, lenL - offL)), offL, ct) : ValueTask.FromResult(0);
+                var tr = offR < lenR ? Fill(rh, bufR.AsMemory(0, (int)Math.Min(ChunkBytes, lenR - offR)), offR, ct) : ValueTask.FromResult(0);
                 int nl = await tl.ConfigureAwait(false);
                 int nr = await tr.ConfigureAwait(false);
                 if (nl == 0 && nr == 0) break; // file shrank under us — the after-stat marks it unstable
@@ -82,6 +83,14 @@ public static class PairComparer
             ArrayPool<byte>.Shared.Return(bufL);
             ArrayPool<byte>.Shared.Return(bufR);
         }
+    }
+
+    /// <summary>Read until <paramref name="buf"/> is full or the file ends; the bytes read.</summary>
+    private static async ValueTask<int> Fill(SafeFileHandle h, Memory<byte> buf, long off, CancellationToken ct)
+    {
+        int got = 0, n;
+        while (got < buf.Length && (n = await RandomAccess.ReadAsync(h, buf[got..], off + got, ct).ConfigureAwait(false)) > 0) got += n;
+        return got;
     }
 
     /// <summary>Whole-file XxHash128 + SHA-256 of one file (streamed, 1 MB chunks), stat-bracketed.</summary>

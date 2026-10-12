@@ -250,56 +250,102 @@ public sealed class RenameDetector
         var aName = added.Select(e => Name(e.RelativePath)).ToArray();
         var aDir = added.Select(e => Dir(e.RelativePath)).ToArray();
 
-        var perRemoved = new List<(int milli, int ri, int ai)>?[removed.Count];
-        Parallel.For(0, removed.Count, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = ct }, ri =>
+        // Best first; ties broken by name and directory (as identical files are paired), then by path so assignment is
+        // deterministic across runs/platforms. By path alone, a/x.c and b/x.c renamed to a/y.c and b/y.c, equally
+        // edited, could cross-pair (a/x.c → b/y.c), and compare3 follows renames.
+        int Order(int ri, (int milli, int ai) x, (int milli, int ai) y)
         {
-            if (removedLines[ri] is not { } rl) return;
-            List<(int, int, int)>? found = null;
+            int c = y.milli.CompareTo(x.milli);
+            if (c != 0) return c;
+            c = Rank(rName[ri], rDir[ri], aName[x.ai], aDir[x.ai]).CompareTo(Rank(rName[ri], rDir[ri], aName[y.ai], aDir[y.ai]));
+            return c != 0 ? c : string.CompareOrdinal(added[x.ai].RelativePath, added[y.ai].RelativePath);
+        }
+
+        // Each removed file's best few candidates, not every pair over the threshold: thousands of near-alike files
+        // (Unity .meta, generated stubs) made millions of pairs to hold and sort. A row whose candidates all go to
+        // other files is scanned again (for twice as many), so the assignment is the same greedy one as over every pair.
+        var usedA = new bool[added.Count];
+        var rows = new List<(int milli, int ai)>?[removed.Count];
+        var more = new bool[removed.Count];
+        var keep = new int[removed.Count];
+        List<(int milli, int ai)> Row(int ri, int k, out bool truncated)
+        {
+            var row = new List<(int milli, int ai)>();
+            truncated = false;
+            var rl = removedLines[ri]!;
+            var order = Comparer<(int milli, int ai)>.Create((x, y) => Order(ri, x, y));
             for (int ai = 0; ai < added.Count; ai++)
             {
-                if (addedLines[ai] is not { } al) continue;
+                if (usedA[ai] || addedLines[ai] is not { } al) continue;
                 // common ≤ the smaller line count, so the counts alone can rule a pair out: no need to score it.
                 int max = Math.Max(rl.Count, al.Count);
                 if (max > 0 && Milli(Math.Min(rl.Count, al.Count), max) < threshold) continue;
                 int milli = max == 0 ? 1000 : Milli(LineCounts.Common(rl, al), max);
-                if (milli >= threshold)
-                    (found ??= []).Add((milli, ri, ai));
+                if (milli < threshold) continue;
+                var cand = (milli, ai);
+                if (row.Count == k && Order(ri, cand, row[^1]) >= 0) { truncated = true; continue; }
+                int at = row.BinarySearch(cand, order);
+                row.Insert(at < 0 ? ~at : at, cand);
+                if (row.Count > k) { row.RemoveAt(k); truncated = true; }
             }
-            perRemoved[ri] = found;
+            return row;
+        }
+        Parallel.For(0, removed.Count, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = ct }, ri =>
+        {
+            if (removedLines[ri] is null) return;
+            keep[ri] = TopCandidates;
+            rows[ri] = Row(ri, keep[ri], out more[ri]);
         });
-        var scored = perRemoved.Where(l => l is not null).SelectMany(l => l!).ToList();
 
-        // Best first; ties broken by name and directory (as identical files are paired), then by path so assignment is
-        // deterministic across runs/platforms. By path alone, a/x.c and b/x.c renamed to a/y.c and b/y.c, equally
-        // edited, could cross-pair (a/x.c → b/y.c), and compare3 follows renames.
-        scored.Sort((x, y) =>
+        // The heads of the rows, best first: a head whose added file is taken moves on to the row's next candidate.
+        var queue = new PriorityQueue<int, (int milli, int ri, int ai)>(Comparer<(int milli, int ri, int ai)>.Create((x, y) =>
         {
             int c = y.milli.CompareTo(x.milli);
             if (c != 0) return c;
             c = Rank(rName[x.ri], rDir[x.ri], aName[x.ai], aDir[x.ai]).CompareTo(Rank(rName[y.ri], rDir[y.ri], aName[y.ai], aDir[y.ai]));
             if (c != 0) return c;
             c = string.CompareOrdinal(removed[x.ri].RelativePath, removed[y.ri].RelativePath);
-            if (c != 0) return c;
-            return string.CompareOrdinal(added[x.ai].RelativePath, added[y.ai].RelativePath);
-        });
+            return c != 0 ? c : string.CompareOrdinal(added[x.ai].RelativePath, added[y.ai].RelativePath);
+        }));
+        var head = new int[removed.Count];
+        for (int ri = 0; ri < removed.Count; ri++)
+            if (rows[ri] is { Count: > 0 } row) queue.Enqueue(ri, (row[0].milli, ri, row[0].ai));
 
-        var usedR = new bool[removed.Count];
-        var usedA = new bool[added.Count];
         var pairedR = new HashSet<string>(StringComparer.Ordinal);
         var pairedA = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (milli, ri, ai) in scored)
+        while (queue.TryDequeue(out var ri, out var p))
         {
-            if (usedR[ri] || usedA[ai]) continue;
-            usedR[ri] = usedA[ai] = true;
-            renames.Add(new RenameOp(removed[ri].RelativePath, added[ai].RelativePath, milli));
-            edited.Add(added[ai].RelativePath);
-            pairedR.Add(removed[ri].RelativePath);
-            pairedA.Add(added[ai].RelativePath);
+            ct.ThrowIfCancellationRequested();
+            if (!usedA[p.ai])
+            {
+                usedA[p.ai] = true;
+                renames.Add(new RenameOp(removed[ri].RelativePath, added[p.ai].RelativePath, p.milli));
+                edited.Add(added[p.ai].RelativePath);
+                pairedR.Add(removed[ri].RelativePath);
+                pairedA.Add(added[p.ai].RelativePath);
+                continue;
+            }
+            var row = rows[ri]!;
+            int h = head[ri] + 1;
+            while (h < row.Count && usedA[row[h].ai]) h++;
+            if (h == row.Count)
+            {
+                if (!more[ri]) continue;
+                keep[ri] *= 2;
+                rows[ri] = row = Row(ri, keep[ri], out more[ri]);
+                h = 0;
+                if (row.Count == 0) continue;
+            }
+            head[ri] = h;
+            queue.Enqueue(ri, (row[h].milli, ri, row[h].ai));
         }
 
         removed.RemoveAll(e => pairedR.Contains(e.RelativePath));
         added.RemoveAll(e => pairedA.Contains(e.RelativePath));
     }
+
+    /// <summary>How many candidates of each removed file the edited-rename pass keeps at first (a test sets it to 1).</summary>
+    internal int TopCandidates { get; init; } = 8;
 
     /// <summary>round(common / max * 1000) in exact integers — the same formula as <see cref="Similarity.MilliFromLines"/>.</summary>
     private static int Milli(int common, int max) => (int)(((long)common * 1000 + max / 2) / max);

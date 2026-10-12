@@ -71,12 +71,13 @@ public static class DeltaTreeCrossCheck
             bool ws = f.Reason == ChangeReason.Whitespace;
             if (f.RunHunks.Count > 0)
             {
-                // A giant file: its run rules expanded, both files streamed; CodeDiffer's own line diff isn't run on it.
+                // A giant file: its run rules expanded as they are checked (never held: a rule can claim 2³¹ lines), both
+                // files streamed; CodeDiffer's own line diff isn't run on it.
                 string? why;
                 try
                 {
-                    var all = f.Hunks.Concat(f.RunHunks.SelectMany(r => r.Expand())).ToList();
-                    why = HunkApplier.Problem(StreamLines(Path.Combine(baseDir, baseRelative)), StreamLines(Path.Combine(variantDir, relative)), all, ws);
+                    why = HunkApplier.ProblemInOrder(StreamLines(Path.Combine(baseDir, baseRelative)), StreamLines(Path.Combine(variantDir, relative)),
+                        InOrder(f), ws);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or OverflowException)
                 {
@@ -128,6 +129,29 @@ public static class DeltaTreeCrossCheck
             return string.Equals(actual, sha, StringComparison.OrdinalIgnoreCase) ? null : $"{rel} has SHA-256 {actual}, the manifest says {sha}";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return $"{rel} can't be read ({ex.Message})"; }
+    }
+
+    /// <summary>A record's explicit hunks and its run rules' expansions, merged in order (<see cref="HunkApplier.OrderKey"/>,
+    /// then new start) one at a time.</summary>
+    private static IEnumerable<Hunk> InOrder(FileDelta f)
+    {
+        var sources = new List<IEnumerator<Hunk>> { f.Hunks.OrderBy(HunkApplier.OrderKey).ThenBy(h => h.NewStart).GetEnumerator() };
+        sources.AddRange(f.RunHunks.Select(r => r.Expand().GetEnumerator()));
+        var queue = new PriorityQueue<IEnumerator<Hunk>, (int, int)>();
+        try
+        {
+            foreach (var s in sources)
+                if (s.MoveNext()) queue.Enqueue(s, (HunkApplier.OrderKey(s.Current), s.Current.NewStart));
+            while (queue.TryDequeue(out var s, out _))
+            {
+                yield return s.Current;
+                if (s.MoveNext()) queue.Enqueue(s, (HunkApplier.OrderKey(s.Current), s.Current.NewStart));
+            }
+        }
+        finally
+        {
+            foreach (var s in sources) s.Dispose();
+        }
     }
 
     /// <summary>A file's lines as <see cref="LineText.SplitLines"/> gives them (split on '\n', a '\r' kept), streamed.</summary>

@@ -73,6 +73,28 @@ public static class ResultStore
         return dir;
     }
 
+    /// <summary>
+    /// A finished compare's directory that another process pruned while this one still holds the compare, saved again
+    /// (change lists and compare.json): a diff, patch, report or overlay written into it next would otherwise recreate
+    /// it without compare.json, never listed and never pruned. A save that fails is left to the write that follows.
+    /// </summary>
+    public static void Restore(Session s)
+    {
+        if (s.ResultDir is not { } dir || File.Exists(Path.Combine(dir, MetaName))) return;
+        object? result = s switch { CompareSession c => c.Report, Compare3Session t => t.Report, _ => null };
+        if (result is null) return;
+        lock (s)
+        {
+            if (File.Exists(Path.Combine(dir, MetaName))) return;
+            try
+            {
+                Directory.CreateDirectory(dir);
+                Save(s, result);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
     /// <summary>Save a finished compare: the change list(s) first, then compare.json flips to "done".</summary>
     internal static void Save(Session s, object result)
     {

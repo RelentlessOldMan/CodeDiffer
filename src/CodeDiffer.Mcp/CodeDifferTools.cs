@@ -238,6 +238,7 @@ public static class CodeDifferTools
         var dir = out_dir;
         if (dir is null && t.ResultDir is { } rd)
         {
+            ResultStore.Restore(t); // pruned by another process: saved again before the overlay goes into it
             // The default is a fresh directory each time (merge, merge-2, ...): an overlay written earlier may be in use.
             dir = Path.Combine(rd, "merge");
             for (int n = 2; Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any(); n++)

@@ -50,13 +50,25 @@ public static class HunkApplier
     {
         foreach (var h in hunks)
             if (!OpFits(h)) return $"{Show(h)}: its op doesn't fit its line counts";
+        return ProblemInOrder(oldLines, newLines, hunks.OrderBy(OrderKey).ThenBy(h => h.NewStart).ToList(), whitespaceOnly);
+    }
+
+    /// <summary>Where a hunk sits in the old file, for ordering: an insert after its <c>OldStart</c>, others at it.</summary>
+    public static int OrderKey(Hunk h) => h.OldLines == 0 ? h.OldStart : h.OldStart - 1;
+
+    /// <summary>
+    /// <see cref="Problem"/> over hunks already in order (<see cref="OrderKey"/>, then <c>NewStart</c>) and streamed too,
+    /// so a giant file's run rules are never held at once: one out of order overlaps the one before it.
+    /// </summary>
+    public static string? ProblemInOrder(IEnumerable<string> oldLines, IEnumerable<string> newLines, IEnumerable<Hunk> ordered, bool whitespaceOnly = false)
+    {
         using var o = oldLines.GetEnumerator();
         using var n = newLines.GetEnumerator();
         int oi = 0, ni = 0; // lines consumed
         bool first = true;
-        var ordered = hunks.OrderBy(h => h.OldLines == 0 ? h.OldStart : h.OldStart - 1).ThenBy(h => h.NewStart).ToList();
         foreach (var h in ordered)
         {
+            if (!OpFits(h)) return $"{Show(h)}: its op doesn't fit its line counts";
             int copyUntil = h.OldLines == 0 ? h.OldStart : h.OldStart - 1;
             if (copyUntil < oi) return $"{Show(h)}: overlaps the hunk before it";
             if (!first && copyUntil == oi) return $"{Show(h)}: abuts the hunk before it (contiguous changes are one hunk)";

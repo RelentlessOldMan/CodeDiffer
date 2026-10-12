@@ -20,9 +20,13 @@ public static class AgentViews
 
     /// <summary>Where capped diffs, exported changesets and apply reports go: the compare's result directory, or
     /// (for an unsaved compare) %TEMP%\codediffer\&lt;id&gt; — CODEDIFFER_OUT_DIR overrides the temp base.</summary>
-    public static string OutDir(Session s) => s.ResultDir ?? Path.Combine(
-        Environment.GetEnvironmentVariable("CODEDIFFER_OUT_DIR") is { Length: > 0 } d ? d : Path.Combine(Path.GetTempPath(), "codediffer"),
-        s.Id);
+    public static string OutDir(Session s)
+    {
+        ResultStore.Restore(s); // pruned by another process: saved again before anything is written into it
+        return s.ResultDir ?? Path.Combine(
+            Environment.GetEnvironmentVariable("CODEDIFFER_OUT_DIR") is { Length: > 0 } d ? d : Path.Combine(Path.GetTempPath(), "codediffer"),
+            s.Id);
+    }
 
     /// <summary>
     /// A warning when a file's size on disk no longer matches what the compare recorded — the diff is rendered

@@ -33,8 +33,9 @@ public static class MergeOverlay
 
     private const string Incomplete = "INCOMPLETE.txt";
 
-    /// <summary>Refuse a directory inside any of the three trees, or one that isn't new or empty (checked before a
-    /// long compare too, so a bad directory fails at once).</summary>
+    /// <summary>Refuse a directory inside any of the three trees, one that isn't new or empty, or one that can't be made
+    /// (a file, a file above it, a drive that isn't there) — checked before a long compare too, so a bad directory fails
+    /// at once.</summary>
     /// <param name="reportDir">The HTML report's directory, when one is written too: it is written first, so an overlay
     /// in it (or holding it) would only be refused after the compare.</param>
     public static void CheckDir(string dir, string baseDir, string v1, string v2, string? reportDir = null)
@@ -47,6 +48,15 @@ public static class MergeOverlay
                 throw new ArgumentException($"the overlay directory {dir} is inside the {name} tree {root}; write it somewhere else");
         if (Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any())
             throw new ArgumentException($"{dir} is not empty; the overlay needs a new or empty directory");
+        // A file where the directory, or one above it, would go, or a drive or share that isn't there, can't be created.
+        for (var d = dir; d is not null; d = Path.GetDirectoryName(d))
+        {
+            if (File.Exists(d))
+                throw new ArgumentException(d == dir ? $"{dir} is a file; the overlay needs a new or empty directory"
+                                                     : $"{d} is a file, so the overlay directory {dir} can't be made under it");
+            if (Directory.Exists(d)) return;
+        }
+        throw new ArgumentException($"the overlay directory {dir} can't be made: its drive or share {Path.GetPathRoot(dir)} isn't there");
     }
 
     /// <param name="dir">A new or empty directory, not inside any of the three trees.</param>

@@ -130,12 +130,16 @@ unpaired UTF-16 surrogate (legal on NTFS) is saved losslessly, so it reopens as 
 `entries.jsonl` (3-way) hold the verdicts. Only verdicts are stored, not file contents: any compare_id (or
 the directory) reopens without re-comparing (`list_compares`, CLI `results`), and a diff rendered later
 from the live trees warns when a file's size no longer matches what was compared. Capped patches, apply
-reports and the HTML report go into the same directory.
+reports and the HTML report go into the same directory; one pruned by another process while this one still holds
+the compare is saved again first, so nothing written there is left unlisted and never pruned.
 
 Renames cost little on a warm compare: the pure (byte-identical) pass hashes only adds and removes whose size
 occurs on both sides, in parallel, and uses the hash ledgers (a second run reads nothing for it); the edited
 pass reads the text candidates in parallel, skips every pair whose line counts alone rule out the 50% threshold,
-and scores the rest in parallel — exactly the contract's similarity, the same pairs as scoring all of them. Both
+and scores the rest in parallel — exactly the contract's similarity, the same pairs as scoring all of them. It
+keeps each removed file's best few candidates, not every pair over the threshold (scanning a file again, for more,
+if they all go elsewhere), so thousands of near-alike files (Unity `.meta`, generated stubs) pair as before in
+little memory: 2,000 × 2,000 such files take ~5 s. Both
 are counted in the bytes read. The edited pass is bounded, like git's rename limit: past 5,000 × 5,000 candidate
 pairs (at the bound, minutes: ~160 s for 5,000 × 5,000 files of 2,000 lines; 1,000 × 1,000 takes ~6 s), or 1 GB of
 their text, it is skipped and a note says so — those files are listed as added and removed
@@ -271,7 +275,8 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   `--include-identical`, `--max-diffs` without `--html`; `--html` with `--no-save`), a report `--out` inside a
   compared tree, that is a file, or that is a directory other than one of our reports, and `verify` given only one
   of `--base` / `--variant`. A results directory inside a compared tree, and a `compare3 --merge-out` in, or
-  holding, the report's `--out`, are refused before the compare too (exit 2). `compare --html` whose result could
+  holding, the report's `--out`, or one that can't be made (a file, under a file, on a drive that isn't there),
+  are refused before the compare too (exit 2). `compare --html` whose result could
   not be saved says there is no report, as `compare3` does. `--patch` renders with `--threads` threads.
   "Inside" is by what the paths resolve to, not only their spelling: a tree named through a junction, symlink,
   subst or mapped drive is the same tree, for the results directory, the overlay, the report and `apply-overlay`.
@@ -340,8 +345,8 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   too), and no replace wider than its change (its first and last lines differ on the two sides, one that replaces
   lines line for line leaves none of them as it was, and one of a different number shares no line between its old
   and new lines: an insert or delete dressed as a replace, or two hunks merged over the lines between). `whitespace`
-  records are checked too (each hunk must change only whitespace), run-rule hunks are expanded and the files
-  streamed, and a renamed file's reason is compared with CodeDiffer's own verdict on the pair. A `metadata`
+  records are checked too (each hunk must change only whitespace), run-rule hunks are expanded as they are checked (a rule
+  claiming lines to 2³¹ fails at the file's end, never held) and the files streamed, and a renamed file's reason is compared with CodeDiffer's own verdict on the pair. A `metadata`
   record (content identical) expects the compare to report its file unchanged: CodeDiffer doesn't diff
   metadata. A `binary`, `eol`, `encoding` or `metadata` record carrying hunks fails: the contract gives those
   reasons none. A path twice in the delta (two `modified` records, or removed and renamed from) is refused (exit 2).

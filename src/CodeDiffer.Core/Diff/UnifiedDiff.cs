@@ -31,14 +31,14 @@ public static class UnifiedDiff
     /// (edit-distance budget exceeded — still correct, the changed middle is shown as one block).
     /// </summary>
     public static bool Write(TextWriter w, string oldPath, string newPath, string? oldText, string? newText,
-        int context = DefaultContext, string? extraHeader = null)
+        int context = DefaultContext, string? extraHeader = null, CancellationToken ct = default)
     {
         var a = oldText is null ? [] : DiffLines(oldText);
         var b = newText is null ? [] : DiffLines(newText);
         // A whitespace-only change line for line is shown line for line (never a line paired with an identical one elsewhere).
         bool coarse = false;
         var hunks = (oldText is null || newText is null ? null : LineDiffer.WhitespaceAligned(a, b))
-                    ?? LineDiffer.Diff(a, b, LineDiffer.DefaultMaxEditDistance, out coarse);
+                    ?? LineDiffer.Diff(a, b, LineDiffer.DefaultMaxEditDistance, out coarse, ct: ct);
         if (hunks.Count == 0 && oldText is not null && newText is not null && extraHeader is null) return false;
 
         w.Write($"diff --git a/{oldPath} b/{newPath}\n");
