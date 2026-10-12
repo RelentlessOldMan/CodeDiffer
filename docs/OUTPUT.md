@@ -156,7 +156,10 @@ too, taken whole. A side with no line break at all has no line-ending style: it 
 (a CRLF file cut to one line is not CRLF → LF). Renames are followed (renamed on one side, edited
 on the other ⇒ merged at the new name). The same `get_summary` / `list_files` / `get_file_diff` / `get_stats`
 serve it; `get_file_diff` shows the merged file with diff3 markers (`<<<<<<< v1 / ||||||| base / ======= /
->>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested). A file's encoding (BOM, UTF-16) and
+>>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested). Among identical lines (a run of one
+repeated statement, a column of `}`), a line a side edited in place is a replace of the line it stands on — not,
+as Myers and git write it, an insert there and a delete of a copy at the run's far end — so two sides editing the
+same line of a run conflict, where `git merge-file` keeps both edits side by side as a clean merge. A file's encoding (BOM, UTF-16) and
 line-ending style (LF / CRLF / mixed) merge 3-way like its lines: a side that changed them wins (v2's LF→CRLF
 is kept when v1 also edited the file), the same change on both sides agrees, and different changes on both
 sides are a conflict of kind `encoding` or `line endings` (both files listed, nothing written); when the lines

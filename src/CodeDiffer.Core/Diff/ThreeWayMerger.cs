@@ -72,8 +72,8 @@ public static class ThreeWayMerger
         IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines, IReadOnlyList<string> v2Lines)
     {
         int n = baseLines.Count;
-        var h1 = LineDiffer.Diff(baseLines, v1Lines);
-        var h2 = LineDiffer.Diff(baseLines, v2Lines);
+        var h1 = InPlace(LineDiffer.Diff(baseLines, v1Lines), baseLines, v1Lines);
+        var h2 = InPlace(LineDiffer.Diff(baseLines, v2Lines), baseLines, v2Lines);
 
         // base→variant line map for each side (−1 where the base line was changed away by that side).
         var m1 = BuildMatchMap(h1, n);
@@ -116,6 +116,124 @@ public static class ThreeWayMerger
             regions.Add(new MergeRegion(kind, rStart, baseLen, v1s, len1, v2s, len2));
         }
         return regions;
+    }
+
+    /// <summary>
+    /// A side's hunks with each line edited in place among identical lines a replace where it stands. In a run of
+    /// identical lines (a block of <c>acc = …;</c>, a column of <c>}</c>) Myers — git too — writes an edited line as an
+    /// insert where it is and a delete of one of the run's copies wherever the search met it, often the run's end: as
+    /// minimal as the replace, but two sides editing the same line then show their inserts and deletes apart and merge
+    /// "cleanly", both edits side by side. Every copy in a run is the same line, so which one goes is free: each delete
+    /// moves to an insert in its run (nearest first), and the pair is the replace of the line it stands on. The same for
+    /// a run of identical new lines with one changed into it. As many lines kept as before: still a minimal diff.
+    /// </summary>
+    internal static List<Hunk> InPlace(List<Hunk> hunks, IReadOnlyList<string> a, IReadOnlyList<string> b)
+    {
+        if (hunks.Count < 2) return hunks; // a delete and an insert apart are two hunks
+        var map = BuildMatchMap(hunks, a.Count);
+        bool moved = PairRuns(map, a, b.Count);
+        var inv = Invert(map, b.Count);
+        moved |= PairRuns(inv, b, a.Count);
+        return moved ? HunksOf(Invert(inv, a.Count), a.Count, b.Count) : hunks;
+    }
+
+    /// <summary>Within each run of identical lines of <paramref name="a"/>, moves its deletes (lines mapped to −1) to the
+    /// inserts between its kept lines. True if any moved.</summary>
+    private static bool PairRuns(int[] map, IReadOnlyList<string> a, int bCount)
+    {
+        bool moved = false;
+        for (int r0 = 0; r0 < a.Count;)
+        {
+            int r1 = r0 + 1;
+            while (r1 < a.Count && string.Equals(a[r1], a[r0], StringComparison.Ordinal)) r1++;
+            if (r1 - r0 > 1) moved |= PairRun(map, r0, r1, bCount);
+            r0 = r1;
+        }
+        return moved;
+    }
+
+    private static bool PairRun(int[] map, int r0, int r1, int bCount)
+    {
+        // The run's kept lines (their b lines in order) and the deletes in each gap around them: gap k is before kept k.
+        var kept = new List<int>();
+        var dels = new List<int> { 0 };
+        for (int i = r0; i < r1; i++)
+            if (map[i] >= 0) { kept.Add(map[i]); dels.Add(0); }
+            else dels[^1]++;
+        int c = kept.Count;
+        if (c == 0 || c == r1 - r0) return false;
+
+        // The inserts in each gap a delete could pair with. The first and last gaps share theirs with the lines deleted
+        // just outside the run (up to the nearest kept line), which pair with them first.
+        int p = r0 - 1, q = r1;
+        while (p >= 0 && map[p] < 0) p--;
+        while (q < map.Length && map[q] < 0) q++;
+        var room = new int[c + 1];
+        room[0] = Math.Max(0, kept[0] - (p >= 0 ? map[p] + 1 : 0) - (r0 - p - 1));
+        for (int k = 1; k < c; k++) room[k] = kept[k] - kept[k - 1] - 1;
+        room[c] = Math.Max(0, (q < map.Length ? map[q] : bCount) - kept[c - 1] - 1 - (q - r1));
+
+        // Deletes beyond their gap's inserts are free; inserts beyond their gap's deletes want one. Pair the nearest
+        // free delete and wanting gap, again and again.
+        var free = new List<(int Gap, int Count)>();
+        var want = new List<(int Gap, int Count)>();
+        var count = new int[c + 1];
+        for (int k = 0; k <= c; k++)
+        {
+            count[k] = dels[k];
+            if (dels[k] > room[k]) free.Add((k, dels[k] - room[k]));
+            else if (dels[k] < room[k]) want.Add((k, room[k] - dels[k]));
+        }
+        if (free.Count == 0 || want.Count == 0 || free.Count + want.Count > 4096) return false;
+        while (free.Count > 0 && want.Count > 0)
+        {
+            int bf = 0, bw = 0;
+            for (int f = 0, w = 0; f < free.Count && w < want.Count;) // the closest pair is adjacent in gap order
+            {
+                if (Math.Abs(free[f].Gap - want[w].Gap) < Math.Abs(free[bf].Gap - want[bw].Gap)) (bf, bw) = (f, w);
+                if (free[f].Gap < want[w].Gap) f++; else w++;
+            }
+            int n = Math.Min(free[bf].Count, want[bw].Count);
+            count[free[bf].Gap] -= n;
+            count[want[bw].Gap] += n;
+            if ((free[bf] = (free[bf].Gap, free[bf].Count - n)).Count == 0) free.RemoveAt(bf);
+            if ((want[bw] = (want[bw].Gap, want[bw].Count - n)).Count == 0) want.RemoveAt(bw);
+        }
+
+        int at = r0;
+        for (int k = 0; k <= c; k++)
+        {
+            for (int x = 0; x < count[k]; x++) map[at++] = -1;
+            if (k < c) map[at++] = kept[k];
+        }
+        return true;
+    }
+
+    private static int[] Invert(int[] map, int count)
+    {
+        var inv = new int[count];
+        Array.Fill(inv, -1);
+        for (int i = 0; i < map.Length; i++)
+            if (map[i] >= 0) inv[map[i]] = i;
+        return inv;
+    }
+
+    /// <summary>The hunks of a line map, as <see cref="LineDiffer"/> writes them.</summary>
+    private static List<Hunk> HunksOf(int[] map, int n, int m)
+    {
+        var hunks = new List<Hunk>();
+        int pi = -1, pj = -1;
+        for (int i = 0; i <= n; i++)
+        {
+            int j = i < n ? map[i] : m;
+            if (j < 0) continue;
+            int del = i - pi - 1, ins = j - pj - 1;
+            if (del > 0 || ins > 0)
+                hunks.Add(new Hunk(del > 0 && ins > 0 ? HunkOp.Replace : del > 0 ? HunkOp.Delete : HunkOp.Insert,
+                    del == 0 ? pi + 1 : pi + 2, del, pj + 2, ins));
+            (pi, pj) = (i, j);
+        }
+        return hunks;
     }
 
     /// <summary>Map each base line to its 0-based variant line, or −1 if the side changed it away.</summary>
