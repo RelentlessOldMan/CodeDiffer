@@ -161,7 +161,7 @@ public sealed class ReasonClassifier
                 default:
                     f.LineStart = c == '\n';
                     if (f.LineStart) f.Quote = '\0';
-                    else if (TextInspector.IsQuote(c) && f.PrevRaw != '\\') f.Quote = TextInspector.Quote(f.Quote, c);
+                    else if (TextInspector.IsQuote(c) && !f.Escaped) f.Quote = TextInspector.Quote(f.Quote, c);
                     f.Last = c;
                     return c;
             }
@@ -185,9 +185,10 @@ public sealed class ReasonClassifier
         /// <summary>The quote of the string on this line the comparison is in, or '\0' (whitespace normalization).</summary>
         public char Quote;
 
-        /// <summary>The character before the last one <see cref="Next()"/> returned (-1 at the start).</summary>
-        public int PrevRaw { get; private set; } = -1;
-        private int _lastRaw = -1;
+        /// <summary>The last character <see cref="Next()"/> returned follows an odd run of backslashes: it is escaped
+        /// (in <c>"\\"</c> the closing quote is not).</summary>
+        public bool Escaped { get; private set; }
+        private bool _oddBackslashes;
 
         public Feed(string path, int skip, Encoding encoding, CancellationToken ct)
         {
@@ -208,8 +209,8 @@ public sealed class ReasonClassifier
             int c = _i < _n || Fill() ? _buf[_i++] : -1;
             HighBefore = _high;
             _high |= c >= 0x80;
-            PrevRaw = _lastRaw;
-            _lastRaw = c;
+            Escaped = _oddBackslashes;
+            _oddBackslashes = c == '\\' && !_oddBackslashes;
             return c;
         }
 

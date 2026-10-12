@@ -44,7 +44,7 @@ internal static class RealPath
     }
 
     /// <summary>A directory's volume serial and file id, or null when it can't be opened or has none.</summary>
-    private static (uint Volume, ulong File)? Identity(string dir)
+    internal static (uint Volume, ulong File)? Identity(string dir)
     {
         using var h = CreateFileW(dir, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
         if (h.IsInvalid || !GetFileInformationByHandle(h, out var info)) return null;
@@ -76,11 +76,13 @@ internal static class RealPath
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr sa, uint disposition, uint flags, IntPtr template);
 
+    // Native BY_HANDLE_FILE_INFORMATION is 52 bytes: its FILETIMEs are pairs of DWORDs, 4-aligned. Declared as long they
+    // would be 8-aligned, shifting every later field by 4 (the volume serial read as the size, the file id cut to 32 bits).
     [StructLayout(LayoutKind.Sequential)]
-    private struct ByHandleFileInformation
+    internal struct ByHandleFileInformation
     {
         public uint FileAttributes;
-        public long CreationTime, LastAccessTime, LastWriteTime;
+        public uint CreationLow, CreationHigh, LastAccessLow, LastAccessHigh, LastWriteLow, LastWriteHigh;
         public uint VolumeSerialNumber, FileSizeHigh, FileSizeLow, NumberOfLinks, FileIndexHigh, FileIndexLow;
     }
 

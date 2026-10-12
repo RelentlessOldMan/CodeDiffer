@@ -41,7 +41,8 @@ public static class HunkApplier
     /// counts; hunks are coalesced (an unchanged line between any two); each starts where the walk is on both sides
     /// (insert: <c>oldStart</c> = old lines before it; every hunk: <c>newStart</c> = new lines before it + 1, a delete
     /// too); a replace's first and last lines differ on the two sides (else it is wider than the change), and a replace
-    /// of as many lines as it replaces leaves none of them as it was (that line would split it in two). With
+    /// of as many lines as it replaces leaves none of them as it was (that line would split it in two), and one of a
+    /// different number shares no line between its old and new blocks (a minimal diff would keep that line). With
     /// <paramref name="whitespaceOnly"/>, each hunk must also change only whitespace
     /// (<see cref="Compare.TextInspector.WhitespaceKey"/>).
     /// </summary>
@@ -87,6 +88,10 @@ public static class HunkApplier
                 for (int k = 1; k < h.OldLines - 1; k++)
                     if (oldBlock[k] == newBlock[k])
                         return $"{Show(h)}: spans old line {h.OldStart + k:N0}, which is unchanged (two hunks, not one)";
+            // Lines not edited in place: a line both blocks hold is one the change keeps (an insert or a delete dressed as
+            // a replace, or two hunks merged over the lines between them); a minimal diff would have kept it.
+            if (h.Op == HunkOp.Replace && h.OldLines != h.NewLines && Kept(oldBlock, newBlock) is { } kept)
+                return $"{Show(h)}: keeps a line it replaces (\"{Clip(kept)}\" is on both sides: an unchanged line inside the hunk)";
             if (whitespaceOnly && !string.Equals(WsKey(oldBlock), WsKey(newBlock), StringComparison.Ordinal))
                 return $"{Show(h)}: changes more than whitespace";
         }
@@ -100,6 +105,16 @@ public static class HunkApplier
                 return $"old line {oi:N0} is outside every hunk but is not new line {ni:N0}";
         }
     }
+
+    /// <summary>A line both blocks hold, or null.</summary>
+    private static string? Kept(List<string> oldBlock, List<string> newBlock)
+    {
+        var (small, large) = oldBlock.Count <= newBlock.Count ? (oldBlock, newBlock) : (newBlock, oldBlock);
+        var set = new HashSet<string>(small, StringComparer.Ordinal);
+        return large.FirstOrDefault(set.Contains);
+    }
+
+    private static string Clip(string s) => s.Length <= 60 ? s : s[..60] + "…";
 
     private static string WsKey(List<string> lines)
         => Compare.TextInspector.WhitespaceKey(Compare.TextInspector.NormalizeEol(string.Join('\n', lines)));

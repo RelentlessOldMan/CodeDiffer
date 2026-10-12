@@ -35,7 +35,7 @@ public sealed record TreeCrossCheckResult(IReadOnlyList<FileHunkCheck> Files, IR
 /// The manifest's hunks must also be the canonical ones (<see cref="HunkApplier.Problem"/>: coalesced, each where the
 /// walk is, no replace wider than its change), since a hunk takes its text from the variant and a loose one would still
 /// rebuild. Content and whitespace files are checked (a whitespace file's hunks must change only whitespace), run-rule
-/// hunks expanded and the files streamed; binary/eol/encoding/metadata carry no textual hunks and are skipped.
+/// hunks expanded and the files streamed; binary/eol/encoding/metadata carry no textual hunks and are skipped (one that carries any fails).
 /// A rename with edits has its hunks under the new path (the contract keys them by <c>to</c>): its old side is the
 /// base's <c>from</c>.
 /// </summary>
@@ -57,7 +57,12 @@ public static class DeltaTreeCrossCheck
             bool comparable = f.Reason is ChangeReason.Content or ChangeReason.Whitespace;
             if (!comparable)
             {
-                results.Add(new FileHunkCheck(f.Path, reason, Checked: false, Reconstructs: false, ExactMatch: false, f.Hunks.Count, 0));
+                // The contract gives these reasons no textual hunks: one that carries any is wrong, whatever the trees hold.
+                if (f.Hunks.Count + f.RunHunks.Count > 0)
+                    results.Add(new FileHunkCheck(f.Path, reason, Checked: true, Reconstructs: false, ExactMatch: false, f.Hunks.Count + f.RunHunks.Count, 0,
+                        $"a {reason} record carries {f.Hunks.Count + f.RunHunks.Count} hunk(s); the contract gives it none"));
+                else
+                    results.Add(new FileHunkCheck(f.Path, reason, Checked: false, Reconstructs: false, ExactMatch: false, 0, 0));
                 continue;
             }
 

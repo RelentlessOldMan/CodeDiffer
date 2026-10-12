@@ -163,7 +163,8 @@ stays part of its line.
 **Merge overlay (built):** `write_merge(id[, out_dir])` (CLI `compare3 … --merge-out DIR`) writes the merge
 as an overlay on v1, never the whole tree: `files\` holds only what the merge changes in v1 (v2's one-sided
 changes, clean merges in the merged encoding and line endings, text conflicts with diff3 markers),
-`deletes.txt` the v1 paths to delete (v2's deletes, the old side of a move), `conflicts.txt` the conflicts
+`deletes.txt` the v1 paths to delete (v2's deletes, the old side of a move; an unpaired surrogate in a name,
+which UTF-8 can't hold, written `\uD800`–`\uDFFF` and read back by `apply-overlay`), `conflicts.txt` the conflicts
 with markers plus those that can't be one file (binary, large, modify/delete, rename/rename, path collision, file/directory clash, encoding, line endings)
 with each side's file, and `OVERLAY.txt` how to apply it: delete the paths in `deletes.txt` from v1, remove the
 directories that left empty, then copy `files\` over v1 (deletes first, so a file v2 turned into a directory, a
@@ -298,7 +299,8 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   digit and a dot (`1 .5` → `1.5`), a space taken out of a quoted string (`split(" ")` → `split("")`,
   `"Total: "` → `"Total:"`), a line joined, split or added, and NBSP / NEL (characters, not whitespace) are
   `content`. Whitespace is ASCII space, tab, VT and FF, whole or streamed alike. Strings and comments aren't
-  parsed: a quote not escaped by a backslash opens a string until the same quote or the line's end (so an
+  parsed: a quote not escaped by a backslash (one after an odd run of them: in `"\\"` the second quote closes the
+  string) opens a string until the same quote or the line's end (so an
   apostrophe in a comment only makes the rest of its line stricter), and a run of spaces widened inside a string
   literal reads as whitespace. A whitespace-only change is diffed line for line (each changed line a replace of
   itself), never a line paired with an identical one elsewhere.
@@ -335,12 +337,14 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   ones), as the contract defines them, even when its coordinates rebuild the file. A hunk takes its text from
   the variant, so rebuilding is not enough: the hunks must be the canonical ones — coalesced (an unchanged line
   between any two), each where the walk is on both sides (`newStart` = the new lines before it + 1, a delete's
-  too), and no replace wider than its change (its first and last lines differ on the two sides, and one that replaces
-  lines line for line leaves none of them as it was). `whitespace`
+  too), and no replace wider than its change (its first and last lines differ on the two sides, one that replaces
+  lines line for line leaves none of them as it was, and one of a different number shares no line between its old
+  and new lines: an insert or delete dressed as a replace, or two hunks merged over the lines between). `whitespace`
   records are checked too (each hunk must change only whitespace), run-rule hunks are expanded and the files
   streamed, and a renamed file's reason is compared with CodeDiffer's own verdict on the pair. A `metadata`
   record (content identical) expects the compare to report its file unchanged: CodeDiffer doesn't diff
-  metadata. A path twice in the delta (two `modified` records, or removed and renamed from) is refused (exit 2).
+  metadata. A `binary`, `eol`, `encoding` or `metadata` record carrying hunks fails: the contract gives those
+  reasons none. A path twice in the delta (two `modified` records, or removed and renamed from) is refused (exit 2).
 - `get_file_diff` / `export_changeset` / `-U` context past the file's length is the whole file; a negative one is
   refused (export) or none, never a corrupt hunk header. A patch written with no context (`-U 0`, `context=0`)
   says in a `#` line at its top, and in its summary, that it needs `git apply --unidiff-zero`.
@@ -360,9 +364,11 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   requires exactly the manifest's files, reasons and rename similarities (death 1.0.9: 1,561/1,561 and
   1,354/1,354); the 3-way gate needs the exact decomposition, or reconstruction AND a merge conflicting in
   exactly the manifest's files AND every region being what it says against the trees (a conflict both sides
-  changed, differently, that doesn't split at lines both sides keep into parts that merge cleanly; a clean merge its
-  side changed, neither overlapping nor abutting a change of the other side; an edit both sides made alike only where
-  they really did), AND compare3 itself
+  changed, differently, that some minimal alignment of each side leaves without a base line both sides keep — diff3
+  ends a region at one, so a conflict widened over unchanged lines or two regions joined fails, while among repeated
+  lines any alignment as good as the best counts; a clean merge its side changed, whose old and new lines share none
+  (one side's change is one hunk of a minimal diff), neither overlapping nor abutting another change, the other
+  side's or its own side's; an edit both sides made alike only where they really did), AND compare3 itself
   — over the whole trees, lines with their endings — conflicting in exactly the manifest's files and merging
   none it leaves out (death 1.0.9: 941 of 941). Every modified record's `oldSha`/`newSha`/`oldSize`/`newSize`
   is checked against the trees' files, whatever its reason: the digest only proves the manifest agrees with itself.

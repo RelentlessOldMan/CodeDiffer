@@ -15,7 +15,8 @@ public sealed record OverlayResult(string Dir, int FromV2, int Merged, int Marke
 /// <list type="bullet">
 /// <item><c>files\</c> — each file the merge changes in v1, at its merged path: v2's one-sided changes, clean merges,
 ///   and text conflicts written with diff3 markers (<c>&lt;&lt;&lt;&lt;&lt;&lt;&lt; v1</c> … <c>&gt;&gt;&gt;&gt;&gt;&gt;&gt; v2</c>).</item>
-/// <item><c>deletes.txt</c> — v1 paths to delete (removed by v2, or moved by a rename), one per line.</item>
+/// <item><c>deletes.txt</c> — v1 paths to delete (removed by v2, or moved by a rename), one per line (an unpaired
+///   surrogate written <c>\uXXXX</c>).</item>
 /// <item><c>conflicts.txt</c> — the conflicts: those in <c>files\</c> with markers, and those that can't be written
 ///   as one file (binary, large, modify/delete, rename/rename, path collision, encoding, line endings) with each side's file to choose from.</item>
 /// <item><c>OVERLAY.txt</c> — what this is and how to apply it.</item>
@@ -159,7 +160,9 @@ public static class MergeOverlay
         foreach (var w in done) if (w.AlsoDelete is { } old) deletes.Add(old);
         deletes.ExceptWith(done.Select(w => w.Dest));
 
-        File.WriteAllText(Path.Combine(dir, "deletes.txt"), string.Concat(deletes.Select(d => d + "\n")), new UTF8Encoding(false));
+        // UTF-8 can't carry an unpaired surrogate (it would be written as U+FFFD: another file's name), so one is
+        // written \uXXXX; a '\' is never in a '/'-separated line otherwise, and the applier reads it back.
+        File.WriteAllText(Path.Combine(dir, "deletes.txt"), string.Concat(deletes.Select(d => ResultStore.Escaped(d) + "\n")), new UTF8Encoding(false));
         var c = new StringBuilder();
         var markers = done.Where(w => w.Kind == Kind.Markers).ToList();
         c.Append($"# {markers.Count} conflict(s) written to files\\ with diff3 markers (<<<<<<< v1 ... ||||||| base ... ======= ... >>>>>>> v2):\n");
@@ -184,7 +187,8 @@ public static class MergeOverlay
               v2   {v2}
 
             To apply, in this order:
-              1. delete the v1 paths listed in deletes.txt (one per line, relative to v1, '/' separated, UTF-8);
+              1. delete the v1 paths listed in deletes.txt (one per line, relative to v1, '/' separated, UTF-8; an
+                 unpaired surrogate, which UTF-8 can't hold, is written \uD800-\uDFFF);
               2. remove the directories the deletes left empty (needed where v2 put a file in a directory's place);
               3. copy files\ over v1.
             Or let CodeDiffer do all three (dry run first; safe to stop and run again):

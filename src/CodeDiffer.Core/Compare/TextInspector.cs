@@ -172,7 +172,7 @@ internal static class TextInspector
     /// elsewhere. So reindenting, trailing spaces and spacing round punctuation ("x=1" → "x = 1") are whitespace; a
     /// space that joins or splits a token ("return x" → "returnx", "- -x" → "--x", "/ *" → "/*", "1 .5" → "1.5") or is
     /// taken out of a string (<c>split(" ")</c> → <c>split("")</c>, <c>"Total: "</c> → <c>"Total:"</c>) and a line
-    /// joined, split or added are content. A quote not escaped by a backslash opens a string, the same quote closes it,
+    /// joined, split or added are content. A quote not escaped by a backslash (one after an odd run of them: in <c>"\\"</c> the second quote closes) opens a string, the same quote closes it,
     /// and so does a line ending (an apostrophe in prose only makes the rest of its line stricter). The width of a run is never kept,
     /// so a run widened or narrowed inside a string literal reads as whitespace too.
     /// </summary>
@@ -181,9 +181,12 @@ internal static class TextInspector
         var sb = new StringBuilder(s.Length);
         bool lineStart = true;
         char quote = '\0'; // the quote of the string the scan is in, or none
+        bool escaped = false; // the next character follows an odd run of backslashes
         for (int i = 0; i < s.Length; i++)
         {
             char c = s[i];
+            bool isEscaped = escaped;
+            escaped = c == '\\' && !escaped;
             if (IsHorizontalSpace(c))
             {
                 while (i + 1 < s.Length && IsHorizontalSpace(s[i + 1])) i++;
@@ -193,7 +196,7 @@ internal static class TextInspector
             }
             lineStart = c == '\n';
             if (lineStart) quote = '\0';
-            else if (IsQuote(c) && (i == 0 || s[i - 1] != '\\')) quote = Quote(quote, c);
+            else if (IsQuote(c) && !isEscaped) quote = Quote(quote, c);
             sb.Append(c);
         }
         return sb.ToString();

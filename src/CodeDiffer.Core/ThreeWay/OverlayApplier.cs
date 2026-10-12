@@ -56,9 +56,10 @@ public static class OverlayApplier
 
         // Every delete is checked before anything is touched: a bad line refuses the whole run.
         var deletes = new List<string>();
-        foreach (var line in File.ReadAllLines(deletesFile, Encoding.UTF8))
+        foreach (var written in File.ReadAllLines(deletesFile, Encoding.UTF8))
         {
-            if (line.Length == 0) continue;
+            if (written.Length == 0) continue;
+            var line = ResultStore.Unescaped(written); // an unpaired surrogate is written \uXXXX (UTF-8 can't hold it)
             var full = Path.GetFullPath(Path.Combine(target, line.Replace('/', Path.DirectorySeparatorChar)));
             if (Path.IsPathRooted(line) || line.Split('/', '\\').Any(p => p is "" or "." or "..") || !ResultStore.IsUnder(full, target) || full == target)
                 throw new ArgumentException($"deletes.txt has a line that is not a plain relative path: \"{line}\"");

@@ -80,7 +80,7 @@ public sealed class Round11Tier1Tests : IDisposable
         ThreeTrees([3, 20], [7, 20]);
         var r = Check([At(3, 5), At(20)], []);
         Assert.False(r.Ok);
-        Assert.Contains(r.UnsoundRegions, u => u.Contains("f.txt:3,5") && u.Contains("merge cleanly"));
+        Assert.Contains(r.UnsoundRegions, u => u.Contains("f.txt:3,5") && u.Contains("two regions in one"));
     }
 
     [Fact]

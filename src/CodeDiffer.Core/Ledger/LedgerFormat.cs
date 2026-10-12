@@ -106,7 +106,8 @@ public static class LedgerFormat
             fs.ReadExactly(h);
             return BinaryPrimitives.ReadUInt32LittleEndian(h) == BaseMagic ? BinaryPrimitives.ReadInt32LittleEndian(h[4..]) : 0;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or EndOfStreamException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or EndOfStreamException
+                                       or ArgumentException or NotSupportedException)
         {
             return 0;
         }
@@ -282,7 +283,8 @@ public static class LedgerFormat
     }
 
     private static bool IsBareFileName(string name)
-        => name.Length > 0 && name.IndexOfAny(['/', '\\', ':']) < 0 && name != "." && name != "..";
+        => name.Length > 0 && name.IndexOfAny(['/', '\\', ':', '\0']) < 0 && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0
+           && name != "." && name != "..";
 
     private static void TryDelete(string path)
     {
