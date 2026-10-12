@@ -28,6 +28,11 @@ public sealed record WalkResult(IReadOnlyList<FileEntry> Files, int DroppedDirec
 /// allow many in flight; locally it washes). A listing that fails is retried once; one that still fails
 /// is counted in <see cref="WalkResult.DroppedDirectories"/> so the caller can disclose the gap — a
 /// network hiccup must never silently read as "files missing".
+///
+/// A link is never followed — but a server that follows a symlink itself (Samba's default) shows it as a plain
+/// directory. One that lists exactly what a directory above it lists (the same names, the same file ids) is that
+/// directory reached again, a loop (<c>x -> ..</c>): skipped as a link, not listed again and again until the server
+/// gives up.
 /// </summary>
 public sealed class TreeWalker
 {
@@ -52,33 +57,42 @@ public sealed class TreeWalker
         var files = new ConcurrentBag<FileEntry>();
         var skipped = new ConcurrentBag<SkippedPath>();
         int dropped = 0;
-        var frontier = new List<string> { rootFull };
+        string Rel(string full) => full[(rootFull.Length + (rootFull.EndsWith(Path.DirectorySeparatorChar) ? 0 : 1))..].Replace('\\', '/');
+        var frontier = new List<(string Dir, Above? Above)> { (rootFull, null) };
         while (frontier.Count > 0)
         {
-            var next = new ConcurrentBag<string>();
+            var next = new ConcurrentBag<(string, Above?)>();
             try
             {
-                Parallel.ForEach(frontier, new ParallelOptions { MaxDegreeOfParallelism = _parallelism, CancellationToken = ct }, dir =>
+                Parallel.ForEach(frontier, new ParallelOptions { MaxDegreeOfParallelism = _parallelism, CancellationToken = ct }, item =>
                 {
+                    var (dir, above) = item;
                     var rows = ListWithRetry(dir, dir == rootFull);
                     if (rows is null)
                     {
                         Interlocked.Increment(ref dropped);
                         return;
                     }
+                    var sig = Signature(rows);
+                    for (var a = above; sig is not null && a is not null; a = a.Up)
+                        if (a.Signature == sig)
+                        {
+                            skipped.Add(new SkippedPath(Rel(dir), SkipKind.Link, true)); // a loop the server followed
+                            return;
+                        }
+                    var mine = new Above(sig, above);
                     int found = 0;
                     foreach (var row in rows)
                     {
                         var full = dir + (dir.EndsWith(Path.DirectorySeparatorChar) ? "" : Path.DirectorySeparatorChar.ToString()) + row.Name;
-                        string Rel() => full[(rootFull.Length + (rootFull.EndsWith(Path.DirectorySeparatorChar) ? 0 : 1))..].Replace('\\', '/');
-                        if (row.IsLink) { skipped.Add(new SkippedPath(Rel(), SkipKind.Link, row.IsDirectory)); continue; } // not followed
-                        if (!UsableName(row.Name)) { skipped.Add(new SkippedPath(Rel(), SkipKind.Name, row.IsDirectory)); continue; }
+                        if (row.IsLink) { skipped.Add(new SkippedPath(Rel(full), SkipKind.Link, row.IsDirectory)); continue; } // not followed
+                        if (!UsableName(row.Name)) { skipped.Add(new SkippedPath(Rel(full), SkipKind.Name, row.IsDirectory)); continue; }
                         if (row.IsDirectory)
                         {
-                            if (!_ignoredDirs.Contains(row.Name)) next.Add(full);
+                            if (!_ignoredDirs.Contains(row.Name)) next.Add((full, mine));
                             continue;
                         }
-                        files.Add(new FileEntry(Rel(), full, row.Length, new DateTime(row.LastWriteUtcTicks, DateTimeKind.Utc),
+                        files.Add(new FileEntry(Rel(full), full, row.Length, new DateTime(row.LastWriteUtcTicks, DateTimeKind.Utc),
                             row.ChangeUtcTicks, row.FileId));
                         found++;
                     }
@@ -98,6 +112,25 @@ public sealed class TreeWalker
         var skips = skipped.ToList();
         skips.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path));
         return new WalkResult(list, dropped, skips);
+    }
+
+    /// <summary>The directories above one being listed, nearest first, by what each listed.</summary>
+    private sealed record Above(UInt128? Signature, Above? Up);
+
+    /// <summary>What a directory lists, as one number: its names and their file ids. Null when the server gives no file
+    /// ids — names alone can't tell a loop from a real <c>a/a/a</c>.</summary>
+    internal static UInt128? Signature(List<DirRow> rows)
+    {
+        if (!rows.Exists(r => r.FileId != 0)) return null;
+        var h = new System.IO.Hashing.XxHash128();
+        Span<byte> id = stackalloc byte[8];
+        foreach (var r in rows.OrderBy(r => r.Name, StringComparer.Ordinal))
+        {
+            h.Append(System.Runtime.InteropServices.MemoryMarshal.AsBytes(r.Name.AsSpan()));
+            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(id, r.FileId);
+            h.Append(id);
+        }
+        return h.GetCurrentHashAsUInt128();
     }
 
     /// <summary>

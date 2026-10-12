@@ -250,8 +250,10 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   as itself, left out of rename matching), every summary warns, and the CLI exits 3. Files are opened so a
   writer can keep writing (a log being appended to is still read), and the hashes read are kept even when a
   compare fails.
-- Symlinks and junctions are not followed (one can point outside the tree, or back into it); each skipped one
-  is counted and every summary says how many (compare3's too, per side). A file one tree has where the other
+- Symlinks and junctions are not followed (one can point outside the tree, or back into it); a link a server
+  follows itself (Samba's default) arrives as a plain directory, and one that lists exactly what a directory above
+  it lists (the same names and file ids: `x -> ..`) is that directory again, skipped as a link instead of listed
+  over and over until the server gives up. Each skipped one is counted and every summary says how many (compare3's too, per side). A file one tree has where the other
   has a link is not "added" or "removed" but unknown — `[unreadable]`, a `behind a link` conflict in compare3,
   never ported or written as a delete. Other reparse points — OneDrive / cloud placeholders, deduplicated
   files — are ordinary files and directories and are compared. Paths past 260 characters are listed and
@@ -276,8 +278,8 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   compared tree, that is a file, or that is a directory other than one of our reports, and `verify` given only one
   of `--base` / `--variant`. A results directory inside a compared tree, and a `compare3 --merge-out` in, or
   holding, the report's `--out`, or one that can't be made (a file, under a file, on a drive that isn't there),
-  are refused before the compare too (exit 2). `compare --html` whose result could
-  not be saved says there is no report, as `compare3` does. `--patch` renders with `--threads` threads.
+  are refused before the compare too (exit 2). `--html` whose result could not be saved
+  says there is no report and exits 2, `compare` and `compare3` alike. `--patch` renders with `--threads` threads.
   "Inside" is by what the paths resolve to, not only their spelling: a tree named through a junction, symlink,
   subst or mapped drive is the same tree, for the results directory, the overlay, the report and `apply-overlay`.
 - `list_files(reason="unreadable")` lists the files the listings mark `[unreadable]`, of any status; another
@@ -292,7 +294,8 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   `write_merge` and report, says it was rendered from the trees as they are now.
 - On a 3-way compare, `list_files`'s `reason` and `lines` and `get_file_diff`'s `context` are 2-way only: given,
   they are an error, never silently ignored. `write_merge` with no `out_dir` writes `merge\` in the result
-  directory, then `merge-2\`, `merge-3\`, … once that holds an overlay, never refusing its own default.
+  directory, then `merge-2\`, `merge-3\`, … once that holds an overlay, never refusing its own default: one another writer claims
+  at the same moment moves it on to the next.
 - A compare id is looked up as an id first: a folder in the working directory named like one is not that compare
   (a result directory given by its path still opens).
 - `results --prune` never deletes through a link: a junction or symlink in the results directory is not a saved
@@ -385,7 +388,9 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   error (exit 2), never a partial verify. The pages in order are the delta's `modified`, so the digest and the
   tree checks run exactly as on the monolithic delta.
 - `verify` reads `_meta.deltaKind` `diff` (or none: the first deltas had none) and `conflict-3way`; any other kind
-  (CodeSpawner's planned `symbol`, a typo, a number) is refused (exit 2), never verified as a diff.
+  (CodeSpawner's planned `symbol`, a typo, a number) is refused (exit 2), never verified as a diff. A conflict
+  manifest without both its `conflicts` and `mergedClean` arrays, or with a clean merge whose `side` is not `v1`
+  or `v2` (a `v3` would have been checked against v1), is refused too.
 - Deterministic output: two runs over the same inputs are byte-identical, so a diff of results is real.
 
 ## 7. Defaults (tunable)

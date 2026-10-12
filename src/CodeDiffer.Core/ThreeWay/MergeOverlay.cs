@@ -9,6 +9,10 @@ namespace CodeDiffer.Core.ThreeWay;
 public sealed record OverlayResult(string Dir, int FromV2, int Merged, int Markers, int Moved, int Deletes, int Unresolved, long Bytes,
     int Failed = 0, int DroppedDirectories = 0);
 
+/// <summary>The overlay directory isn't new or empty (or another writer claimed it first).</summary>
+public sealed class OverlayDirTakenException(string dir)
+    : ArgumentException($"{dir} is not empty; the overlay needs a new or empty directory");
+
 /// <summary>
 /// Writes a compare3 merge as an OVERLAY on v1: only what turns v1 into the merged tree, never the whole tree (death
 /// is 94 GB; its merge touches a few thousand files). The directory holds
@@ -47,7 +51,7 @@ public static class MergeOverlay
             if (ResultStore.Overlaps(dir, root, oneWay: true))
                 throw new ArgumentException($"the overlay directory {dir} is inside the {name} tree {root}; write it somewhere else");
         if (Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any())
-            throw new ArgumentException($"{dir} is not empty; the overlay needs a new or empty directory");
+            throw new OverlayDirTakenException(dir);
         // A file where the directory, or one above it, would go, or a drive or share that isn't there, can't be created.
         for (var d = dir; d is not null; d = Path.GetDirectoryName(d))
         {
@@ -78,7 +82,7 @@ public static class MergeOverlay
         }
         catch (IOException)
         {
-            throw new ArgumentException($"{dir} is not empty; the overlay needs a new or empty directory");
+            throw new OverlayDirTakenException(dir);
         }
         var files = Path.Combine(dir, "files");
         Directory.CreateDirectory(files);

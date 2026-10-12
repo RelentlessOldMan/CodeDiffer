@@ -235,24 +235,24 @@ public static class CodeDifferTools
         if (s is not Compare3Session t) return $"compare {s!.Id} is a 2-way compare; write_merge needs a compare3 (apply_changeset ports a 2-way change set)";
         if (!t.IsDone) return $"compare {t.Id} is still running — wait for it (get_summary wait_seconds) first";
         if (t.Error is { } failed) return $"compare {t.Id} {(t.Cancelled ? "was cancelled" : $"failed: {failed}")}";
-        var dir = out_dir;
-        if (dir is null && t.ResultDir is { } rd)
+        if (out_dir is null && t.ResultDir is null) return "error: out_dir is required (this compare has no result directory)";
+        if (out_dir is null) ResultStore.Restore(t); // pruned by another process: saved again before the overlay goes into it
+        // The default is a fresh directory each time (merge, merge-2, ...): an overlay written earlier may be in use, and
+        // one another writer claims between the look and the write moves this one on to the next.
+        for (int n = 1; ; n++)
         {
-            ResultStore.Restore(t); // pruned by another process: saved again before the overlay goes into it
-            // The default is a fresh directory each time (merge, merge-2, ...): an overlay written earlier may be in use.
-            dir = Path.Combine(rd, "merge");
-            for (int n = 2; Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any(); n++)
-                dir = Path.Combine(rd, $"merge-{n}");
-        }
-        if (dir is null) return "error: out_dir is required (this compare has no result directory)";
-        try
-        {
-            var o = MergeOverlay.Write(t.Report!, t.Base, t.V1, t.V2, dir, t.Options.Parallelism);
-            return (t.Reopened ? "note: reopened compare — written from the trees as they are now\n" : "") + ThreeWayViews.OverlayText(o);
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
-        {
-            return $"error: {ex.Message}";
+            var dir = out_dir ?? Path.Combine(t.ResultDir!, n == 1 ? "merge" : $"merge-{n}");
+            if (out_dir is null && Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any()) continue;
+            try
+            {
+                var o = MergeOverlay.Write(t.Report!, t.Base, t.V1, t.V2, dir, t.Options.Parallelism);
+                return (t.Reopened ? "note: reopened compare — written from the trees as they are now\n" : "") + ThreeWayViews.OverlayText(o);
+            }
+            catch (OverlayDirTakenException) when (out_dir is null) { }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+            {
+                return $"error: {ex.Message}";
+            }
         }
     }
 

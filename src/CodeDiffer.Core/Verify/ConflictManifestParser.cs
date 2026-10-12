@@ -28,32 +28,42 @@ public static class ConflictManifestParser
         string? v1Tree = Str(meta, "v1Tree");
         string? v2Tree = Str(meta, "v2Tree");
 
+        // Both sections are always present (the contract digests both): one missing is a manifest cut short, not "none".
         var conflicts = new List<Conflict>();
-        if (root.TryGetProperty("conflicts", out var cs) && cs.ValueKind == JsonValueKind.Array)
-            foreach (var c in cs.EnumerateArray())
-            {
-                var v1 = c.GetProperty("v1");
-                var v2 = c.GetProperty("v2");
-                conflicts.Add(new Conflict(
-                    Req(c, "path"),
-                    c.GetProperty("baseStart").GetInt32(),
-                    c.GetProperty("baseLines").GetInt32(),
-                    CanonicalTokens.Op(Req(v1, "op")), v1.GetProperty("newStart").GetInt32(), v1.GetProperty("newLines").GetInt32(),
-                    CanonicalTokens.Op(Req(v2, "op")), v2.GetProperty("newStart").GetInt32(), v2.GetProperty("newLines").GetInt32()));
-            }
+        foreach (var c in Array(root, "conflicts"))
+        {
+            var v1 = c.GetProperty("v1");
+            var v2 = c.GetProperty("v2");
+            conflicts.Add(new Conflict(
+                Req(c, "path"),
+                c.GetProperty("baseStart").GetInt32(),
+                c.GetProperty("baseLines").GetInt32(),
+                CanonicalTokens.Op(Req(v1, "op")), v1.GetProperty("newStart").GetInt32(), v1.GetProperty("newLines").GetInt32(),
+                CanonicalTokens.Op(Req(v2, "op")), v2.GetProperty("newStart").GetInt32(), v2.GetProperty("newLines").GetInt32()));
+        }
 
         var clean = new List<CleanMerge>();
-        if (root.TryGetProperty("mergedClean", out var ms) && ms.ValueKind == JsonValueKind.Array)
-            foreach (var m in ms.EnumerateArray())
-                clean.Add(new CleanMerge(
-                    Req(m, "path"),
-                    Req(m, "side"),
-                    CanonicalTokens.Op(Req(m, "op")),
-                    m.GetProperty("oldStart").GetInt32(), m.GetProperty("oldLines").GetInt32(),
-                    m.GetProperty("newStart").GetInt32(), m.GetProperty("newLines").GetInt32()));
+        foreach (var m in Array(root, "mergedClean"))
+        {
+            // Only v1 or v2: anything else ("v3", "V2") would be read as v1, its edit checked against the wrong tree.
+            var side = Req(m, "side");
+            if (side is not ("v1" or "v2")) throw new FormatException($"'side' must be v1 or v2, not '{side}'");
+            clean.Add(new CleanMerge(
+                Req(m, "path"),
+                side,
+                CanonicalTokens.Op(Req(m, "op")),
+                m.GetProperty("oldStart").GetInt32(), m.GetProperty("oldLines").GetInt32(),
+                m.GetProperty("newStart").GetInt32(), m.GetProperty("newLines").GetInt32()));
+        }
 
         return new ConflictManifest(version, v1Tree, v2Tree, conflicts, clean, sha);
     }
+
+    /// <summary>A required array property's items; anything else is a malformed manifest (<see cref="FormatException"/>).</summary>
+    private static JsonElement.ArrayEnumerator Array(JsonElement obj, string name)
+        => obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array
+            ? v.EnumerateArray()
+            : throw new FormatException($"'{name}' must be an array (both sections are always present)");
 
     /// <summary>A required string property; anything else is a malformed manifest (<see cref="FormatException"/>).</summary>
     private static string Req(JsonElement obj, string name)

@@ -225,7 +225,7 @@ public sealed class MergeOverlayTests : IDisposable
         var r = TreeMerger.Run(_b, _v1, _v2, NoCache);
         var busy = Path.Combine(_dir, "busy");
         Put("busy/x.txt", "x");
-        Assert.Contains("not empty", Assert.Throws<ArgumentException>(() => MergeOverlay.Write(r, _b, _v1, _v2, busy)).Message);
+        Assert.Contains("not empty", Assert.Throws<OverlayDirTakenException>(() => MergeOverlay.Write(r, _b, _v1, _v2, busy)).Message);
         Assert.Contains("inside the v1 tree", Assert.Throws<ArgumentException>(() => MergeOverlay.Write(r, _b, _v1, _v2, Path.Combine(_v1, "out"))).Message);
     }
 

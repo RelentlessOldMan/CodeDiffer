@@ -134,12 +134,15 @@ static int Compare(string[] args)
 
     int? htmlCode = null; // a failed or stopped report: its exit code, but only after the warnings below
     if (session.ResultDir is not null)
-    {
         info.WriteLine(session.SaveError is { } se ? $"  saved      NOT saved: {se}" : $"  saved      {session.ResultDir}  (id {session.Id})");
-        if (args.Contains("--html"))
+    if (args.Contains("--html"))
+    {
+        if (session.ResultDir is not null && session.SaveError is null) htmlCode = WriteHtml(session, args, info);
+        else
         {
-            if (session.SaveError is null) htmlCode = WriteHtml(session, args, info);
-            else Console.Error.WriteLine("note: no report: the result was not saved");
+            // Asked for and not written: a failed --html (exit 2), as the docs say, not a clean exit.
+            Console.Error.WriteLine("error: no report: the result was not saved");
+            htmlCode = 2;
         }
     }
 
@@ -876,7 +879,11 @@ static int Compare3(string[] args)
     int? failed = null;
     if (args.Contains("--html"))
     {
-        if (s.ResultDir is null || s.SaveError is not null) Console.Error.WriteLine("note: no report: the result was not saved");
+        if (s.ResultDir is null || s.SaveError is not null)
+        {
+            Console.Error.WriteLine("error: no report: the result was not saved");
+            failed = 2;
+        }
         else failed = WriteHtml(s, args, Console.Out);
     }
     if (outDir is not null)
@@ -972,20 +979,24 @@ static void PrintUsage()
         usage:
           codediffer version                   print version
           codediffer compare <left> <right> [--threads N] [--no-cache | --rehash] [--fast-stat]
-                                       [--patch [-U N] [--literal]]
+                                       [--patch [-U N] [--literal]] [--timings] [--no-save]
+                                       [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]
                                        compare two trees (parallel; default min(cores,8)).
                                        Hash cache ON by default: a file whose path+size+mtime
                                        match a trusted ledger entry isn't re-read. --no-cache
                                        proves every byte; --rehash re-reads and refreshes it.
                                        Cache hits are confirmed by a live per-file stat;
                                        --fast-stat trusts the directory listing alone.
+                                       --timings prints each phase's time (stderr).
                                        --patch writes a git-style unified diff to stdout
                                        (git apply-able; summary goes to stderr).
                                        The result is saved (see `results`; --no-save skips);
                                        --html also writes the HTML report (report flags below).
-          codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache] [--no-save] [--html]
+          codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache] [--no-save]
+                              [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]
                               [--merge-out DIR]
                                        3-way: v1 only | v2 only | agreed | merged | conflict
+                                       (the paths both sides touched; --all lists every one)
                                        --merge-out writes the merge as an overlay on v1 (new or
                                        empty DIR): deletes.txt to apply to v1 first, then files\
                                        to copy over it (text conflicts with diff3 markers),
@@ -1004,13 +1015,13 @@ static void PrintUsage()
           Ctrl+C stops a running compare/compare3/apply; the hashes read so far are kept.
           codediffer diff <a> <b> [-U N] [--literal]
                                        unified diff of two files
-          codediffer apply <left> <right> <target> [--write]
+          codediffer apply <left> <right> <target> [--write] [--threads N] [--no-cache]
                                        port the left->right changes onto target by 3-way
                                        merge; per hunk applied|fuzzy|already|conflict.
                                        Dry run unless --write (conflicted files untouched).
                                        Ctrl+C during --write stops between files; run it
                                        again to finish (done files come out "already").
-          codediffer apply-overlay <overlay-dir> <target> [--write] [--again]
+          codediffer apply-overlay <overlay-dir> <target> [--write] [--again] [--threads N]
                                        apply a compare3 --merge-out overlay to v1 (or a copy):
                                        deletes.txt, then the directories the deletes emptied,
                                        then files\. Dry run unless --write; Ctrl+C stops
