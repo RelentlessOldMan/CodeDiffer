@@ -109,13 +109,16 @@ public static class ThreeWayViews
              ?? r.Entries.FirstOrDefault(x => x.MergedPath == p || x.V1?.RelativePath == p || x.V2?.RelativePath == p)
              ?? r.Entries.FirstOrDefault(x => string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase));
         // The path as given first: " a.txt" is a name of its own, not a.txt with a stray space.
-        var e = Find(path = AgentViews.Normalize(path, trim: false));
-        if (e is null && AgentViews.Normalize(path) is var trimmed && trimmed != path) e = Find(path = trimmed);
-        if (e is null && path.Contains('�'))
+        var given = path;
+        var e = Find(path = AgentViews.Normalize(given, trim: false));
+        if (e is null && AgentViews.Normalize(given) is var trimmed && trimmed != path) e = Find(path = trimmed);
+        if (e is null && ResultStore.Unescaped(given) is var raw && raw != given) e = Find(AgentViews.Normalize(raw, trim: false));
+        if (e is null)
         {
             // As UTF-8 shows it: an unpaired surrogate reads as U+FFFD in a listing.
-            var hits = r.Entries.Where(x => ResultStore.Shown(x.Path) == path || (x.MergedPath is { } m && ResultStore.Shown(m) == path)).Take(2).ToList();
-            if (hits.Count == 1) e = hits[0];
+            var shown = AgentViews.ByShownName(r.Entries, x => [x.Path, x.MergedPath], path);
+            if (shown.Count > 1) return AgentViews.Ambiguous(path, shown.Select(x => x.Path));
+            e = shown.FirstOrDefault();
         }
         if (e is null) return $"not touched by either side in compare3 {s.Id}: {path}\n";
 

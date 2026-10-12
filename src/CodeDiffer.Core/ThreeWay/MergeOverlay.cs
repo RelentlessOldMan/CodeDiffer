@@ -34,9 +34,13 @@ public static class MergeOverlay
 
     /// <summary>Refuse a directory inside any of the three trees, or one that isn't new or empty (checked before a
     /// long compare too, so a bad directory fails at once).</summary>
-    public static void CheckDir(string dir, string baseDir, string v1, string v2)
+    /// <param name="reportDir">The HTML report's directory, when one is written too: it is written first, so an overlay
+    /// in it (or holding it) would only be refused after the compare.</param>
+    public static void CheckDir(string dir, string baseDir, string v1, string v2, string? reportDir = null)
     {
         dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+        if (reportDir is not null && ResultStore.Overlaps(dir, reportDir))
+            throw new ArgumentException($"the overlay directory {dir} and the report directory {reportDir} overlap; give them separate places");
         foreach (var (name, root) in new[] { ("base", baseDir), ("v1", v1), ("v2", v2) })
             if (ResultStore.Overlaps(dir, root, oneWay: true))
                 throw new ArgumentException($"the overlay directory {dir} is inside the {name} tree {root}; write it somewhere else");

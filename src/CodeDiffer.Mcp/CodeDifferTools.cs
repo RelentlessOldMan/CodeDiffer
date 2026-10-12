@@ -92,12 +92,15 @@ public static class CodeDifferTools
         [Description("2-way: changed (default), all, or a comma list of added, removed, modified, renamed, identical. " +
                      "3-way: changed (default), both, or a comma list of conflict, merged, agreed, v1, v2.")] string? status = null,
         [Description("Glob over relative paths, e.g. src/**/*.c; a pattern without '/' matches file names anywhere (*.h).")] string? path_glob = null,
-        [Description("2-way only: modified files with this reason: content, eol, whitespace, encoding, binary.")] string? reason = null,
+        [Description("2-way only: files with this reason (modified, or renamed and edited): content, eol, whitespace, encoding, " +
+                     "binary, metadata; or unreadable: the files of any status that couldn't be read.")] string? reason = null,
         [Description("1-based page number.")] int page = 1,
         [Description("Files per page (default 50, max 500).")] int page_size = AgentViews.DefaultPageSize,
         [Description("2-way only: also count hunks and +/- lines for this page (reads those files).")] bool lines = false)
     {
         if (Find(compare_id, out var s) is { } err) return err;
+        if (s is Compare3Session && (reason is not null || lines))
+            return $"error: {(reason is not null ? "reason" : "lines")} is 2-way only; a 3-way listing has outcomes (status=conflict, merged, ...)\n";
         return Safe(() => s switch
         {
             Compare3Session t => ThreeWayViews.ListFiles(t, status, path_glob, page, page_size),
@@ -113,15 +116,17 @@ public static class CodeDifferTools
     public static string GetFileDiff(
         [Description("Relative path of the file (for a rename, either the old or the new path).")] string path,
         [Description("Compare id (default: the most recent).")] string? compare_id = null,
-        [Description("2-way: context lines around each change (default 3).")] int context = PatchOptions.DefaultContextLines,
+        [Description("2-way only: context lines around each change (default 3).")] int? context = null,
         [Description("Most lines to return (default 2000).")] int max_lines = AgentViews.DefaultMaxLines,
         [Description("1-based line to start from (for paging capped output).")] int start_line = 1)
     {
         if (Find(compare_id, out var s) is { } err) return err;
+        if (s is Compare3Session && context is not null)
+            return "error: context is 2-way only; a 3-way file is the whole merged file with its conflict markers\n";
         return Safe(() => s switch
         {
             Compare3Session t => ThreeWayViews.FileDiff(t, path, max_lines, start_line),
-            CompareSession c => AgentViews.FileDiff(c, path, context, max_lines, start_line),
+            CompareSession c => AgentViews.FileDiff(c, path, context ?? PatchOptions.DefaultContextLines, max_lines, start_line),
             _ => "error: unknown compare kind",
         });
     }
@@ -223,13 +228,21 @@ public static class CodeDifferTools
                  "does all three). Reads the changed files of the three trees.")]
     public static string WriteMerge(
         [Description("compare3 id (default: the most recent).")] string? compare_id = null,
-        [Description("A new or empty directory outside the three trees (default: merge\\ in the compare's result directory).")] string? out_dir = null)
+        [Description("A new or empty directory outside the three trees (default: merge\\ in the compare's result directory, or merge-2\\, merge-3\\ … once that holds an " +
+                     "overlay).")] string? out_dir = null)
     {
         if (Find(compare_id, out var s) is { } err) return err;
         if (s is not Compare3Session t) return $"compare {s!.Id} is a 2-way compare; write_merge needs a compare3 (apply_changeset ports a 2-way change set)";
         if (!t.IsDone) return $"compare {t.Id} is still running — wait for it (get_summary wait_seconds) first";
         if (t.Error is { } failed) return $"compare {t.Id} {(t.Cancelled ? "was cancelled" : $"failed: {failed}")}";
-        var dir = out_dir ?? (t.ResultDir is { } rd ? Path.Combine(rd, "merge") : null);
+        var dir = out_dir;
+        if (dir is null && t.ResultDir is { } rd)
+        {
+            // The default is a fresh directory each time (merge, merge-2, ...): an overlay written earlier may be in use.
+            dir = Path.Combine(rd, "merge");
+            for (int n = 2; Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any(); n++)
+                dir = Path.Combine(rd, $"merge-{n}");
+        }
         if (dir is null) return "error: out_dir is required (this compare has no result directory)";
         try
         {
@@ -316,7 +329,8 @@ public static class CodeDifferTools
     private static string Safe(Func<string> view)
     {
         try { return view(); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        // A bad path an agent passed (a NUL in it, an unsupported form) is an answer too, never a protocol error.
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             return $"error: {ex.Message}";
         }

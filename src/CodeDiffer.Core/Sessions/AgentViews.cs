@@ -247,11 +247,18 @@ public static class AgentViews
         IReadOnlyList<FileChange> changes = found is null ? s.Report!.Changes : [.. found.Select(f => f.Change)];
         FileChange? Find(string p) => changes.FirstOrDefault(c => c.RelativePath == p)
              ?? changes.FirstOrDefault(c => c.RenamedFrom == p)
-             ?? changes.FirstOrDefault(c => string.Equals(c.RelativePath, p, StringComparison.OrdinalIgnoreCase))
-             ?? ByShownName(changes, p);
+             ?? changes.FirstOrDefault(c => string.Equals(c.RelativePath, p, StringComparison.OrdinalIgnoreCase));
         // The path as given first: " a.txt" is a name of its own, not a.txt with a stray space.
-        var c = Find(path = Normalize(path, trim: false));
-        if (c is null && Normalize(path) is var trimmed && trimmed != path) c = Find(path = trimmed);
+        var given = path;
+        var c = Find(path = Normalize(given, trim: false));
+        if (c is null && Normalize(given) is var trimmed && trimmed != path) c = Find(path = trimmed);
+        if (c is null && ResultStore.Unescaped(given) is var raw && raw != given) c = Find(Normalize(raw, trim: false));
+        if (c is null)
+        {
+            var shown = ByShownName(changes, x => [x.RelativePath, x.RenamedFrom], path);
+            if (shown.Count > 1) return Ambiguous(path, shown.Select(x => x.RelativePath));
+            c = shown.FirstOrDefault();
+        }
         if (c is null)
         {
             if (found is not null)
@@ -374,13 +381,17 @@ public static class AgentViews
         return Path.Combine(root, "_clash", $"{Path.GetFileName(rel)}.{hash}{suffix}");
     }
 
-    /// <summary>The one change whose path, as UTF-8 shows it (an unpaired surrogate as U+FFFD), is this.</summary>
-    internal static FileChange? ByShownName(IReadOnlyList<FileChange> changes, string path)
-    {
-        if (!path.Contains('\uFFFD')) return null;
-        var hits = changes.Where(c => ResultStore.Shown(c.RelativePath) == path || (c.RenamedFrom is { } f && ResultStore.Shown(f) == path)).Take(2).ToList();
-        return hits.Count == 1 ? hits[0] : null;
-    }
+    /// <summary>The entries one of whose paths, as UTF-8 shows it (an unpaired surrogate as U+FFFD), is this: one is the
+    /// file asked for; more show alike (up to 10 are returned).</summary>
+    internal static List<T> ByShownName<T>(IEnumerable<T> items, Func<T, string?[]> paths, string path)
+        => path.Contains('\uFFFD')
+            ? items.Where(x => paths(x).Any(p => p is not null && ResultStore.Shown(p) == path)).Take(10).ToList()
+            : [];
+
+    /// <summary>The answer when several files show as <paramref name="path"/>: their escaped names, which tell them apart.</summary>
+    internal static string Ambiguous(string path, IEnumerable<string> paths)
+        => $"{path} is how several files show (each name holds an unpaired surrogate, shown as U+FFFD); ask for one by " +
+           "its escaped name:\n" + string.Concat(paths.Select(p => "  " + ResultStore.Escaped(p) + "\n"));
 
     /// <summary>The whole A→B changeset as one git-style patch file (apply with `git apply`).</summary>
     public static string Export(CompareSession s, string? outPath = null, int context = PatchOptions.DefaultContextLines, bool literal = false)
@@ -392,7 +403,15 @@ public static class AgentViews
             return $"error: compare {s.Id} is incomplete ({r.LeftDroppedDirectories} left / {r.RightDroppedDirectories} right director(ies) " +
                    "could not be listed): its adds and removes there may be listing failures, which a patch would carry out as deletes — " +
                    "no patch written; compare again";
-        var file = string.IsNullOrWhiteSpace(outPath) ? Path.Combine(OutDir(s), "changeset.patch") : Path.GetFullPath(outPath);
+        string file;
+        try { file = string.IsNullOrWhiteSpace(outPath) ? Path.Combine(OutDir(s), "changeset.patch") : Path.GetFullPath(outPath); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return $"error: out_path {outPath}: {ex.Message}\n";
+        }
+        // A device (NUL, CON: \\.\NUL), a drive or share root, or a directory: no file to write the patch to.
+        if (file.StartsWith(@"\\.\", StringComparison.Ordinal) || Path.GetFileName(file).Length == 0 || Directory.Exists(file))
+            return $"error: out_path {outPath} is not a file path (a device, a root or a directory); give a file to write the patch to\n";
         foreach (var tree in new[] { s.Left, s.Right })
             if (ResultStore.Overlaps(file, tree, oneWay: true))
                 return $"error: {file} is inside the compared tree {tree} — the patch would become part of what it describes; write it somewhere else\n";
@@ -411,7 +430,8 @@ public static class AgentViews
             try { File.Delete(tmp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
             throw;
         }
-        return $"changeset {s.Id}: {file}  ({Bytes(new FileInfo(file).Length)})\n" +
+        // A reopened compare's patch is of the trees as they are now, under the saved verdicts: say so, as write_merge does.
+        return ReopenedNote(s) + $"changeset {s.Id}: {file}  ({Bytes(new FileInfo(file).Length)})\n" +
                $"  {ps.Summary(literal)}\n" +
                "  `git apply` it: what it doesn't carry is described in '#' lines, which git skips\n";
     }
@@ -643,7 +663,9 @@ public static class AgentViews
             else rx.Append(Regex.Escape(ch.ToString()));
         }
         var re = new Regex(rx.Append('$').ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        return nameOnly ? p => re.IsMatch(p[(p.LastIndexOf('/') + 1)..]) : p => re.IsMatch(p);
+        bool Match(string p) => re.IsMatch(nameOnly ? p[(p.LastIndexOf('/') + 1)..] : p);
+        // A name with an unpaired surrogate matches as listed too (U+FFFD): what an agent can copy into a pattern.
+        return p => Match(p) || (ResultStore.HasLoneSurrogate(p) && Match(ResultStore.Shown(p)));
     }
 
     internal static string Normalize(string path, bool trim = true) => (trim ? path.Trim() : path).Replace('\\', '/').TrimStart('/');

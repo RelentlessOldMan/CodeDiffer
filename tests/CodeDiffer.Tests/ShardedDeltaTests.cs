@@ -122,6 +122,16 @@ public sealed class ShardedDeltaTests : IDisposable
     }
 
     [Fact]
+    public void AStrayPage_IsAnError_HoweverTheIndexIsNamed()
+    {
+        WriteSharded(Paths(5), 2, "x");
+        File.Copy(P(Page(2)), P(Page(3)));
+        File.Move(Index, P("renamed.json"));
+        var ex = Assert.Throws<FormatException>(() => DeltaManifestParser.ParseFile(P("renamed.json")));
+        Assert.Contains("doesn't list it", ex.Message);
+    }
+
+    [Fact]
     public void AMissingPage_IsAnError()
     {
         WriteSharded(Paths(5), 2, "x");

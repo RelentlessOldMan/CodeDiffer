@@ -16,7 +16,7 @@ public sealed class PatchOptions
     /// Above this size (either side) a file isn't line-diffed — decoding + line arrays would cost several times
     /// its size in RAM. It gets the giant-file block diff instead: changed byte ranges by reference.
     /// </summary>
-    public long MaxTextBytes { get; init; } = 16L * 1024 * 1024;
+    public long MaxTextBytes { get; init; } = TextInspector.WholeSniffBytes;
 
     /// <summary>Show EOL-only / encoding-only changes as full line diffs instead of a one-line note.</summary>
     public bool Literal { get; init; }
@@ -205,6 +205,10 @@ public static class PatchWriter
                     stats.TextFiles++;
                     break;
                 }
+                // Shown as decoded text, a rename whose only edit is its encoding (a BOM, cp1252 -> UTF-8) would be a
+                // bare header, like a pure rename: the note says what changed.
+                if (!forGit && EncodingNote(Full(leftRoot, c.RenamedFrom!), Full(rightRoot, c.RelativePath), c.RenamedFrom!, c.RelativePath) is { } renNote)
+                    header += renNote;
                 WriteFile(w, c.RenamedFrom!, c.RelativePath, Full(leftRoot, c.RenamedFrom!), Full(rightRoot, c.RelativePath), header, opt, stats, forGit);
                 break;
             case ChangeStatus.Modified:
@@ -213,7 +217,7 @@ public static class PatchWriter
                     var (l, r) = (Describe(Full(leftRoot, c.RelativePath)), Describe(Full(rightRoot, c.RelativePath)));
                     // The reason is the text's: line endings changed with the encoding are "eol", and the note says both.
                     var note = c.Reason == ChangeReason.Eol
-                        ? $"Line endings differ: a/{c.RelativePath} ({l.Eol}) b/{c.RelativePath} ({r.Eol})" +
+                        ? $"Line endings differ: a/{c.RelativePath} ({l.Eol}) b/{c.RelativePath} ({r.Eol}{(l.Eol == r.Eol ? ", at other lines" : "")})" +
                           (l.Enc != r.Enc ? $"; encoding too: a ({l.Enc}) b ({r.Enc})" : "") + "\n"
                         : $"Encoding differs: a/{c.RelativePath} ({l.Enc}) b/{c.RelativePath} ({r.Enc})\n";
                     if (forGit) w.Write($"# {note.TrimEnd('\n')} — a note, not a hunk (--literal carries it)\n");
@@ -221,13 +225,10 @@ public static class PatchWriter
                     stats.NoteFiles++;
                     break;
                 }
-                string? encNote = null;
-                if (!forGit && c.Reason is ChangeReason.Whitespace or ChangeReason.Content)
-                {
-                    // A shown diff is of decoded text: an encoding change under it would be invisible.
-                    var (l, r) = (Describe(Full(leftRoot, c.RelativePath)), Describe(Full(rightRoot, c.RelativePath)));
-                    if (l.Enc != r.Enc) encNote = $"Encoding differs too: a/{c.RelativePath} ({l.Enc}) b/{c.RelativePath} ({r.Enc})\n";
-                }
+                // A shown diff is of decoded text: an encoding change under it would be invisible.
+                string? encNote = !forGit && c.Reason is ChangeReason.Whitespace or ChangeReason.Content
+                    ? EncodingNote(Full(leftRoot, c.RelativePath), Full(rightRoot, c.RelativePath), c.RelativePath, c.RelativePath)
+                    : null;
                 WriteFile(w, c.RelativePath, c.RelativePath, Full(leftRoot, c.RelativePath), Full(rightRoot, c.RelativePath), encNote, opt, stats, forGit);
                 break;
         }
@@ -339,17 +340,26 @@ public static class PatchWriter
             w.Write($"  ... {r.Changes.Count - opt.MaxGiantRanges} more region(s)\n");
     }
 
+    /// <summary>"Encoding differs too: …" when the two files' encodings differ, else null.</summary>
+    private static string? EncodingNote(string leftFull, string rightFull, string oldRel, string newRel)
+    {
+        var (l, r) = (Describe(leftFull).Enc, Describe(rightFull).Enc);
+        return l == r ? null : $"Encoding differs too: a/{oldRel} ({l}) b/{newRel} ({r})\n";
+    }
+
     private static string Name(FileChange c) => c.RenamedFrom is { } f ? $"{f} -> {c.RelativePath}" : c.RelativePath;
 
     private static string OneLine(string s) => s.Replace('\r', ' ').Replace('\n', ' ');
 
     private static string Full(string root, string rel) => Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));
 
-    /// <summary>A file's encoding and line-ending style, from its first 64 KB — line endings counted in its own
-    /// encoding (UTF-16's CR LF is four bytes, never a lone 0x0A).</summary>
+    /// <summary>A file's encoding and line-ending style, read through (streamed) up to
+    /// <see cref="TextInspector.WholeSniffBytes"/>, so a note can't contradict the reason found on the whole file;
+    /// past that, both say they are of its first 16 MB. Line endings are counted in its own encoding (UTF-16's
+    /// CR LF is four bytes, never a lone 0x0A).</summary>
     private static (string Enc, string Eol) Describe(string path)
     {
-        var h = TextInspector.ReadHead(path, 64 * 1024);
+        var h = TextInspector.ReadHead(path, 4);
         var (name, enc, skip) = h switch
         {
             [0xFF, 0xFE, 0x00, 0x00, ..] => ("UTF-32 LE", (Encoding)new UTF32Encoding(false, false), 4),
@@ -359,19 +369,41 @@ public static class PatchWriter
             [0xEF, 0xBB, 0xBF, ..] => ("UTF-8 BOM", Encoding.Latin1, 3),
             _ => ("UTF-8/ASCII, no BOM", Encoding.Latin1, 0),
         };
-        if (skip <= 3)
+        using var fs = TextInspector.OpenShared(path, 1);
+        bool cut = fs.Length > TextInspector.WholeSniffBytes;
+        long left = Math.Min(fs.Length, TextInspector.WholeSniffBytes) - skip;
+        fs.Position = skip;
+        // CR and LF are single bytes in UTF-8; the name says whether the rest is UTF-8 (a character cut at 16 MB is fine).
+        var utf8 = skip <= 3 ? StrictUtf8.GetDecoder() : null;
+        var decoder = enc.GetDecoder();
+        var buf = new byte[1 << 16];
+        var chars = new char[enc.GetMaxCharCount(buf.Length)];
+        int crlf = 0, lf = 0, cr = 0, n;
+        bool prevCr = false;
+        while (left > 0 && (n = fs.Read(buf, 0, (int)Math.Min(buf.Length, left))) > 0)
         {
-            // CR and LF are single bytes here; the name says whether the rest is UTF-8 (a cut last character is fine).
-            try { StrictUtf8.GetDecoder().GetCharCount(h, skip, h.Length - skip, flush: false); }
-            catch (DecoderFallbackException) { name = skip == 3 ? "UTF-8 BOM before non-UTF-8 bytes" : "a legacy code page, not UTF-8"; }
+            left -= n;
+            bool last = left == 0;
+            if (utf8 is not null)
+                try { utf8.GetCharCount(buf, 0, n, flush: last && !cut); }
+                catch (DecoderFallbackException)
+                {
+                    name = skip == 3 ? "UTF-8 BOM before non-UTF-8 bytes" : "a legacy code page, not UTF-8";
+                    utf8 = null;
+                }
+            int m = decoder.GetChars(buf, 0, n, chars, 0, flush: last);
+            for (int i = 0; i < m; i++)
+            {
+                char c = chars[i];
+                if (c == '\n') { if (prevCr) crlf++; else lf++; }
+                else if (prevCr) cr++;
+                prevCr = c == '\r';
+            }
         }
-        var text = enc.GetString(h, skip, h.Length - skip);
-        int crlf = 0, lf = 0, cr = 0;
-        for (int i = 0; i < text.Length; i++)
-            if (text[i] == '\n') { if (i > 0 && text[i - 1] == '\r') crlf++; else lf++; }
-            else if (text[i] == '\r' && (i + 1 == text.Length || text[i + 1] != '\n')) cr++;
+        if (prevCr) cr++;
         int kinds = (crlf > 0 ? 1 : 0) + (lf > 0 ? 1 : 0) + (cr > 0 ? 1 : 0);
         var eol = kinds > 1 ? "mixed" : crlf > 0 ? "CRLF" : lf > 0 ? "LF" : cr > 0 ? "CR" : "no newlines";
-        return (name, eol);
+        const string First = " in its first 16 MB";
+        return cut ? (name + First, eol + First) : (name, eol);
     }
 }

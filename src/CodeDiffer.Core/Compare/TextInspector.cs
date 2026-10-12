@@ -12,6 +12,10 @@ internal static class TextInspector
 {
     public const int HeadBytes = 8192;
 
+    /// <summary>Up to this size (either side) a file is sniffed for a NUL whole, and a patch line-diffs it (reading it
+    /// whole); past it, its first <see cref="HeadBytes"/> decide, and a patch gives its changed byte ranges.</summary>
+    public const long WholeSniffBytes = 16L * 1024 * 1024;
+
     /// <summary>Read up to <paramref name="max"/> leading bytes (the whole file if smaller).</summary>
     public static byte[] ReadHead(string path, int max = HeadBytes)
     {
@@ -40,6 +44,23 @@ internal static class TextInspector
     /// whole — a NUL past the first 8 KB makes it binary too — else its head.</summary>
     public static bool LooksBinary(ReadOnlySpan<byte> head)
         => !IsWideBom(head) && head.IndexOf((byte)0) >= 0;
+
+    /// <summary>A NUL past <paramref name="head"/> (the file's first bytes, already sniffed), streamed: a file read
+    /// only by its head is binary by the same rule as one read whole.</summary>
+    public static bool NulPast(string path, byte[] head, CancellationToken ct)
+    {
+        if (IsWideBom(head)) return false;
+        using var fs = OpenShared(path, 1);
+        fs.Position = head.Length;
+        var buf = new byte[1 << 16];
+        int n;
+        while ((n = fs.Read(buf, 0, buf.Length)) > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (buf.AsSpan(0, n).IndexOf((byte)0) >= 0) return true;
+        }
+        return false;
+    }
 
     private static bool IsWideBom(ReadOnlySpan<byte> h)
         => h.Length >= 2 && ((h[0] == 0xFF && h[1] == 0xFE) || (h[0] == 0xFE && h[1] == 0xFF))       // UTF-16 (and UTF-32 LE)

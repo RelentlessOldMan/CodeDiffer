@@ -38,6 +38,10 @@ public sealed class ReasonClassifier
         // Read whole, the whole file is sniffed: text that turns binary past 8 KB is binary, never a text diff with NULs.
         if (TextInspector.LooksBinary(leftBytes) || TextInspector.LooksBinary(rightBytes))
             return ChangeReason.Binary;
+        // Read by its head but small enough for a patch to line-diff it whole: a NUL further in is binary there, so here.
+        if (large && Math.Max(leftLength, rightLength) <= TextInspector.WholeSniffBytes
+                  && (TextInspector.NulPast(leftPath, leftBytes, ct) || TextInspector.NulPast(rightPath, rightBytes, ct)))
+            return ChangeReason.Binary;
 
         if (large)
             return Math.Max(leftLength, rightLength) <= _maxStreamBytes ? Streamed(leftPath, leftBytes, rightPath, rightBytes, ct) : ChangeReason.Content;

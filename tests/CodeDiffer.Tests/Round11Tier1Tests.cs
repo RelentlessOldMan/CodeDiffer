@@ -37,7 +37,7 @@ public sealed class Round11Tier1Tests : IDisposable
         File.WriteAllBytes(P(rel), new UTF8Encoding(false).GetBytes(text));
     }
 
-    private static string Lines(int n, Func<int, string>? edit = null)
+    private static string Lines(int n, Func<int, string?>? edit = null)
         => string.Concat(Enumerable.Range(1, n).Select(i => (edit?.Invoke(i) ?? $"line {i}") + "\n"));
 
     /// <summary>Three trees of one file f.txt, base of 30 distinct lines, each side editing the lines given.</summary>

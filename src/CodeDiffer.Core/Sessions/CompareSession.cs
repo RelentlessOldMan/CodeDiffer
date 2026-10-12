@@ -315,7 +315,8 @@ public sealed class SessionStore
                 || (s.ResultDir is not null && string.Equals(s.ResultDir, Path.TrimEndingDirectorySeparator(id), StringComparison.OrdinalIgnoreCase)));
             if (live is not null) return live;
 
-            var dir = Directory.Exists(id) ? id : ResultsRoot is null ? null : ResultStore.Find(ResultsRoot, id);
+            // An id first: a folder in the working directory that happens to be named like one (8161) is not that compare.
+            var dir = (ResultsRoot is null ? null : ResultStore.Find(ResultsRoot, id)) ?? (Directory.Exists(id) ? id : null);
             if (dir is null) return null;
             var loaded = ResultStore.Load(dir); // throws InvalidDataException on an unfinished/corrupt result
             _sessions.Add(loaded);

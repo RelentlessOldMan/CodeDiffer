@@ -268,15 +268,27 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   at once with the usage (exit 64), instead of running an hour without it; so does a bad `-U` / `--max-diffs`
   value, an option without the one it goes with (`-U` / `--literal` without `--patch`; `--out`, `--large`,
   `--include-identical`, `--max-diffs` without `--html`; `--html` with `--no-save`), a report `--out` inside a
-  compared tree, and `verify` given only one of `--base` / `--variant`. A results directory inside a compared tree
-  is refused before the compare too (exit 2). `--patch` renders with `--threads` threads.
+  compared tree, that is a file, or that is a directory other than one of our reports, and `verify` given only one
+  of `--base` / `--variant`. A results directory inside a compared tree, and a `compare3 --merge-out` in, or
+  holding, the report's `--out`, are refused before the compare too (exit 2). `compare --html` whose result could
+  not be saved says there is no report, as `compare3` does. `--patch` renders with `--threads` threads.
   "Inside" is by what the paths resolve to, not only their spelling: a tree named through a junction, symlink,
   subst or mapped drive is the same tree, for the results directory, the overlay, the report and `apply-overlay`.
-- `list_files(reason="unreadable")` lists the files the listings mark `[unreadable]`. `get_file_diff` given a path
-  as a listing shows it — an unpaired surrogate as U+FFFD — finds that file. A diff too big to show inline is saved
-  under the path mirrored, or, where the tree has a file `a` and a directory `a.patch/`, under `diffs/_clash/` by the
-  path's hash; one asked for with more context than the default never changes the hunk count a listing shows.
-  `export_changeset`'s `out_path` must be outside both trees.
+- `list_files(reason="unreadable")` lists the files the listings mark `[unreadable]`, of any status; another
+  reason lists the modified and edited renamed files with it. `get_file_diff` given a path as a listing shows it —
+  an unpaired surrogate as U+FFFD — finds that file, and a `path_glob` matches that form too. When several files
+  show alike, the answer lists their escaped names (`c\uD801.txt`), and either one asked for so is found; the
+  surrogate itself can't be passed (JSON's reader refuses it, before CodeDiffer sees the call). A diff too big to
+  show inline is saved under the path mirrored, or, where the tree has a file `a` and a directory `a.patch/`, under
+  `diffs/_clash/` by the path's hash; one asked for with more context than the default never changes the hunk count
+  a listing shows. `export_changeset`'s `out_path` must be a file path outside both trees: a device (`NUL`, `CON`),
+  a root, a directory or a path with a NUL is an `error:` answer. A reopened compare's export, like its
+  `write_merge` and report, says it was rendered from the trees as they are now.
+- On a 3-way compare, `list_files`'s `reason` and `lines` and `get_file_diff`'s `context` are 2-way only: given,
+  they are an error, never silently ignored. `write_merge` with no `out_dir` writes `merge\` in the result
+  directory, then `merge-2\`, `merge-3\`, … once that holds an overlay, never refusing its own default.
+- A compare id is looked up as an id first: a folder in the working directory named like one is not that compare
+  (a result directory given by its path still opens).
 - `results --prune` never deletes through a link: a junction or symlink in the results directory is not a saved
   compare, whatever it points at. A saved path that could reach outside its tree (`../x`, rooted, a drive) is a
   corrupt result, never acted on.
@@ -291,8 +303,11 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   literal reads as whitespace. A whitespace-only change is diffed line for line (each changed line a replace of
   itself), never a line paired with an identical one elsewhere.
 - A reason is the text's: line endings changed along with the encoding (UTF-8 CRLF → UTF-16 LF) are `eol`, and
-  the patch note says the encoding changed too; a shown diff of a whitespace or content change says so as well.
-  Line endings in a note are counted in the file's own encoding (UTF-16's CRLF is not "LF").
+  the patch note says the encoding changed too; a shown diff of a whitespace or content change says so as well,
+  and so does an edited rename whose only edit is its encoding (a BOM added, cp1252 → UTF-8), which would
+  otherwise show as a bare rename header. Line endings in a note are counted in the file's own encoding (UTF-16's
+  CRLF is not "LF"). A note is of the whole file up to 16 MB (an LF file with one CRLF line at its end is
+  "mixed"), so it never contradicts the reason; past 16 MB it says it is of the file's first 16 MB.
 - Among identical files the rename is the best match, not the first listed: `a/LICENSE` and `b/LICENSE`
   identical, `b/LICENSE` renamed to `b/COPYING` and `a/` deleted gives `b/LICENSE → b/COPYING`. Empty files
   never pair as renames, and nor does a file that is only a BOM (an editor's "empty" `.cs`): that is empty text.
@@ -310,8 +325,9 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   the bad bytes: `25°C` → `25±C` is a `content` change, not "the same text, encoding changed". Such a file that
   only gained a UTF-8 BOM is `encoding`, small or large.
 - A file is binary when it has a NUL and no UTF-16/32 BOM (UTF-8 never needs a NUL, so a UTF-8 BOM excuses
-  none): anywhere in it when it is read whole (up to 8 MB), in its first 8 KB past that. So text that turns binary
-  further in is `binary`, and no patch ever carries raw NULs.
+  none): anywhere in it up to 16 MB (the size a patch line-diffs, reading it whole; past 8 MB the rest is scanned
+  for a NUL after its head), in its first 8 KB past that. So text that turns binary further in is `binary`, the
+  compare and its patch always agree, and no patch ever carries raw NULs.
 - `codediffer diff` with a file that isn't there is an error (exit 2), never "the whole other file added": an
   added or deleted file is asked for with `/dev/null` (or `NUL`) as the absent side. Both sides get the right
   file's name, so `git apply` changes that file rather than renaming it.
@@ -353,9 +369,12 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - `verify` reads a sharded delta (CodeSpawner 1.1.x `--shard-size`) from its index, `<corpus>-delta.index.json`;
   a page alone is refused. Each page in the index's catalog must be beside it with the catalog's sha256, index,
   count and first/last path, every page but the last full, the records in ascending path order across the pages,
-  and no `<corpus>-delta.shard-*.json` the catalog leaves out: a missing, extra, altered or misplaced page is an
+  and no `<corpus>-delta.shard-*.json` the catalog leaves out (the stem taken from the catalog's page names too,
+  so an index renamed to anything else is still checked): a missing, extra, altered or misplaced page is an
   error (exit 2), never a partial verify. The pages in order are the delta's `modified`, so the digest and the
   tree checks run exactly as on the monolithic delta.
+- `verify` reads `_meta.deltaKind` `diff` (or none: the first deltas had none) and `conflict-3way`; any other kind
+  (CodeSpawner's planned `symbol`, a typo, a number) is refused (exit 2), never verified as a diff.
 - Deterministic output: two runs over the same inputs are byte-identical, so a diff of results is real.
 
 ## 7. Defaults (tunable)

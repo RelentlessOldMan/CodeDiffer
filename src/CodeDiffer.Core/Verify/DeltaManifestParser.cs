@@ -23,6 +23,7 @@ namespace CodeDiffer.Core.Verify;
 public static class DeltaManifestParser
 {
     private const string IndexSuffix = ".index.json";
+    private const string ShardInfix = ".shard-";
 
     /// <summary>A delta from its file; a sharded delta's index also reads the pages beside it.</summary>
     /// <exception cref="FormatException">Not a delta manifest, or a sharded one whose pages don't match its index.</exception>
@@ -152,10 +153,20 @@ public static class DeltaManifestParser
             modified.AddRange(page);
         }
 
-        // A page beside the index that its catalog doesn't list: a stray, or a page the index lost.
+        // A page beside the index that its catalog doesn't list: a stray, or a page the index lost. The pages' stem comes
+        // from the index's name (<stem>.index.json) and from the catalog's own page names (<stem>.shard-N.json), so an
+        // index renamed to anything else is still checked.
+        var stems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var name = Path.GetFileName(indexPath);
         if (name.EndsWith(IndexSuffix, StringComparison.OrdinalIgnoreCase))
-            foreach (var f in Directory.EnumerateFiles(dir, name[..^IndexSuffix.Length] + ".shard-*.json"))
+            stems.Add(name[..^IndexSuffix.Length]);
+        foreach (var file in listed)
+        {
+            int at = file.LastIndexOf(ShardInfix, StringComparison.OrdinalIgnoreCase);
+            if (at > 0) stems.Add(file[..at]);
+        }
+        foreach (var stem in stems)
+            foreach (var f in Directory.EnumerateFiles(dir, stem + ShardInfix + "*.json"))
                 if (!listed.Contains(Path.GetFileName(f)))
                     throw new FormatException($"{Path.GetFileName(f)} lies beside the index, but its catalog doesn't list it");
 

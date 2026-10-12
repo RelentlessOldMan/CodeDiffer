@@ -638,7 +638,20 @@ public static class ResultStore
 
     /// <summary>A path as UTF-8 shows it: each unpaired surrogate as U+FFFD (what an agent reads in a listing, and so
     /// may ask for).</summary>
-    internal static string Shown(string path)
+    internal static string Shown(string path) => Spelled(path, _ => "\uFFFD");
+
+    /// <summary>A path with each unpaired surrogate written as <c>\uXXXX</c>: how an agent names one of several files
+    /// that show alike (a JSON argument can't carry the surrogate itself). <see cref="Unescaped"/> reads it back.</summary>
+    internal static string Escaped(string path) => Spelled(path, ch => $"\\u{(int)ch:X4}");
+
+    /// <summary>Each <c>\uD800</c>..<c>\uDFFF</c> in <paramref name="path"/> as that UTF-16 code unit (other text as is).</summary>
+    internal static string Unescaped(string path)
+        => path.Contains("\\u", StringComparison.OrdinalIgnoreCase)
+            ? System.Text.RegularExpressions.Regex.Replace(path, @"\\[uU]([dD][89a-fA-F][0-9a-fA-F]{2})",
+                m => ((char)int.Parse(m.Groups[1].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture)).ToString())
+            : path;
+
+    private static string Spelled(string path, Func<char, string> lone)
     {
         if (!HasLoneSurrogate(path)) return path;
         var shown = new System.Text.StringBuilder(path.Length);
@@ -646,7 +659,8 @@ public static class ResultStore
         {
             bool pair = char.IsHighSurrogate(path[i]) && i + 1 < path.Length && char.IsLowSurrogate(path[i + 1]);
             if (pair) shown.Append(path, i++, 2);
-            else shown.Append(char.IsSurrogate(path[i]) ? '\uFFFD' : path[i]);
+            else if (char.IsSurrogate(path[i])) shown.Append(lone(path[i]));
+            else shown.Append(path[i]);
         }
         return shown.ToString();
     }

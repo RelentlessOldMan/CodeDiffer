@@ -136,7 +136,11 @@ static int Compare(string[] args)
     if (session.ResultDir is not null)
     {
         info.WriteLine(session.SaveError is { } se ? $"  saved      NOT saved: {se}" : $"  saved      {session.ResultDir}  (id {session.Id})");
-        if (args.Contains("--html") && session.SaveError is null) htmlCode = WriteHtml(session, args, info);
+        if (args.Contains("--html"))
+        {
+            if (session.SaveError is null) htmlCode = WriteHtml(session, args, info);
+            else Console.Error.WriteLine("note: no report: the result was not saved");
+        }
     }
 
     if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
@@ -594,15 +598,23 @@ static int VerifyConflict(string[] args)
     return v.Ok && mergeOk ? 0 : 1;
 }
 
-/// <summary>Peek at <c>_meta.deltaKind</c> so verify can route diff vs conflict-3way.</summary>
+/// <summary>
+/// Peek at <c>_meta.deltaKind</c> so verify can route diff vs conflict-3way. A missing kind is "diff" (the first
+/// deltas had none); any other kind (CodeSpawner's planned "symbol", a typo) is refused rather than read as a diff.
+/// </summary>
 static string DeltaKind(string path)
 {
     using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
-    return doc.RootElement.TryGetProperty("_meta", out var meta)
-           && meta.TryGetProperty("deltaKind", out var dk)
-           && dk.ValueKind == System.Text.Json.JsonValueKind.String
-        ? dk.GetString()!
-        : "diff";
+    if (!(doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+          && doc.RootElement.TryGetProperty("_meta", out var meta)
+          && meta.ValueKind == System.Text.Json.JsonValueKind.Object
+          && meta.TryGetProperty("deltaKind", out var dk)))
+        return "diff";
+    string? kind = dk.ValueKind == System.Text.Json.JsonValueKind.String ? dk.GetString() : null;
+    return kind is "diff" or "conflict-3way"
+        ? kind
+        : throw new InvalidOperationException(
+            $"_meta.deltaKind {dk.GetRawText()} isn't one verify reads (\"diff\" or \"conflict-3way\")");
 }
 
 /// <summary>
@@ -832,10 +844,11 @@ static int Compare3(string[] args)
     if (!HtmlOptionsOk(args, args[1], args[2], args[3])) return 64;
     var store = new SessionStore(save: !args.Contains("--no-save"));
     var outDir = FlagValue(args, "--merge-out", from: 4);
+    var reportDir = args.Contains("--html") ? FlagValue(args, "--out", from: 4) : null;
     Compare3Session s;
     try
     {
-        if (outDir is not null) MergeOverlay.CheckDir(outDir, args[1], args[2], args[3]); // before a compare that may take an hour
+        if (outDir is not null) MergeOverlay.CheckDir(outDir, args[1], args[2], args[3], reportDir); // before a compare that may take an hour
         s = store.Start3(args[1], args[2], args[3], options);
     }
     catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException or IOException or UnauthorizedAccessException)

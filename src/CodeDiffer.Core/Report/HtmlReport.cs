@@ -413,7 +413,6 @@ public static class HtmlReport
         if (OutDirProblem(outDir, trees) is { } problem) throw new IOException(problem);
         if (Directory.Exists(outDir))
         {
-            if (!IsOurs(outDir)) throw new IOException($"{outDir} exists and is not a CodeDiffer report — refusing to overwrite it");
             // Marked first (a report from before the marker too), then everything but the marker deleted (read-only files
             // too, a link removed, never followed): a delete that fails part way leaves a directory still marked ours,
             // replaced next time, never one refused forever.
@@ -439,12 +438,19 @@ public static class HtmlReport
             new UTF8Encoding(false));
     }
 
-    /// <summary>Why a report can't be written to <paramref name="outDir"/> (it overlaps a compared tree), or null —
-    /// checked before a compare that may take an hour as well as when the report is written.</summary>
+    /// <summary>Why a report can't be written to <paramref name="outDir"/> (it overlaps a compared tree, is a file, or
+    /// is a directory that isn't one of our reports), or null — checked before a compare that may take an hour as well
+    /// as when the report is written.</summary>
     public static string? OutDirProblem(string outDir, IEnumerable<string> trees)
-        => trees.FirstOrDefault(t => ResultStore.Overlaps(outDir, t)) is { } tree
-            ? $"the report directory {outDir} and the compared tree {tree} overlap; write the report somewhere else"
-            : null;
+    {
+        if (trees.FirstOrDefault(t => ResultStore.Overlaps(outDir, t)) is { } tree)
+            return $"the report directory {outDir} and the compared tree {tree} overlap; write the report somewhere else";
+        if (File.Exists(outDir))
+            return $"{outDir} is a file, not a directory; write the report somewhere else";
+        if (Directory.Exists(outDir) && !IsOurs(outDir))
+            return $"{outDir} exists and is not a CodeDiffer report — refusing to overwrite it";
+        return null;
+    }
 
     /// <summary>Empty, marked as ours, or a report from before the marker: nothing but index.html, data\ and full\,
     /// with data\index.js as this writes it.</summary>
