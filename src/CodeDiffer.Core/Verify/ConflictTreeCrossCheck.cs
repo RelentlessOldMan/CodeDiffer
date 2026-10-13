@@ -171,18 +171,31 @@ public static class ConflictTreeCrossCheck
         }
 
         var files = new List<FileMergeCheck>(paths.Count);
+        var sides = new Dictionary<string, (List<Hunk> V1, List<Hunk> V2)>(StringComparer.Ordinal);
         foreach (var path in paths)
         {
             if (!trees.TryGetValue(path, out var t)) { files.Add(new FileMergeCheck(path, false, false)); continue; }
-            bool v1Ok = ReconstructsSide(t.b, t.v1, v1ByPath.GetValueOrDefault(path));
-            bool v2Ok = ReconstructsV2(t.b, t.v1, t.v2, v2DefByPath.GetValueOrDefault(path), cleanV1ByPath.GetValueOrDefault(path));
+            bool v1Ok = ReconstructsSide(t.b, t.v1, v1ByPath.GetValueOrDefault(path), out var h1);
+            bool v2Ok = ReconstructsV2(t.b, t.v1, t.v2, v2DefByPath.GetValueOrDefault(path), cleanV1ByPath.GetValueOrDefault(path), out var h2);
             files.Add(new FileMergeCheck(path, v1Ok, v2Ok));
+            if (v1Ok && v2Ok) sides[path] = (h1, h2);
         }
 
         var mineC = myConflicts.ToHashSet();
         var unsound = new List<string>();
         foreach (var path in paths)
-            if (trees.TryGetValue(path, out var t)) unsound.AddRange(Unsound(path, t.b, t.v1, t.v2, manifest, mineC));
+            if (trees.TryGetValue(path, out var t))
+            {
+                unsound.AddRange(Unsound(path, t.b, t.v1, t.v2, manifest, mineC));
+                // A line of a run edited in place is a replace where it stands (as my merge reads it): a side's changes
+                // that write one as an insert and a cut of another copy can set two sides' edits of one line side by side.
+                if (sides.TryGetValue(path, out var h))
+                    foreach (var (name, hunks, v) in new[] { ("v1", h.V1, t.v1), ("v2", h.V2, t.v2) })
+                        if (!ReferenceEquals(ThreeWayMerger.InPlace(hunks, t.b, v), hunks))
+                            unsound.Add($"{name} {path}: an edit in place of a line among identical lines is written as an insert " +
+                                        "and a cut of another copy apart (it is a replace where it stands: two sides' edits of " +
+                                        "one line could merge side by side)");
+            }
 
         var manC = manifest.Conflicts.ToHashSet();
         var mineM = myClean.ToHashSet();
@@ -270,7 +283,8 @@ public static class ConflictTreeCrossCheck
     /// </summary>
     private static bool AlwaysKeptByBoth(string[] b, int bs, int bn, string[] v1, int s1, int n1, string[] v2, int s2, int n2)
     {
-        if (bn == 0 || bs < 0 || s1 < 0 || s2 < 0 || bs + bn > b.Length || s1 + n1 > v1.Length || s2 + n2 > v2.Length) return false;
+        if (bn == 0 || bs < 0 || s1 < 0 || s2 < 0 || n1 < 0 || n2 < 0
+            || (long)bs + bn > b.Length || (long)s1 + n1 > v1.Length || (long)s2 + n2 > v2.Length) return false;
         if ((long)(bn + 1) * (n1 + 1) * (n2 + 1) > MaxCells) return false;
         int best1 = Lcs(b, bs, bn, v1, s1, n1), best2 = Lcs(b, bs, bn, v2, s2, n2);
         if (best1 == 0 || best2 == 0) return false;
@@ -315,7 +329,7 @@ public static class ConflictTreeCrossCheck
     /// change is one hunk of a minimal diff of that side, whose old and new lines share none (it would keep that line).</summary>
     private static int? SharedLine(string[] b, int bs, int bn, string[] v, int s, int n)
     {
-        if (bn == 0 || n == 0 || bs < 0 || s < 0 || bs + bn > b.Length || s + n > v.Length) return null;
+        if (bn <= 0 || n <= 0 || bs < 0 || s < 0 || (long)bs + bn > b.Length || (long)s + n > v.Length) return null;
         var set = new HashSet<string>(StringComparer.Ordinal);
         for (int j = 0; j < n; j++) set.Add(v[s + j]);
         for (int i = 0; i < bn; i++)
@@ -324,11 +338,11 @@ public static class ConflictTreeCrossCheck
     }
 
     private static bool ReconstructsSide(
-        IReadOnlyList<string> baseLines, IReadOnlyList<string> variantLines, List<Hunk>? hunks)
+        IReadOnlyList<string> baseLines, IReadOnlyList<string> variantLines, List<Hunk>? hunks, out List<Hunk> sorted)
     {
         // No recorded change on this side: the variant must BE the base (checked, not assumed — a manifest that left
         // out all of one side's changes in a file would otherwise pass).
-        var sorted = (hunks ?? []).OrderBy(h => h.OldStart).ThenBy(h => h.NewStart).ToList();
+        sorted = (hunks ?? []).OrderBy(h => h.OldStart).ThenBy(h => h.NewStart).ToList();
         return HunkApplier.Rebuilds(baseLines, variantLines, sorted);
     }
 
@@ -342,36 +356,40 @@ public static class ConflictTreeCrossCheck
     /// a V2 shortfall and is out of scope for this gate.
     /// </summary>
     private static bool ReconstructsV2(
-        IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines, IReadOnlyList<string> v2Lines, List<Hunk>? v2Def, List<Hunk>? cleanV1)
+        IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines, IReadOnlyList<string> v2Lines, List<Hunk>? v2Def, List<Hunk>? cleanV1,
+        out List<Hunk> sorted)
     {
+        sorted = [];
         var events = new List<(Hunk h, bool definite)>();
         if (v2Def is not null) foreach (var h in v2Def) events.Add((h, true));
         if (cleanV1 is not null) foreach (var h in cleanV1) events.Add((h, false));
         events.Sort((x, y) => x.h.OldStart != y.h.OldStart ? x.h.OldStart.CompareTo(y.h.OldStart) : x.h.OldLines.CompareTo(y.h.OldLines));
 
         var v2Hunks = new List<Hunk>();
-        int offset = 0; // running (V2 - base) line delta from v2 changes seen so far
+        long offset = 0; // running (V2 - base) line delta from v2 changes seen so far
         foreach (var (h, definite) in events)
         {
             if (definite)
             {
                 v2Hunks.Add(h);
-                offset += h.NewLines - h.OldLines;
+                offset += (long)h.NewLines - h.OldLines;
                 continue;
             }
 
             // clean side "v1" region: is V2 unchanged (one-sided v1) or an agreed identical edit?
-            int pos = h.OldStart + offset; // 1-based V2 line where this base region begins
+            long at = (long)h.OldStart + offset; // 1-based V2 line where this base region begins
+            if (at < 0 || at > int.MaxValue) return false; // 0: an insert at the top
+            int pos = (int)at;
             bool v2Unchanged = SeqEqual(v2Lines, pos - 1, h.OldLines, baseLines, h.OldStart - 1, h.OldLines);
             if (v2Unchanged) continue; // v2 did not touch it — nothing to apply
 
             // Agreed only if V2 holds exactly V1's edit there: a V2 change the manifest doesn't record is no agreed edit.
             if (!SeqEqual(v2Lines, pos - 1, h.NewLines, v1Lines, h.NewStart - 1, h.NewLines)) return false;
             v2Hunks.Add(new Hunk(h.Op, h.OldStart, h.OldLines, pos, h.NewLines));
-            offset += h.NewLines - h.OldLines;
+            offset += (long)h.NewLines - h.OldLines;
         }
 
-        var sorted = v2Hunks.OrderBy(h => h.OldStart).ThenBy(h => h.NewStart).ToList();
+        sorted = v2Hunks.OrderBy(h => h.OldStart).ThenBy(h => h.NewStart).ToList();
         return HunkApplier.Rebuilds(baseLines, v2Lines, sorted);
     }
 
@@ -380,7 +398,7 @@ public static class ConflictTreeCrossCheck
     {
         if (len != lenB) return false;
         if (len == 0) return true; // nothing on either side (an insert's base span: at line 0 its start is -1)
-        if (aStart < 0 || bStart < 0 || aStart + len > a.Count || bStart + len > b.Count) return false;
+        if (aStart < 0 || bStart < 0 || (long)aStart + len > a.Count || (long)bStart + len > b.Count) return false;
         for (int k = 0; k < len; k++)
             if (!string.Equals(a[aStart + k], b[bStart + k], StringComparison.Ordinal)) return false;
         return true;

@@ -71,9 +71,36 @@ public static class ThreeWayMerger
     public static List<MergeRegion> Regions(
         IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines, IReadOnlyList<string> v2Lines)
     {
+        var d1 = LineDiffer.Diff(baseLines, v1Lines);
+        var d2 = LineDiffer.Diff(baseLines, v2Lines);
+        var h1 = InPlace(d1, baseLines, v1Lines);
+        var h2 = InPlace(d2, baseLines, v2Lines);
+        // A line one side inserts outright is not, on the other side, half of an edit in place: the other side made the
+        // same insert and cut a copy of the run besides (merging a merge of the two again, say). Pair again without it.
+        if (!ReferenceEquals(h1, d1) || !ReferenceEquals(h2, d2))
+            (h1, h2) = (InPlace(d1, baseLines, v1Lines, Inserted(h2, v2Lines)), InPlace(d2, baseLines, v2Lines, Inserted(h1, v1Lines)));
+        var regions = Regions(baseLines, v1Lines, v2Lines, h1, h2);
+        if (ReferenceEquals(h1, d1) && ReferenceEquals(h2, d2)) return regions;
+
+        // Where the lines as written show one side already holding every change of the other (merging a merge again, say),
+        // the merge is that side. If the edits in place don't merge to it — a conflict, or a copy of a run cut twice — they
+        // misread the other side's insert and its own cut of a copy as an edit of the copy: the lines as written stand.
+        var raw = Regions(baseLines, v1Lines, v2Lines, d1, d2);
+        int holds = Holder(raw);
+        return holds != 0 && (Holder(regions) & holds) == 0 ? raw : regions;
+    }
+
+    /// <summary>Which side a conflict-free merge is: 1 if it is V1 (V2 changed nothing V1 lacks), 2 if V2, 3 both, else 0.</summary>
+    private static int Holder(List<MergeRegion> regions)
+    {
+        if (regions.Any(r => r.Kind == RegionKind.Conflict)) return 0;
+        return (regions.Any(r => r.Kind == RegionKind.V2Only) ? 0 : 1) | (regions.Any(r => r.Kind == RegionKind.V1Only) ? 0 : 2);
+    }
+
+    private static List<MergeRegion> Regions(IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines,
+        IReadOnlyList<string> v2Lines, List<Hunk> h1, List<Hunk> h2)
+    {
         int n = baseLines.Count;
-        var h1 = InPlace(LineDiffer.Diff(baseLines, v1Lines), baseLines, v1Lines);
-        var h2 = InPlace(LineDiffer.Diff(baseLines, v2Lines), baseLines, v2Lines);
 
         // base→variant line map for each side (−1 where the base line was changed away by that side).
         var m1 = BuildMatchMap(h1, n);
@@ -126,34 +153,63 @@ public static class ThreeWayMerger
     /// "cleanly", both edits side by side. Every copy in a run is the same line, so which one goes is free: each delete
     /// moves to an insert in its run (nearest first), and the pair is the replace of the line it stands on. The same for
     /// a run of identical new lines with one changed into it. As many lines kept as before: still a minimal diff.
+    /// Only a line that is an edit of the run's line pairs (<see cref="Resembles"/>): an unrelated line inserted into a run
+    /// while another copy is cut is an insert and a delete, as written; so is a line in <paramref name="keep"/>.
     /// </summary>
-    internal static List<Hunk> InPlace(List<Hunk> hunks, IReadOnlyList<string> a, IReadOnlyList<string> b)
+    internal static List<Hunk> InPlace(List<Hunk> hunks, IReadOnlyList<string> a, IReadOnlyList<string> b,
+        HashSet<string>? keep = null)
     {
         if (hunks.Count < 2) return hunks; // a delete and an insert apart are two hunks
         var map = BuildMatchMap(hunks, a.Count);
-        bool moved = PairRuns(map, a, b.Count);
+        bool moved = PairRuns(map, a, b, keep);
         var inv = Invert(map, b.Count);
-        moved |= PairRuns(inv, b, a.Count);
+        moved |= PairRuns(inv, b, a, null);
         return moved ? HunksOf(Invert(inv, a.Count), a.Count, b.Count) : hunks;
     }
 
+    /// <summary>The lines a side's hunks insert outright, not as a replace.</summary>
+    private static HashSet<string> Inserted(List<Hunk> hunks, IReadOnlyList<string> variant)
+    {
+        var ins = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var h in hunks)
+            if (h.Op == HunkOp.Insert)
+                for (int j = 0; j < h.NewLines; j++) ins.Add(variant[h.NewStart - 1 + j]);
+        return ins;
+    }
+
+    /// <summary>Whether <paramref name="line"/> reads as an edit of the run line <paramref name="run"/>: past indentation,
+    /// what the two start and end with in common covers at least half of the run line (<c>}</c> → <c>};</c>,
+    /// <c>acc = 1;</c> → <c>acc = 2;</c>, a comment appended). A blank run line resembles nothing.</summary>
+    internal static bool Resembles(string run, string line)
+    {
+        var r = run.AsSpan().Trim();
+        var s = line.AsSpan().Trim();
+        if (r.IsEmpty) return false;
+        int p = r.CommonPrefixLength(s);
+        int lim = Math.Min(r.Length, s.Length) - p, q = 0;
+        while (q < lim && r[r.Length - 1 - q] == s[s.Length - 1 - q]) q++;
+        return 2 * (p + q) >= r.Length;
+    }
+
     /// <summary>Within each run of identical lines of <paramref name="a"/>, moves its deletes (lines mapped to −1) to the
-    /// inserts between its kept lines. True if any moved.</summary>
-    private static bool PairRuns(int[] map, IReadOnlyList<string> a, int bCount)
+    /// lines of <paramref name="b"/> inserted between its kept lines that are edits of the run's line. True if any moved.</summary>
+    private static bool PairRuns(int[] map, IReadOnlyList<string> a, IReadOnlyList<string> b, HashSet<string>? keep)
     {
         bool moved = false;
         for (int r0 = 0; r0 < a.Count;)
         {
             int r1 = r0 + 1;
             while (r1 < a.Count && string.Equals(a[r1], a[r0], StringComparison.Ordinal)) r1++;
-            if (r1 - r0 > 1) moved |= PairRun(map, r0, r1, bCount);
+            string line = a[r0];
+            if (r1 - r0 > 1) moved |= PairRun(map, r0, r1, b, j => keep?.Contains(b[j]) != true && Resembles(line, b[j]));
             r0 = r1;
         }
         return moved;
     }
 
-    private static bool PairRun(int[] map, int r0, int r1, int bCount)
+    private static bool PairRun(int[] map, int r0, int r1, IReadOnlyList<string> b, Func<int, bool> pairs)
     {
+        int bCount = b.Count;
         // The run's kept lines (their b lines in order) and the deletes in each gap around them: gap k is before kept k.
         var kept = new List<int>();
         var dels = new List<int> { 0 };
@@ -163,15 +219,22 @@ public static class ThreeWayMerger
         int c = kept.Count;
         if (c == 0 || c == r1 - r0) return false;
 
-        // The inserts in each gap a delete could pair with. The first and last gaps share theirs with the lines deleted
-        // just outside the run (up to the nearest kept line), which pair with them first.
+        // The inserts in each gap a delete could pair with: those that are edits of the run's line. The first and last
+        // gaps share theirs with the lines deleted just outside the run (up to the nearest kept line), which take the
+        // gap's inserts nearest them (a replace pairs its lines in order).
         int p = r0 - 1, q = r1;
         while (p >= 0 && map[p] < 0) p--;
         while (q < map.Length && map[q] < 0) q++;
+        int Room(int lo, int hi)
+        {
+            int n = 0;
+            for (int j = lo; j < hi; j++) if (pairs(j)) n++;
+            return n;
+        }
         var room = new int[c + 1];
-        room[0] = Math.Max(0, kept[0] - (p >= 0 ? map[p] + 1 : 0) - (r0 - p - 1));
-        for (int k = 1; k < c; k++) room[k] = kept[k] - kept[k - 1] - 1;
-        room[c] = Math.Max(0, (q < map.Length ? map[q] : bCount) - kept[c - 1] - 1 - (q - r1));
+        room[0] = Room((p >= 0 ? map[p] + 1 : 0) + (r0 - p - 1), kept[0]);
+        for (int k = 1; k < c; k++) room[k] = Room(kept[k - 1] + 1, kept[k]);
+        room[c] = Room(kept[c - 1] + 1, (q < map.Length ? map[q] : bCount) - (q - r1));
 
         // Deletes beyond their gap's inserts are free; inserts beyond their gap's deletes want one. Pair the nearest
         // free delete and wanting gap, again and again.

@@ -32,7 +32,7 @@ public sealed class InPlaceRunTests
     [Fact]
     public void SidesEditingLinesApartInARun_MergeCleanAtTheirLines()
     {
-        var r = ThreeWayMerger.Merge("f.c", Run(40), Run(40, (8, "x1"), (30, "y1")), Run(40, (12, "x2"), (20, "y2")));
+        var r = ThreeWayMerger.Merge("f.c", Run(40), Run(40, (8, A + " x1"), (30, A + " y1")), Run(40, (12, A + " x2"), (20, A + " y2")));
         Assert.Empty(r.Conflicts);
         Assert.Equal(new[] { ("v1", 8), ("v2", 12), ("v2", 20), ("v1", 30) },
             r.CleanMerges.Select(m => (m.Side, m.OldStart)));
@@ -43,8 +43,8 @@ public sealed class InPlaceRunTests
     public void ALineEditedIntoARun_IsAReplaceWhereItStands()
     {
         // base has one odd line in the run; v1 makes it like the rest, v2 edits a line four below.
-        var b = Run(40, (15, "odd"));
-        var r = ThreeWayMerger.Merge("f.c", b, Run(40), Run(40, (15, "odd"), (19, "v2")));
+        var b = Run(40, (15, A + " // odd"));
+        var r = ThreeWayMerger.Merge("f.c", b, Run(40), Run(40, (15, A + " // odd"), (19, A + " // v2")));
         Assert.Empty(r.Conflicts);
         Assert.Equal(new[] { ("v1", 15), ("v2", 19) }, r.CleanMerges.Select(m => (m.Side, m.OldStart)));
     }
@@ -53,7 +53,7 @@ public sealed class InPlaceRunTests
     public void AnEditInPlace_IsOneReplace_AndStillMinimal()
     {
         var a = Run(40);
-        var b = Run(40, (12, "x"), (25, "y"));
+        var b = Run(40, (12, A + " x"), (25, A.Replace(">> 3", ">> 5")));
         var h = ThreeWayMerger.InPlace(LineDiffer.Diff(a, b), a, b);
         Assert.Equal(new[] { new Hunk(HunkOp.Replace, 12, 1, 12, 1), new Hunk(HunkOp.Replace, 25, 1, 25, 1) }, h);
 
@@ -64,5 +64,50 @@ public sealed class InPlaceRunTests
         Assert.Equal(1, hc.Sum(x => x.NewLines));
         Assert.Null(HunkApplier.Problem(a, c, hc));
         Assert.Null(HunkApplier.Problem(a, b, h));
+    }
+
+    [Fact]
+    public void AnUnrelatedLineInsertedIntoARun_WhileACopyIsCut_StaysAnInsertAndADelete()
+    {
+        // v1 inserts P after x5 and cuts the last x; v2 edits x7: three clean merges, not v1's P as an edit of x6.
+        var b = new[] { "s" }.Concat(Enumerable.Repeat("x", 20)).Append("e").ToList();
+        var v1 = new[] { "s" }.Concat(Enumerable.Repeat("x", 5)).Append("P").Concat(Enumerable.Repeat("x", 14)).Append("e").ToList();
+        var v2 = new[] { "s" }.Concat(Enumerable.Repeat("x", 6)).Append("x // Q").Concat(Enumerable.Repeat("x", 13)).Append("e").ToList();
+        var r = ThreeWayMerger.Merge("f.c", b, v1, v2);
+        Assert.Empty(r.Conflicts);
+        Assert.Contains(r.CleanMerges, m => m.Side == "v1" && m.Op == HunkOp.Insert && m.OldStart == 6);
+        Assert.Contains(r.CleanMerges, m => (m.Side, m.Op, m.OldStart) == ("v2", HunkOp.Replace, 8));
+    }
+
+    [Theory]
+    [InlineData("u242", "u243")]        // lines unlike the run's
+    [InlineData("x // a", "x // b")]    // edits of the run's line, inserted outright
+    public void ReMergingACleanMerge_ChangesNothing(string i1, string i2)
+    {
+        // apply run twice: v1 inserts two lines, v2 cuts a copy of the run; the merge, merged again with v1, is v1's
+        // changes already there (no conflict, the same text).
+        var b = Enumerable.Repeat("x", 7).Concat(new[] { "u241", "x", "a", "b", "c" }).ToList();
+        var v1 = Enumerable.Repeat("x", 5).Concat(new[] { i1, "x", "x", "u241", i2, "x", "a", "b", "c" }).ToList();
+        var v2 = Enumerable.Repeat("x", 6).Concat(new[] { "u241", "x", "a", "b", "c" }).ToList();
+        var merged = MergedText(b, v1, v2);
+        Assert.NotNull(merged);
+        Assert.Equal(merged, MergedText(b, v1, merged!));
+        Assert.Equal(merged, MergedText(b, v2, merged!));
+    }
+
+    /// <summary>The merged text of a conflict-free merge, or null if any region conflicts.</summary>
+    private static List<string>? MergedText(List<string> b, List<string> v1, List<string> v2)
+    {
+        var o = new List<string>();
+        int at = 0;
+        foreach (var g in ThreeWayMerger.Regions(b, v1, v2))
+        {
+            if (g.Kind == RegionKind.Conflict) return null;
+            o.AddRange(b.Skip(at).Take(g.BaseStart0 - at));
+            o.AddRange(g.Kind == RegionKind.V2Only ? v2.Skip(g.V2Start0).Take(g.V2Lines) : v1.Skip(g.V1Start0).Take(g.V1Lines));
+            at = g.BaseStart0 + g.BaseLines;
+        }
+        o.AddRange(b.Skip(at));
+        return o;
     }
 }

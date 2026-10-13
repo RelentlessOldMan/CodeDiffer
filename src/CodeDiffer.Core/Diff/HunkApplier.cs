@@ -22,7 +22,7 @@ public static class HunkApplier
     {
         if (!hunks.All(OpFits)) return false;
         try { return Reconstruct(oldLines, newLines, hunks).SequenceEqual(newLines); }
-        catch (FormatException) { return false; }
+        catch (Exception ex) when (ex is FormatException or ArgumentOutOfRangeException) { return false; }
     }
 
     /// <summary>The contract's op for a hunk's counts: insert = 0 old / ≥1 new, delete = ≥1 old / 0 new, replace = both ≥1.</summary>
@@ -151,9 +151,10 @@ public static class HunkApplier
         {
             // Insert anchors on the line AFTER WHICH it goes (oldStart lines precede it); replace/delete
             // anchor on the first affected line, so copy up to oldStart-1.
-            int copyUntil = h.OldLines == 0 ? h.OldStart : h.OldStart - 1;
+            // In long: a manifest's counts near 2^31 must fail the check, not wrap past it.
+            long copyUntil = h.OldLines == 0 ? h.OldStart : (long)h.OldStart - 1;
             if (h.OldLines < 0 || h.NewLines < 0 || copyUntil < oi || copyUntil + h.OldLines > oldLines.Count
-                || (h.NewLines > 0 && (h.NewStart < 1 || h.NewStart - 1 + h.NewLines > newLines.Count)))
+                || (h.NewLines > 0 && (h.NewStart < 1 || (long)h.NewStart - 1 + h.NewLines > newLines.Count)))
                 throw new FormatException($"hunk {h.Op} -{h.OldStart},{h.OldLines} +{h.NewStart},{h.NewLines} is outside the files or overlaps another");
             for (; oi < copyUntil; oi++)
                 result.Add(oldLines[oi]);

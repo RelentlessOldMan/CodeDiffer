@@ -28,11 +28,26 @@ public static class LineDiffer
     public const int DefaultMaxEditDistance = 3000;
 
     /// <summary>
-    /// Work cap for the linear-space pass, in diagonal steps (≈ (N+M)·D). 2·10⁸ is a few seconds (a 50,000-line pair
-    /// of unrelated lines reaches it in about 4); a pathological input past it falls back to ONE replace over the differing
-    /// middle — still a correct diff, flagged coarse.
+    /// Floor of the work cap for the linear-space pass, in diagonal steps (≈ D²/2 for D differing lines, whatever the
+    /// length). 2·10⁸ is a couple of seconds; a pathological input past the cap falls back to ONE replace over the
+    /// differing middle — still a correct diff, flagged coarse. See <see cref="WorkCap"/>.
     /// </summary>
     public const long DefaultMaxWork = 200_000_000;
+
+    /// <summary>Ceiling of the work cap: a few seconds before a diff gives up.</summary>
+    public const long MaxWorkCeiling = 600_000_000;
+
+    /// <summary>
+    /// The work cap for a pair of N and M lines: room for a diff of up to half their lines ((N+M)²/8 steps), between
+    /// <see cref="DefaultMaxWork"/> and <see cref="MaxWorkCeiling"/>. A fixed cap gave up on any diff of past ~20,000
+    /// changed lines however long the files — 40,000 lines with every fourth edited went coarse (one conflict over the
+    /// whole file in a 3-way merge) though the exact diff takes about as long; a pair mostly unlike still gives up.
+    /// </summary>
+    public static long WorkCap(long n, long m)
+    {
+        long t = n + m;
+        return Math.Clamp(t > 100_000_000 ? long.MaxValue : t * t / 8, DefaultMaxWork, MaxWorkCeiling);
+    }
 
     public static List<Hunk> Diff(string oldText, string newText)
         => Diff(LineText.SplitLines(oldText), LineText.SplitLines(newText));
@@ -67,13 +82,13 @@ public static class LineDiffer
 
     /// <summary>
     /// Diff with an explicit exact-trace budget: within it, classic Myers; past it, linear-space Myers; past
-    /// <paramref name="maxWork"/> too, one coarse replace (<paramref name="coarse"/> = true). Cancellable at every
+    /// <paramref name="maxWork"/> too (default <see cref="WorkCap"/>), one coarse replace (<paramref name="coarse"/> = true). Cancellable at every
     /// edit-distance step.
     /// </summary>
     public static List<Hunk> Diff(IReadOnlyList<string> a, IReadOnlyList<string> b, int maxEditDistance, out bool coarse,
-        long maxWork = DefaultMaxWork, CancellationToken ct = default)
+        long? maxWork = null, CancellationToken ct = default)
     {
-        var moves = ShortestEdit(a, b, maxEditDistance, ct) ?? LinearSpace.Moves(a, b, maxWork, ct);
+        var moves = ShortestEdit(a, b, maxEditDistance, ct) ?? LinearSpace.Moves(a, b, maxWork ?? WorkCap(a.Count, b.Count), ct);
         coarse = moves is null;
         return moves is null ? CoarseHunks(a, b) : BuildHunks(moves);
     }
