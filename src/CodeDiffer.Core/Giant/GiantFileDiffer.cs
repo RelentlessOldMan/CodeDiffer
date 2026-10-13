@@ -8,12 +8,13 @@ public readonly record struct ChangedBlock(HunkOp Op, long OldOffset, long OldLe
 
 /// <summary>
 /// A giant-file diff: the changed byte ranges plus a bounded summary. Reports WHAT changed by reference
-/// (offsets + lengths), never the bytes — the output-model promise for files too big to show.
+/// (offsets + lengths), never the bytes — the output-model promise for files too big to show. <see cref="Coarse"/>: the
+/// block diff passed its work cap, so its regions are wider than the change (a block inside one may be unchanged).
 /// </summary>
 public sealed record BlockDiffResult(
     IReadOnlyList<ChangedBlock> Changes,
     int OldBlocks, int NewBlocks, long OldSize, long NewSize,
-    long ChangedOldBytes, long ChangedNewBytes)
+    long ChangedOldBytes, long ChangedNewBytes, bool Coarse = false)
 {
     public bool Identical => Changes.Count == 0;
     /// <summary>Bytes that did NOT change (shared, content-defined), the honest "most of a 1 GB file is unchanged" figure.</summary>
@@ -29,13 +30,15 @@ public sealed record BlockDiffResult(
 /// </summary>
 public static class GiantFileDiffer
 {
-    public static BlockDiffResult Diff(IReadOnlyList<Chunk> oldChunks, IReadOnlyList<Chunk> newChunks)
+    /// <param name="ct">Stops the block diff (throws <see cref="OperationCanceledException"/>).</param>
+    public static BlockDiffResult Diff(IReadOnlyList<Chunk> oldChunks, IReadOnlyList<Chunk> newChunks, CancellationToken ct = default)
     {
         long oldSize = TotalSize(oldChunks), newSize = TotalSize(newChunks);
 
         var oldShas = oldChunks.Select(c => c.Sha).ToArray();
         var newShas = newChunks.Select(c => c.Sha).ToArray();
-        var hunks = LineDiffer.Diff(oldShas, newShas); // block-index coordinates, 1-based
+        // Block-index coordinates, 1-based; past the work cap, coarse (said, never passed off as exact).
+        var hunks = LineDiffer.Diff(oldShas, newShas, LineDiffer.DefaultMaxEditDistance, out bool coarse, ct: ct);
 
         var changes = new List<ChangedBlock>(hunks.Count);
         long changedOld = 0, changedNew = 0;
@@ -56,12 +59,12 @@ public static class GiantFileDiffer
             changedNew += newLen;
         }
 
-        return new BlockDiffResult(changes, oldChunks.Count, newChunks.Count, oldSize, newSize, changedOld, changedNew);
+        return new BlockDiffResult(changes, oldChunks.Count, newChunks.Count, oldSize, newSize, changedOld, changedNew, coarse);
     }
 
-    /// <param name="ct">Stops the read of either file (throws <see cref="OperationCanceledException"/>).</param>
+    /// <param name="ct">Stops the read of either file, and the block diff (throws <see cref="OperationCanceledException"/>).</param>
     public static BlockDiffResult Diff(string oldPath, string newPath, ChunkerOptions? options = null, CancellationToken ct = default)
-        => Diff(BlockIndex.Build(oldPath, options, ct), BlockIndex.Build(newPath, options, ct));
+        => Diff(BlockIndex.Build(oldPath, options, ct), BlockIndex.Build(newPath, options, ct), ct);
 
     private static long TotalSize(IReadOnlyList<Chunk> chunks)
         => chunks.Count == 0 ? 0 : chunks[^1].Offset + chunks[^1].Length;

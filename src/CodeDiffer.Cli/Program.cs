@@ -135,7 +135,7 @@ static int Compare(string[] args)
     }
 
     PrintSummary(info, args[1], args[2], report);
-    info.WriteLine($"  elapsed    {session.Elapsed.ToString(@"hh\:mm\:ss")}  (threads {options.Parallelism}, cache {cache.ToString().ToLowerInvariant()})");
+    info.WriteLine($"  elapsed    {ProgressView.Clock(session.Elapsed)}  (threads {options.Parallelism}, cache {cache.ToString().ToLowerInvariant()})");
     info.WriteLine($"  content    {report.ComparedPairs} same-size pair(s) · {report.CacheHits} side(s) from hash cache" +
         (report.CodeCompassHits > 0 ? $" ({report.CodeCompassHits} via CodeCompass)" : "") +
         $" · {report.BytesRead / (1024.0 * 1024 * 1024):F1} GB read" +
@@ -398,6 +398,8 @@ static int BlockDiff(string[] args)
 
     double pct = r.OldSize == 0 ? 100 : 100.0 * r.ChangedOldBytes / r.OldSize;
     Console.WriteLine($"  changed    {r.Changes.Count} region(s) · {r.ChangedOldBytes} old / {r.ChangedNewBytes} new bytes ({pct:0.00}% of old) · {r.UnchangedBytes} bytes unchanged");
+    if (r.Coarse)
+        Console.WriteLine("  coarse     too many scattered changes to align block by block in time: the regions are wider than the change, and more is unchanged than shown");
     int shown = 0;
     foreach (var c in r.Changes)
     {
@@ -952,7 +954,7 @@ static T Show<T>(Task<T> task, Func<string> line)
     while (!((IAsyncResult)task).AsyncWaitHandle.WaitOne(console ? 500 : 1000))
     {
         var t = sw.Elapsed;
-        var text = $"{(t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss"))}  {line()}";
+        var text = $"{ProgressView.Clock(t)}  {line()}";
         if (console)
         {
             int width;

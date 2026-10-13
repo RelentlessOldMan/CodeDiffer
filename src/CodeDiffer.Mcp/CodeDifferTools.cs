@@ -238,13 +238,15 @@ public static class CodeDifferTools
         if (out_dir is null && t.ResultDir is null) return "error: out_dir is required (this compare has no result directory)";
         if (out_dir is null) ResultStore.Restore(t); // pruned by another process: saved again before the overlay goes into it
         // The default is a fresh directory each time (merge, merge-2, ...): an overlay written earlier may be in use, and
-        // one another writer claims between the look and the write moves this one on to the next.
+        // one another writer claims between the look and the write, or a file of that name, moves this one on to the next.
+        const int maxDefault = 1000;
         for (int n = 1; ; n++)
         {
+            if (n > maxDefault) return $"error: {t.ResultDir}: merge, merge-2 … merge-{maxDefault} are all taken; give out_dir or prune the old overlays";
             var dir = out_dir ?? Path.Combine(t.ResultDir!, n == 1 ? "merge" : $"merge-{n}");
-            if (out_dir is null && Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any()) continue;
             try
             {
+                if (out_dir is null && (File.Exists(dir) || (Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any()))) continue;
                 var o = MergeOverlay.Write(t.Report!, t.Base, t.V1, t.V2, dir, t.Options.Parallelism);
                 return (t.Reopened ? "note: reopened compare — written from the trees as they are now\n" : "") + ThreeWayViews.OverlayText(o);
             }

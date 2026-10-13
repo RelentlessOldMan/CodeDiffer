@@ -57,8 +57,11 @@ public static class HtmlReport
         if (!s.IsDone || s.Error is not null) throw new InvalidOperationException($"compare {s.Id} has not finished successfully");
         var outDir = Path.GetFullPath(opt.OutDir ?? Path.Combine(AgentViews.OutDir(s), "report"));
         // One writer a directory at a time: two at once each deleted what the other was writing (all but one failed).
+        HtmlReportResult result;
         lock (Gates.GetOrAdd(outDir.TrimEnd(Path.DirectorySeparatorChar), _ => new object()))
-            return WriteTo(s, opt, outDir, progress, ct);
+            result = WriteTo(s, opt, outDir, progress, ct);
+        ResultStore.Restore(s); // pruned as the report was written
+        return result;
     }
 
     /// <summary>A lock per report directory (case-insensitive, as Windows names are), held while a report is written.</summary>
@@ -456,11 +459,12 @@ public static class HtmlReport
     {
         if (trees.FirstOrDefault(t => ResultStore.Overlaps(outDir, t)) is { } tree)
             return $"the report directory {outDir} and the compared tree {tree} overlap; write the report somewhere else";
+        if (ResultStore.HoldsResults(outDir) is { } holds) return $"the report directory {holds}";
         if (File.Exists(outDir))
             return $"{outDir} is a file, not a directory; write the report somewhere else";
         if (Directory.Exists(outDir) && !IsOurs(outDir))
             return $"{outDir} exists and is not a CodeDiffer report — refusing to overwrite it";
-        return null;
+        return ResultStore.CannotMake(outDir, "report directory");
     }
 
     /// <summary>Empty, marked as ours, or a report from before the marker: nothing but index.html, data\ and full\,

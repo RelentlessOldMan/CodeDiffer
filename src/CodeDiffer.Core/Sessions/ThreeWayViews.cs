@@ -134,6 +134,7 @@ public static class ThreeWayViews
 
         var file = AgentViews.OutFile(s, "merges", e.Path, ".merge.txt", r.Entries.Select(x => x.Path));
         AgentViews.WriteWhole(file, body);
+        ResultStore.Restore(s); // pruned as it was written
         int end = AgentViews.WindowEnd(lines, total, startLine, maxLines);
         o.Append($"capped: showing lines {startLine:N0}-{end:N0} of {total:N0}{AgentViews.CutNote(lines, startLine, end, maxLines, total)}; whole file: {file}\n");
         if (startLine == 1)
@@ -289,7 +290,7 @@ public static class ThreeWayViews
         return null;
     }
 
-    private static string Clock(TimeSpan t) => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
+    private static string Clock(TimeSpan t) => ProgressView.Clock(t); // a day or more as hours, never dropped
 
     private static string Gb(long b) => AgentViews.Bytes(b);
 }

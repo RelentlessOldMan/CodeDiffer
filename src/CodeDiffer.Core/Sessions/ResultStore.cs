@@ -77,6 +77,8 @@ public static class ResultStore
     /// A finished compare's directory that another process pruned while this one still holds the compare, saved again
     /// (change lists and compare.json): a diff, patch, report or overlay written into it next would otherwise recreate
     /// it without compare.json, never listed and never pruned. A save that fails is left to the write that follows.
+    /// Called before such a write and again after it: a prune that deleted compare.json while the write went in leaves the
+    /// directory with only what was written.
     /// </summary>
     public static void Restore(Session s)
     {
@@ -259,7 +261,15 @@ public static class ResultStore
             meta.Attributes &= ~FileAttributes.ReadOnly;
             meta.Delete();
         }
-        Directory.Delete(dir);
+        try { Directory.Delete(dir); }
+        catch (IOException) when (Directory.Exists(dir))
+        {
+            // A diff or report written into it while it was being emptied (another process still holds the compare):
+            // emptied again, so no directory is left without compare.json, never listed and never pruned. A file still
+            // held open fails the prune, said as any other.
+            DeleteContents(new DirectoryInfo(dir), keep: null);
+            Directory.Delete(dir);
+        }
     }
 
     internal static void DeleteContents(DirectoryInfo d, string? keep)
@@ -742,6 +752,31 @@ public static class ResultStore
             return Path.EndsInDirectorySeparator(d) ? d : d + Path.DirectorySeparatorChar;
         }
         return Dir(path).StartsWith(Dir(tree), cmp);
+    }
+
+    /// <summary>Why an output directory can't hold the results directory (<see cref="DefaultRoot"/>), or null: the compare
+    /// saves its result there first, so the output would be refused only after a compare that may take an hour (an overlay
+    /// or report directory must be new, empty or ours), or a report replaced would delete the saved results.</summary>
+    public static string? HoldsResults(string dir)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(DefaultRoot));
+        return Overlaps(root, dir, oneWay: true)
+            ? $"{dir} holds the results directory {root}, where the compare is saved first; write it somewhere else (or set CODEDIFFER_RESULTS_DIR)"
+            : null;
+    }
+
+    /// <summary>Why a directory can't be made at <paramref name="dir"/> (a file where it or one above it would go, or a drive
+    /// or share that isn't there), or null; <paramref name="what"/> names it.</summary>
+    public static string? CannotMake(string dir, string what)
+    {
+        dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+        for (var d = dir; d is not null; d = Path.GetDirectoryName(d))
+        {
+            if (File.Exists(d))
+                return d == dir ? $"{dir} is a file; the {what} must be a directory" : $"{d} is a file, so the {what} {dir} can't be made under it";
+            if (Directory.Exists(d)) return null;
+        }
+        return $"the {what} {dir} can't be made: its drive or share {Path.GetPathRoot(dir)} isn't there";
     }
 
     /// <summary>Is <paramref name="path"/> inside <paramref name="tree"/> (or, unless <paramref name="oneWay"/>, the other

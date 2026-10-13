@@ -50,17 +50,11 @@ public static class MergeOverlay
         foreach (var (name, root) in new[] { ("base", baseDir), ("v1", v1), ("v2", v2) })
             if (ResultStore.Overlaps(dir, root, oneWay: true))
                 throw new ArgumentException($"the overlay directory {dir} is inside the {name} tree {root}; write it somewhere else");
+        if (ResultStore.HoldsResults(dir) is { } holds) throw new ArgumentException($"the overlay directory {holds}");
         if (Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any())
             throw new OverlayDirTakenException(dir);
         // A file where the directory, or one above it, would go, or a drive or share that isn't there, can't be created.
-        for (var d = dir; d is not null; d = Path.GetDirectoryName(d))
-        {
-            if (File.Exists(d))
-                throw new ArgumentException(d == dir ? $"{dir} is a file; the overlay needs a new or empty directory"
-                                                     : $"{d} is a file, so the overlay directory {dir} can't be made under it");
-            if (Directory.Exists(d)) return;
-        }
-        throw new ArgumentException($"the overlay directory {dir} can't be made: its drive or share {Path.GetPathRoot(dir)} isn't there");
+        if (ResultStore.CannotMake(dir, "overlay directory") is { } cannot) throw new ArgumentException(cannot);
     }
 
     /// <param name="dir">A new or empty directory, not inside any of the three trees.</param>
@@ -74,16 +68,16 @@ public static class MergeOverlay
             throw new ArgumentException($"the compare is incomplete ({r.DroppedDirectories} director(ies) could not be listed): files under them " +
                                         "would look deleted — refusing to write an overlay from it; compare again");
         Directory.CreateDirectory(dir);
-        // Claim the directory: a second writer racing past the empty check fails here instead of mixing two overlays.
-        try
-        {
-            using var claim = new FileStream(Path.Combine(dir, Incomplete), FileMode.CreateNew, FileAccess.Write);
-            claim.Write(Encoding.UTF8.GetBytes("This overlay is being written (or its writer stopped part way). Do not apply it.\n"));
-        }
-        catch (IOException)
+        // Claim the directory: a second writer racing past the empty check fails here instead of mixing two overlays. Only
+        // the claim already there means taken: any other failure (a full disk, a lost share) is the error it is.
+        FileStream claim;
+        try { claim = new FileStream(Path.Combine(dir, Incomplete), FileMode.CreateNew, FileAccess.Write); }
+        catch (IOException ex) when (ex.HResult is unchecked((int)0x80070050) or unchecked((int)0x800700B7) // file / already exists
+                                     || (!OperatingSystem.IsWindows() && File.Exists(Path.Combine(dir, Incomplete))))
         {
             throw new OverlayDirTakenException(dir);
         }
+        using (claim) claim.Write(Encoding.UTF8.GetBytes("This overlay is being written (or its writer stopped part way). Do not apply it.\n"));
         var files = Path.Combine(dir, "files");
         Directory.CreateDirectory(files);
         var filesRoot = files + Path.DirectorySeparatorChar;

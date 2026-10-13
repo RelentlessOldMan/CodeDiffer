@@ -299,6 +299,7 @@ public static class AgentViews
         var file = OutFile(s, context == PatchOptions.DefaultContextLines ? "diffs" : $"diffs-U{context}", c.RelativePath, ".patch",
             changes.Select(x => x.RelativePath));
         WriteWhole(file, section);
+        ResultStore.Restore(s); // pruned as it was written
         int end = WindowEnd(all, total, startLine, maxLines);
         o.Append($"capped: showing lines {startLine:N0}-{end:N0} of {total:N0}{CutNote(all, startLine, end, maxLines, total)}; full patch: {file}\n");
         if (startLine == 1 && info.Hunks > 0)
@@ -490,6 +491,7 @@ public static class AgentViews
             try { File.Delete(tmp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
             throw;
         }
+        ResultStore.Restore(s); // pruned as the patch was written
         // A reopened compare's patch is of the trees as they are now, under the saved verdicts: say so, as write_merge does.
         return ReopenedNote(s) + $"changeset {s.Id}: {file}  ({Bytes(new FileInfo(file).Length)})\n" +
                $"  {ps.Summary(literal)}\n" +
@@ -505,7 +507,9 @@ public static class AgentViews
     {
         if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
         var r = ChangePorter.Run(s.Report!, s.Left, s.Right, target, write, parallelism: s.Options.Parallelism);
-        return PortText(r, $"compare {s.Id}", Path.Combine(OutDir(s), $"apply-{(write ? "written" : "dryrun")}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt"), maxFiles);
+        var text = PortText(r, $"compare {s.Id}", Path.Combine(OutDir(s), $"apply-{(write ? "written" : "dryrun")}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt"), maxFiles);
+        ResultStore.Restore(s); // pruned as the report was written
+        return text;
     }
 
     /// <summary>The bounded port report (also used by the CLI); the full detail goes to <paramref name="reportFile"/>.</summary>
@@ -743,7 +747,7 @@ public static class AgentViews
 
     private static string Name(FileChange c) => c.RenamedFrom is { } f ? $"{f} -> {c.RelativePath}" : c.RelativePath;
 
-    private static string Clock(TimeSpan t) => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
+    private static string Clock(TimeSpan t) => ProgressView.Clock(t); // a day or more as hours, never dropped
 
     public static string Bytes(long b) => b switch
     {

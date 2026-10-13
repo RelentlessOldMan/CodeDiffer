@@ -45,7 +45,9 @@ Large files a/regmap_block0.h and b/regmap_block0.h differ: 1,047 changed region
 ```
 
 The agent sees a few lines; nobody loads 52k hunks into a context window or a browser DOM. A patch describes such
-a file in `#` lines (copy it by hand); the HTML report lists it, its byte ranges only with `--large`.
+a file in `#` lines (copy it by hand); the HTML report lists it, its byte ranges only with `--large`. Where changes
+are scattered too widely to align block by block in time, the block diff stops at its work cap and says `coarse`:
+its regions are wider than the change, and more is unchanged than they show.
 
 ## 4. What the agent gets (the anti-TMI surface)
 
@@ -279,9 +281,10 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   value, an option without the one it goes with (`-U` / `--literal` without `--patch`; `--out`, `--large`,
   `--include-identical`, `--max-diffs` without `--html`; `--html` with `--no-save`), a report `--out` inside a
   compared tree, that is a file, or that is a directory other than one of our reports, and `verify` given only one
-  of `--base` / `--variant`. A results directory inside a compared tree, and a `compare3 --merge-out` in, or
-  holding, the report's `--out`, or one that can't be made (a file, under a file, on a drive that isn't there),
-  are refused before the compare too (exit 2). `--html` whose result could not be saved
+  of `--base` / `--variant`. A results directory inside a compared tree, a `compare3 --merge-out` in, or
+  holding, the report's `--out`, and a report `--out` or `--merge-out` that holds the results directory (where the
+  compare is saved first) or can't be made (a file, under a file, on a drive that isn't there), are refused before
+  the compare too (exit 2). `--html` whose result could not be saved
   says there is no report and exits 2, `compare` and `compare3` alike. `--patch` renders with `--threads` threads.
   "Inside" is by what the paths resolve to, not only their spelling: a tree named through a junction, symlink,
   subst or mapped drive is the same tree, for the results directory, the overlay, the report and `apply-overlay`.
@@ -290,15 +293,18 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   an unpaired surrogate as U+FFFD — finds that file, and a `path_glob` matches that form too. When several files
   show alike, the answer lists their escaped names (`c\uD801.txt`), and either one asked for so is found; the
   surrogate itself can't be passed (JSON's reader refuses it, before CodeDiffer sees the call). A diff too big to
-  show inline is saved under the path mirrored, or, where the tree has a file `a` and a directory `a.patch/`, under
-  `diffs/_clash/` by the path's hash; one asked for with more context than the default never changes the hunk count
+  show inline is saved under the path mirrored, or, where the tree has a file `a` and a directory `a.patch/`, or
+  files a case-sensitive tree tells apart by case (`Foo.c`, `foo.c`), under `diffs/_clash/` by the path's hash; it is
+  written beside its name and moved into place, so pages asked for while it is open never collide. A name that is
+  several files but for case, none of them exactly, is answered with their names; one asked for with more context than the default never changes the hunk count
   a listing shows. `export_changeset`'s `out_path` must be a file path outside both trees: a device (`NUL`, `CON`),
   a root, a directory or a path with a NUL is an `error:` answer. A reopened compare's export, like its
   `write_merge` and report, says it was rendered from the trees as they are now.
 - On a 3-way compare, `list_files`'s `reason` and `lines` and `get_file_diff`'s `context` are 2-way only: given,
   they are an error, never silently ignored. `write_merge` with no `out_dir` writes `merge\` in the result
-  directory, then `merge-2\`, `merge-3\`, … once that holds an overlay, never refusing its own default: one another writer claims
-  at the same moment moves it on to the next.
+  directory, then `merge-2\`, `merge-3\`, … once that holds an overlay (or a file has the name), never refusing its own
+  default: one another writer claims at the same moment moves it on to the next. Any other failure (a full disk, a
+  directory that can't be listed) is the `error:` it is, never a reason to try the next name.
 - A compare id is looked up as an id first: a folder in the working directory named like one is not that compare
   (a result directory given by its path still opens).
 - `results --prune` never deletes through a link: a junction or symlink in the results directory is not a saved

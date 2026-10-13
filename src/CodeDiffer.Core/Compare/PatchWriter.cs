@@ -334,6 +334,8 @@ public static class PatchWriter
         var r = GiantFileDiffer.Diff(oldFull, newFull, ct: opt.Cancellation);
         w.Write($"Large files a/{oldRel} and b/{newRel} differ: {r.Changes.Count} changed region(s), " +
                 $"{r.ChangedOldBytes:N0} of {r.OldSize:N0} bytes ({100.0 * r.ChangedOldBytes / Math.Max(1, r.OldSize):F2}%) -> {r.NewSize:N0} bytes\n");
+        if (r.Coarse)
+            w.Write("  coarse: too many scattered changes to align block by block in time — the regions are wider than the change\n");
         foreach (var ch in r.Changes.Take(opt.MaxGiantRanges))
             w.Write($"  {CanonicalTokens.Token(ch.Op)} old[{ch.OldOffset:N0}, +{ch.OldLength:N0}) -> new[{ch.NewOffset:N0}, +{ch.NewLength:N0})\n");
         if (r.Changes.Count > opt.MaxGiantRanges)

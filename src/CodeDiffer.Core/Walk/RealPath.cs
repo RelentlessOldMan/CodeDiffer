@@ -39,22 +39,44 @@ internal static class RealPath
     {
         if (!OperatingSystem.IsWindows() || Identity(Path.GetFullPath(dir)) is not { } want) return false;
         for (var d = Path.GetFullPath(path); !string.IsNullOrEmpty(d); d = Path.GetDirectoryName(d))
-            if (Directory.Exists(d) && Identity(d) == want) return true;
+            if (Directory.Exists(d) && Identity(d) is { } id && id.Same(want)) return true;
         return false;
     }
 
-    /// <summary>A directory's volume serial and file id, or null when it can't be opened or has none.</summary>
-    internal static (uint Volume, ulong File)? Identity(string dir)
+    /// <summary>A directory's identity: the 32-bit volume serial and 64-bit file index every file system gives, and the
+    /// 64-bit serial and 128-bit file id where it gives those too (ReFS ids don't fit 64 bits: two directories could
+    /// share an index).</summary>
+    internal readonly record struct DirIdentity(uint Volume, ulong File, ulong? Volume64 = null, UInt128? File128 = null)
     {
-        using var h = CreateFileW(dir, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
+        /// <summary>One directory: by the 128-bit ids where both have them, else by the 64-bit index.</summary>
+        public bool Same(DirIdentity o) => File128 is { } f && o.File128 is { } g
+            ? Volume64 == o.Volume64 && f == g
+            : Volume == o.Volume && File == o.File;
+    }
+
+    /// <summary>A directory's identity, or null when it can't be opened or has none.</summary>
+    internal static DirIdentity? Identity(string dir)
+    {
+        using var h = CreateFileW(Long(dir), 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
         if (h.IsInvalid || !GetFileInformationByHandle(h, out var info)) return null;
         ulong id = ((ulong)info.FileIndexHigh << 32) | info.FileIndexLow;
-        return id == 0 ? null : (info.VolumeSerialNumber, id);
+        if (id == 0) return null;
+        return GetFileInformationByHandleEx(h, 18 /* FileIdInfo */, out var ex, (uint)Marshal.SizeOf<FileIdInfo>())
+               && (ex.IdLow | ex.IdHigh) != 0
+            ? new DirIdentity(info.VolumeSerialNumber, id, ex.VolumeSerialNumber, new UInt128(ex.IdHigh, ex.IdLow))
+            : new DirIdentity(info.VolumeSerialNumber, id);
+    }
+
+    /// <summary>A path CreateFileW opens past MAX_PATH: \\?\ in front of a long one (\\?\UNC\ for a share).</summary>
+    internal static string Long(string path)
+    {
+        if (path.Length < 248 || path.StartsWith(@"\\?\", StringComparison.Ordinal) || path.StartsWith(@"\\.\", StringComparison.Ordinal)) return path;
+        return path.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + path[2..] : @"\\?\" + path;
     }
 
     private static string? Final(string dir)
     {
-        using var h = CreateFileW(dir, 0, 7 /* share read|write|delete */, IntPtr.Zero, 3 /* OPEN_EXISTING */,
+        using var h = CreateFileW(Long(dir), 0, 7 /* share read|write|delete */, IntPtr.Zero, 3 /* OPEN_EXISTING */,
             0x02000000 /* FILE_FLAG_BACKUP_SEMANTICS: open a directory */, IntPtr.Zero);
         if (h.IsInvalid) return null;
         var buf = new char[1024];
@@ -88,6 +110,17 @@ internal static class RealPath
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetFileInformationByHandle(SafeFileHandle h, out ByHandleFileInformation info);
+
+    /// <summary>Native FILE_ID_INFO: a 64-bit volume serial and a 128-bit file id (24 bytes).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct FileIdInfo
+    {
+        public ulong VolumeSerialNumber;
+        public ulong IdLow, IdHigh;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetFileInformationByHandleEx(SafeFileHandle h, int infoClass, out FileIdInfo info, uint size);
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern uint GetFinalPathNameByHandleW(SafeFileHandle h, [Out] char[] buf, uint size, uint flags);

@@ -36,7 +36,10 @@ internal sealed record TrustTiming(long FirstLookTicks, long SettleTicks)
     public static readonly TrustTiming Local = new(TimeSpan.FromSeconds(3).Ticks, TimeSpan.FromSeconds(3).Ticks);
     public static readonly TrustTiming Network = new(TimeSpan.FromHours(1).Ticks, TimeSpan.FromSeconds(3).Ticks);
 
-    public static TrustTiming For(string rootFull) => IsNetwork(rootFull) ? Network : Local;
+    /// <summary>By the root as given and as it resolves: a local junction or symlink to a share is on the network (the
+    /// server's clock, so the longer margin).</summary>
+    public static TrustTiming For(string rootFull)
+        => IsNetwork(rootFull) || IsNetwork(Walk.RealPath.Of(rootFull)) ? Network : Local;
 
     /// <summary>UNC paths, mapped drives, and network mounts (NFS/CIFS/SMB on Linux/macOS — .NET reports them
     /// as DriveType.Network). If the drive can't be identified, assume network: the longer margin only costs a
