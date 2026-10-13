@@ -44,7 +44,7 @@ public static class HunkApplier
     /// of as many lines as it replaces leaves none of them as it was (that line would split it in two), and one of a
     /// different number shares no line between its old and new blocks (a minimal diff would keep that line). With
     /// <paramref name="whitespaceOnly"/>, each hunk must also change only whitespace
-    /// (<see cref="Compare.TextInspector.WhitespaceKey"/>).
+    /// (<see cref="Compare.TextInspector.SameButWhitespace"/>).
     /// </summary>
     public static string? Problem(IEnumerable<string> oldLines, IEnumerable<string> newLines, IReadOnlyList<Hunk> hunks, bool whitespaceOnly = false)
     {
@@ -104,7 +104,7 @@ public static class HunkApplier
             // a replace, or two hunks merged over the lines between them); a minimal diff would have kept it.
             if (h.Op == HunkOp.Replace && h.OldLines != h.NewLines && Kept(oldBlock, newBlock) is { } kept)
                 return $"{Show(h)}: keeps a line it replaces (\"{Clip(kept)}\" is on both sides: an unchanged line inside the hunk)";
-            if (whitespaceOnly && !string.Equals(WsKey(oldBlock), WsKey(newBlock), StringComparison.Ordinal))
+            if (whitespaceOnly && !Compare.TextInspector.SameButWhitespace(Text(oldBlock), Text(newBlock)))
                 return $"{Show(h)}: changes more than whitespace";
         }
         while (true)
@@ -128,8 +128,7 @@ public static class HunkApplier
 
     private static string Clip(string s) => s.Length <= 60 ? s : s[..60] + "…";
 
-    private static string WsKey(List<string> lines)
-        => Compare.TextInspector.WhitespaceKey(Compare.TextInspector.NormalizeEol(string.Join('\n', lines)));
+    private static string Text(List<string> lines) => Compare.TextInspector.NormalizeEol(string.Join('\n', lines));
 
     private static string Show(Hunk h) => $"hunk {CanonicalTokens.Token(h.Op)} -{h.OldStart},{h.OldLines} +{h.NewStart},{h.NewLines}";
 

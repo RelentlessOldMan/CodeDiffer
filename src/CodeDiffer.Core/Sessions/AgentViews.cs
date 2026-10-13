@@ -251,7 +251,7 @@ public static class AgentViews
         IReadOnlyList<FileChange> changes = found is null ? s.Report!.Changes : [.. found.Select(f => f.Change)];
         FileChange? Find(string p) => changes.FirstOrDefault(c => c.RelativePath == p)
              ?? changes.FirstOrDefault(c => c.RenamedFrom == p)
-             ?? changes.FirstOrDefault(c => string.Equals(c.RelativePath, p, StringComparison.OrdinalIgnoreCase));
+             ?? ByCase(changes, c => c.RelativePath, p);
         // The path as given first: " a.txt" is a name of its own, not a.txt with a stray space.
         var given = path;
         var c = Find(path = Normalize(given, trim: false));
@@ -263,6 +263,7 @@ public static class AgentViews
             if (shown.Count > 1) return Ambiguous(path, shown.Select(x => x.RelativePath));
             c = shown.FirstOrDefault();
         }
+        if (c is null && CaseAmbiguous(changes.Select(x => x.RelativePath), path) is { } cased) return cased;
         if (c is null)
         {
             if (found is not null)
@@ -295,9 +296,9 @@ public static class AgentViews
 
         // Capped: write the whole section once, then show the requested window plus the hunk map. Another context is a
         // sibling directory, never a suffix: x at context 5 and a file named x.U5 would share one name.
-        var file = OutFile(s, context == PatchOptions.DefaultContextLines ? "diffs" : $"diffs-U{context}", c.RelativePath, ".patch");
-        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        File.WriteAllText(file, section, new UTF8Encoding(false));
+        var file = OutFile(s, context == PatchOptions.DefaultContextLines ? "diffs" : $"diffs-U{context}", c.RelativePath, ".patch",
+            changes.Select(x => x.RelativePath));
+        WriteWhole(file, section);
         int end = WindowEnd(all, total, startLine, maxLines);
         o.Append($"capped: showing lines {startLine:N0}-{end:N0} of {total:N0}{CutNote(all, startLine, end, maxLines, total)}; full patch: {file}\n");
         if (startLine == 1 && info.Hunks > 0)
@@ -370,19 +371,74 @@ public static class AgentViews
     /// <summary>
     /// Where a capped view writes its whole text: the relative path mirrored under <c>&lt;out&gt;\&lt;sub&gt;</c>, so two
     /// files never share a name (flattening "a/b.c" and "a_b.c" to one name made one overwrite the other).
+    /// <paramref name="paths"/> are the compare's other paths: one that differs from <paramref name="rel"/> only in case (a
+    /// case-sensitive tree's Foo.c and foo.c) is one name here, so each of them gets its own.
     /// </summary>
-    internal static string OutFile(Session s, string sub, string rel, string suffix)
+    internal static string OutFile(Session s, string sub, string rel, string suffix, IEnumerable<string> paths)
     {
         var root = Path.Combine(OutDir(s), sub);
         var mirrored = Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar)) + suffix;
         // The path mirrored, unless the tree has a file where it needs a directory or the reverse (a file a and a
-        // directory a.patch/): then one flat name from the path's hash, never another file's.
-        bool clash = Directory.Exists(mirrored);
+        // directory a.patch/), or another path but for case: then one flat name from the path's hash, never another file's.
+        bool clash = Directory.Exists(mirrored)
+                     || paths.Any(p => !string.Equals(p, rel, StringComparison.Ordinal) && string.Equals(p, rel, StringComparison.OrdinalIgnoreCase));
         for (var dir = Path.GetDirectoryName(mirrored); !clash && dir is not null && dir.Length > root.Length; dir = Path.GetDirectoryName(dir))
             clash = File.Exists(dir);
         if (!clash) return mirrored;
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(rel)))[..16].ToLowerInvariant();
         return Path.Combine(root, "_clash", $"{Path.GetFileName(rel)}.{hash}{suffix}");
+    }
+
+    /// <summary>
+    /// A capped view's whole text written to <paramref name="file"/>: beside it and moved into place, so a reader never
+    /// sees it half written and two answers paging one file at the same moment never collide (one wrote it unshared while
+    /// the other opened it: "the process cannot access the file"). A move held off by a reader is retried; one still held
+    /// off keeps the file there, which is the same view's text.
+    /// </summary>
+    internal static void WriteWhole(string file, string text)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        var tmp = $"{file}.{Guid.NewGuid():N}.tmp";
+        File.WriteAllText(tmp, text, new UTF8Encoding(false));
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(tmp, file, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt < 20 && !Directory.Exists(file)) { Thread.Sleep(25); continue; }
+                try { File.Delete(tmp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
+                if (File.Exists(file)) return;
+                throw;
+            }
+        }
+    }
+
+    /// <summary>The one entry whose path is <paramref name="path"/> but for case, or null: none, or several (a case-sensitive
+    /// tree's Foo.c and foo.c), which <see cref="CaseAmbiguous"/> answers.</summary>
+    internal static T? ByCase<T>(IEnumerable<T> items, Func<T, string?> key, string path) where T : class
+    {
+        T? one = null;
+        foreach (var x in items)
+            if (string.Equals(key(x), path, StringComparison.OrdinalIgnoreCase))
+            {
+                if (one is not null) return null;
+                one = x;
+            }
+        return one;
+    }
+
+    /// <summary>The answer when several paths are <paramref name="path"/> but for case and none is it exactly, or null.</summary>
+    internal static string? CaseAmbiguous(IEnumerable<string> paths, string path)
+    {
+        var cased = paths.Where(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.Ordinal).Take(10).ToList();
+        return cased.Count > 1
+            ? $"{path} differs only in case from several files (the tree tells them apart by case); ask for one by its exact name:\n" +
+              string.Concat(cased.Select(p => "  " + ResultStore.Escaped(p) + "\n"))
+            : null;
     }
 
     /// <summary>The entries one of whose paths, as UTF-8 shows it (an unpaired surrogate as U+FFFD), is this: one is the

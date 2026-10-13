@@ -166,6 +166,16 @@ internal static class TextInspector
            || (before is >= '0' and <= '9' && after == '.') || (before == '.' && after is >= '0' and <= '9');
 
     /// <summary>
+    /// Whether two EOL-normalized texts differ only in whitespace: their <see cref="WhitespaceKey"/>s match with a backslash
+    /// escaping the next character and with it escaping nothing. Which a file means is its language's (C, JSON: an escape;
+    /// a C# verbatim string, PowerShell, batch: a backslash is text), and a closing quote read as escaped puts the rest of
+    /// its line in or out of a string the wrong way round: a change inside a string read as spacing between tokens.
+    /// </summary>
+    public static bool SameButWhitespace(string a, string b)
+        => string.Equals(WhitespaceKey(a), WhitespaceKey(b), StringComparison.Ordinal)
+           && string.Equals(WhitespaceKey(a, escapes: false), WhitespaceKey(b, escapes: false), StringComparison.Ordinal);
+
+    /// <summary>
     /// What a whitespace-only change leaves alone, of EOL-normalized text: the same lines, each with its leading and
     /// trailing whitespace dropped, and an inner run of it read as one space where it <see cref="Separates"/> two
     /// tokens (two word characters, or two operator characters) or is inside a quoted string on its line, and as nothing
@@ -174,9 +184,10 @@ internal static class TextInspector
     /// taken out of a string (<c>split(" ")</c> → <c>split("")</c>, <c>"Total: "</c> → <c>"Total:"</c>) and a line
     /// joined, split or added are content. A quote not escaped by a backslash (one after an odd run of them: in <c>"\\"</c> the second quote closes) opens a string, the same quote closes it,
     /// and so does a line ending (an apostrophe in prose only makes the rest of its line stricter). The width of a run is never kept,
-    /// so a run widened or narrowed inside a string literal reads as whitespace too.
+    /// so a run widened or narrowed inside a string literal reads as whitespace too. With <paramref name="escapes"/> false a
+    /// backslash escapes nothing (a C# <c>@"C:\temp\"</c>, a PowerShell or batch string): see <see cref="SameButWhitespace"/>.
     /// </summary>
-    public static string WhitespaceKey(string s)
+    public static string WhitespaceKey(string s, bool escapes = true)
     {
         var sb = new StringBuilder(s.Length);
         bool lineStart = true;
@@ -186,7 +197,7 @@ internal static class TextInspector
         {
             char c = s[i];
             bool isEscaped = escaped;
-            escaped = c == '\\' && !escaped;
+            escaped = escapes && c == '\\' && !escaped;
             if (IsHorizontalSpace(c))
             {
                 while (i + 1 < s.Length && IsHorizontalSpace(s[i + 1])) i++;

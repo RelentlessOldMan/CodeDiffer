@@ -14,7 +14,17 @@ return Run(args);
 static int Run(string[] args)
 {
     if (args.Length == 0) { PrintUsage(); return 0; }
+    // A root that can't be listed, a file denied, a share lost mid-run: an error (exit 2), never an unhandled crash.
+    try { return Dispatch(args); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 2;
+    }
+}
 
+static int Dispatch(string[] args)
+{
     switch (args[0])
     {
         case "version" or "--version" or "-v":

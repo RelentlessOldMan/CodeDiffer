@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using CodeDiffer.Core.Compare;
@@ -55,6 +56,16 @@ public static class HtmlReport
         var opt = options ?? new HtmlReportOptions();
         if (!s.IsDone || s.Error is not null) throw new InvalidOperationException($"compare {s.Id} has not finished successfully");
         var outDir = Path.GetFullPath(opt.OutDir ?? Path.Combine(AgentViews.OutDir(s), "report"));
+        // One writer a directory at a time: two at once each deleted what the other was writing (all but one failed).
+        lock (Gates.GetOrAdd(outDir.TrimEnd(Path.DirectorySeparatorChar), _ => new object()))
+            return WriteTo(s, opt, outDir, progress, ct);
+    }
+
+    /// <summary>A lock per report directory (case-insensitive, as Windows names are), held while a report is written.</summary>
+    private static readonly ConcurrentDictionary<string, object> Gates = new(StringComparer.OrdinalIgnoreCase);
+
+    private static HtmlReportResult WriteTo(Session s, HtmlReportOptions opt, string outDir, Action<int, int>? progress, CancellationToken ct)
+    {
         Prepare(outDir, s switch
         {
             CompareSession c => new[] { c.Left, c.Right },

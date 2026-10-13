@@ -313,7 +313,9 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   parsed: a quote not escaped by a backslash (one after an odd run of them: in `"\\"` the second quote closes the
   string) opens a string until the same quote or the line's end (so an
   apostrophe in a comment only makes the rest of its line stricter), and a run of spaces widened inside a string
-  literal reads as whitespace. A whitespace-only change is diffed line for line (each changed line a replace of
+  literal reads as whitespace. A change is `whitespace` only if it is so with a backslash read as text too, as a C#
+  verbatim string, PowerShell and batch read it: in `@"C:\temp\"` the quote after the backslash closes the string,
+  so `Log("a, b")` → `Log("a,b")` beside it is `content`. A whitespace-only change is diffed line for line (each changed line a replace of
   itself), never a line paired with an identical one elsewhere.
 - A reason is the text's: line endings changed along with the encoding (UTF-8 CRLF → UTF-16 LF) are `eol`, and
   the patch note says the encoding changed too; a shown diff of a whitespace or content change says so as well,
@@ -414,7 +416,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 |---|---|
 | 0 | done: nothing conflicts and nothing is missing |
 | 1 | done, with conflicts (`compare3`, `apply`), a file that failed (`apply-overlay`), a `verify` gate failed, or a prune that could not delete everything |
-| 2 | error: a tree or file not found, a refused directory, an unreadable manifest, a failed `--html` / `--merge-out` |
+| 2 | error: a tree or file not found, a refused directory, an unreadable manifest, a failed `--html` / `--merge-out`, a file or directory that could not be read or written where the command can't go on without it (denied, a share lost) |
 | 3 | done but INCOMPLETE: a directory could not be listed or a file could not be read (the warnings say which) |
 | 64 | usage: a missing argument, an unknown option, a flag without its value |
 | 130 | stopped by Ctrl+C (a compare, an apply, or a report written part way) |

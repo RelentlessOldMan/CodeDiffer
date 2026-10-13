@@ -57,7 +57,7 @@ public sealed class ReasonClassifier
         if (string.Equals(leftEol, rightEol, StringComparison.Ordinal))
             return ChangeReason.Eol;
 
-        if (string.Equals(TextInspector.WhitespaceKey(leftEol), TextInspector.WhitespaceKey(rightEol), StringComparison.Ordinal))
+        if (TextInspector.SameButWhitespace(leftEol, rightEol))
             return ChangeReason.Whitespace;
 
         return ChangeReason.Content;
@@ -65,7 +65,9 @@ public sealed class ReasonClassifier
 
     private static ReadOnlySpan<byte> Head(byte[] bytes) => bytes.AsSpan(0, Math.Min(bytes.Length, TextInspector.HeadBytes));
 
-    private enum Norm { None, Whitespace, Eol }
+    /// <summary>How a comparison reads both sides: as they are, whitespace-normalized (<see cref="Whitespace"/> with a backslash
+    /// escaping, <see cref="WhitespaceLiteral"/> without: <see cref="TextInspector.SameButWhitespace"/>), or EOL-normalized.</summary>
+    private enum Norm { None, Whitespace, WhitespaceLiteral, Eol }
 
     /// <summary>The same precedence on a large file, by streamed comparison (UTF-8 or a single-byte code page). Read
     /// byte for byte (Latin-1, one char a byte) — the same verdict as decoding, while both sides decode alike; when a
@@ -95,7 +97,8 @@ public sealed class ReasonClassifier
         if (encodingMayDiffer && Same(a, skipA, encA, b, skipB, encB, Norm.None, ct, out _)) return ChangeReason.Encoding;
         // Whitespace-normalized first: it is implied by eol-equality, and a content change ends it at the first difference.
         if (!Same(a, skipA, encA, b, skipB, encB, Norm.Whitespace, ct, out decodingMatters)) return ChangeReason.Content;
-        return Same(a, skipA, encA, b, skipB, encB, Norm.Eol, ct, out _) ? ChangeReason.Eol : ChangeReason.Whitespace;
+        if (Same(a, skipA, encA, b, skipB, encB, Norm.Eol, ct, out _)) return ChangeReason.Eol;
+        return Same(a, skipA, encA, b, skipB, encB, Norm.WhitespaceLiteral, ct, out decodingMatters) ? ChangeReason.Whitespace : ChangeReason.Content;
     }
 
     /// <summary>Whether a file past <paramref name="skip"/> bytes is valid UTF-8, streamed.</summary>
@@ -148,12 +151,12 @@ public sealed class ReasonClassifier
             switch (norm)
             {
                 // TextInspector.WhitespaceKey, byte by byte (line endings normalized too).
-                case Norm.Whitespace when TextInspector.IsHorizontalSpace(c):
+                case Norm.Whitespace or Norm.WhitespaceLiteral when TextInspector.IsHorizontalSpace(c):
                     while (TextInspector.IsHorizontalSpace(f.Peek())) f.Next();
                     int after = f.Peek();
                     if (f.LineStart || after is '\n' or '\r' or -1 || (f.Quote == '\0' && !TextInspector.Separates(f.Last, after))) continue;
                     return ' ';
-                case Norm.Whitespace or Norm.Eol when c == '\r':
+                case Norm.Whitespace or Norm.WhitespaceLiteral or Norm.Eol when c == '\r':
                     if (f.Peek() == '\n') f.Next();
                     f.LineStart = true;
                     f.Quote = '\0';
@@ -161,7 +164,7 @@ public sealed class ReasonClassifier
                 default:
                     f.LineStart = c == '\n';
                     if (f.LineStart) f.Quote = '\0';
-                    else if (TextInspector.IsQuote(c) && !f.Escaped) f.Quote = TextInspector.Quote(f.Quote, c);
+                    else if (TextInspector.IsQuote(c) && (norm == Norm.WhitespaceLiteral || !f.Escaped)) f.Quote = TextInspector.Quote(f.Quote, c);
                     f.Last = c;
                     return c;
             }

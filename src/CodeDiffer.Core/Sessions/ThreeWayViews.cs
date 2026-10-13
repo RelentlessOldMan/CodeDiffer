@@ -107,7 +107,7 @@ public static class ThreeWayViews
         var r = s.Report!;
         Merge3Entry? Find(string p) => r.Entries.FirstOrDefault(x => x.Path == p)
              ?? r.Entries.FirstOrDefault(x => x.MergedPath == p || x.V1?.RelativePath == p || x.V2?.RelativePath == p)
-             ?? r.Entries.FirstOrDefault(x => string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase));
+             ?? AgentViews.ByCase(r.Entries, x => x.Path, p);
         // The path as given first: " a.txt" is a name of its own, not a.txt with a stray space.
         var given = path;
         var e = Find(path = AgentViews.Normalize(given, trim: false));
@@ -120,6 +120,7 @@ public static class ThreeWayViews
             if (shown.Count > 1) return AgentViews.Ambiguous(path, shown.Select(x => x.Path));
             e = shown.FirstOrDefault();
         }
+        if (e is null && AgentViews.CaseAmbiguous(r.Entries.Select(x => x.Path), path) is { } cased) return cased;
         if (e is null) return $"not touched by either side in compare3 {s.Id}: {path}\n";
 
         var body = Body(s, e, out var kind, out _);
@@ -131,9 +132,8 @@ public static class ThreeWayViews
         startLine = Math.Clamp(startLine, 1, Math.Max(1, total));
         if (startLine == 1 && AgentViews.Fits(lines, total, maxLines)) return o.Append(body).ToString();
 
-        var file = AgentViews.OutFile(s, "merges", e.Path, ".merge.txt");
-        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        File.WriteAllText(file, body, new UTF8Encoding(false));
+        var file = AgentViews.OutFile(s, "merges", e.Path, ".merge.txt", r.Entries.Select(x => x.Path));
+        AgentViews.WriteWhole(file, body);
         int end = AgentViews.WindowEnd(lines, total, startLine, maxLines);
         o.Append($"capped: showing lines {startLine:N0}-{end:N0} of {total:N0}{AgentViews.CutNote(lines, startLine, end, maxLines, total)}; whole file: {file}\n");
         if (startLine == 1)

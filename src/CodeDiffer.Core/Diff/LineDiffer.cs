@@ -57,7 +57,7 @@ public static class LineDiffer
 
     /// <summary>
     /// The hunks of a whitespace-only change, or null: when both sides have as many lines and each line is the other's
-    /// but for whitespace (<see cref="Compare.TextInspector.WhitespaceKey"/>, a line ending's CR aside), line i is line i
+    /// but for whitespace (<see cref="Compare.TextInspector.SameButWhitespace"/>, a line ending's CR aside), line i is line i
     /// and each run of lines that differ is one replace. Myers, among repeated lines, may pair a line with an identical
     /// one elsewhere instead (<c>x / ␠␠x</c> → <c>␠␠x / x</c>: a delete and an insert), hunks that change more than
     /// whitespace in a file whose only change is whitespace.
@@ -65,9 +65,9 @@ public static class LineDiffer
     public static List<Hunk>? WhitespaceAligned(IReadOnlyList<string> a, IReadOnlyList<string> b)
     {
         if (a.Count != b.Count) return null;
-        static string Key(string line) => Compare.TextInspector.WhitespaceKey(line.EndsWith('\r') ? line[..^1] : line);
+        static string Line(string line) => line.EndsWith('\r') ? line[..^1] : line;
         for (int i = 0; i < a.Count; i++)
-            if (!string.Equals(a[i], b[i], StringComparison.Ordinal) && !string.Equals(Key(a[i]), Key(b[i]), StringComparison.Ordinal))
+            if (!string.Equals(a[i], b[i], StringComparison.Ordinal) && !Compare.TextInspector.SameButWhitespace(Line(a[i]), Line(b[i])))
                 return null;
         var hunks = new List<Hunk>();
         for (int i = 0; i < a.Count;)
