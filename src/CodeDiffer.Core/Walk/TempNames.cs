@@ -1,0 +1,37 @@
+using System.Security.Cryptography;
+using System.Text;
+
+namespace CodeDiffer.Core.Walk;
+
+/// <summary>
+/// The names a file is written under before it is moved into place, never past the 255 characters a file name may
+/// hold: a tree's own name can already be 250, and a suffix on it was a name Windows refuses ("the filename, directory
+/// name, or volume label syntax is incorrect").
+/// </summary>
+public static class TempNames
+{
+    /// <summary>The longest file name NTFS, ReFS and SMB shares take (UTF-16 code units).</summary>
+    public const int MaxName = 255;
+
+    /// <summary><paramref name="path"/> + <paramref name="suffix"/>, the same name every time (a killed run's leftover is
+    /// found and reused), or, where that is too long a name, one made from the name's hash beside it.</summary>
+    public static string Beside(string path, string suffix)
+    {
+        var name = Path.GetFileName(path);
+        if (name.Length + suffix.Length <= MaxName) return path + suffix;
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(name)))[..16].ToLowerInvariant();
+        return Path.Combine(Path.GetDirectoryName(path) ?? "", "." + hash + suffix);
+    }
+
+    /// <summary>A name beside <paramref name="path"/> no other writer uses: short whatever the name.</summary>
+    public static string Unique(string path) => Path.Combine(Path.GetDirectoryName(path) ?? "", $".{Guid.NewGuid():N}.tmp");
+
+    /// <summary><paramref name="name"/> cut so that with <paramref name="reserve"/> more characters it is still a name.</summary>
+    public static string Fit(string name, int reserve)
+    {
+        int keep = MaxName - reserve;
+        if (name.Length <= keep) return name;
+        if (keep > 0 && char.IsHighSurrogate(name[keep - 1])) keep--; // never half a character
+        return name[..Math.Max(0, keep)];
+    }
+}

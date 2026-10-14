@@ -56,12 +56,34 @@ public static class HtmlReport
         var opt = options ?? new HtmlReportOptions();
         if (!s.IsDone || s.Error is not null) throw new InvalidOperationException($"compare {s.Id} has not finished successfully");
         var outDir = Path.GetFullPath(opt.OutDir ?? Path.Combine(AgentViews.OutDir(s), "report"));
-        // One writer a directory at a time: two at once each deleted what the other was writing (all but one failed).
+        // One writer a directory at a time: two at once each deleted what the other was writing (all but one failed). In
+        // this process by a lock, and across processes (the CLI and every MCP server) by a mutex named for the directory.
         HtmlReportResult result;
-        lock (Gates.GetOrAdd(outDir.TrimEnd(Path.DirectorySeparatorChar), _ => new object()))
-            result = WriteTo(s, opt, outDir, progress, ct);
+        var key = outDir.TrimEnd(Path.DirectorySeparatorChar);
+        lock (Gates.GetOrAdd(key, _ => new object()))
+        {
+            using var across = AcrossProcesses(key);
+            try { result = WriteTo(s, opt, outDir, progress, ct); }
+            finally { across?.ReleaseMutex(); }
+        }
         ResultStore.Restore(s); // pruned as the report was written
         return result;
+    }
+
+    /// <summary>The machine's mutex for one report directory, held: named from the path's hash, case-insensitive as
+    /// Windows names are. One a writer that died held is ours. Null where named mutexes aren't to be had.</summary>
+    private static Mutex? AcrossProcesses(string dir)
+    {
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(dir.ToUpperInvariant())))[..32];
+        Mutex m;
+        try { m = new Mutex(false, @"Local\codediffer-report-" + hash); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or WaitHandleCannotBeOpenedException or PlatformNotSupportedException)
+        {
+            return null;
+        }
+        try { m.WaitOne(); }
+        catch (AbandonedMutexException) { } // its writer died writing: the directory is ours to write again
+        return m;
     }
 
     /// <summary>A lock per report directory (case-insensitive, as Windows names are), held while a report is written.</summary>

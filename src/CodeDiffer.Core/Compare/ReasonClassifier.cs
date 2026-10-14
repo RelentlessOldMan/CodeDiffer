@@ -43,8 +43,10 @@ public sealed class ReasonClassifier
                   && (TextInspector.NulPast(leftPath, leftBytes, ct) || TextInspector.NulPast(rightPath, rightBytes, ct)))
             return ChangeReason.Binary;
 
+        // Strings are read as the (new) file's language reads them: a backslash an escape or text.
+        var rules = TextInspector.RulesFor(rightPath);
         if (large)
-            return Math.Max(leftLength, rightLength) <= _maxStreamBytes ? Streamed(leftPath, leftBytes, rightPath, rightBytes, ct) : ChangeReason.Content;
+            return Math.Max(leftLength, rightLength) <= _maxStreamBytes ? Streamed(leftPath, leftBytes, rightPath, rightBytes, rules, ct) : ChangeReason.Content;
 
         var leftText = TextInspector.Decode(leftBytes);
         var rightText = TextInspector.Decode(rightBytes);
@@ -57,7 +59,7 @@ public sealed class ReasonClassifier
         if (string.Equals(leftEol, rightEol, StringComparison.Ordinal))
             return ChangeReason.Eol;
 
-        if (TextInspector.SameButWhitespace(leftEol, rightEol))
+        if (TextInspector.SameButWhitespace(leftEol, rightEol, rules))
             return ChangeReason.Whitespace;
 
         return ChangeReason.Content;
@@ -65,40 +67,39 @@ public sealed class ReasonClassifier
 
     private static ReadOnlySpan<byte> Head(byte[] bytes) => bytes.AsSpan(0, Math.Min(bytes.Length, TextInspector.HeadBytes));
 
-    /// <summary>How a comparison reads both sides: as they are, whitespace-normalized (<see cref="Whitespace"/> with a backslash
-    /// escaping, <see cref="WhitespaceLiteral"/> without: <see cref="TextInspector.SameButWhitespace"/>), or EOL-normalized.</summary>
-    private enum Norm { None, Whitespace, WhitespaceLiteral, Eol }
+    /// <summary>How a comparison reads both sides: as they are, whitespace-normalized (<see cref="TextInspector.SameButWhitespace"/>),
+    /// or EOL-normalized.</summary>
+    private enum Norm { None, Whitespace, Eol }
 
     /// <summary>The same precedence on a large file, by streamed comparison (UTF-8 or a single-byte code page). Read
     /// byte for byte (Latin-1, one char a byte) — the same verdict as decoding, while both sides decode alike; when a
     /// difference is found and one side is UTF-8 with the other not, again decoding each as a whole read does (a
     /// cp1252 file re-saved as UTF-8 is the same text: <c>encoding</c>, at any size).</summary>
-    private static ChangeReason Streamed(string leftPath, byte[] leftHead, string rightPath, byte[] rightHead, CancellationToken ct)
+    private static ChangeReason Streamed(string leftPath, byte[] leftHead, string rightPath, byte[] rightHead, StringRules rules, CancellationToken ct)
     {
         if (Wide(leftHead) || Wide(rightHead)) return ChangeReason.Content;
         int l = Utf8Bom(leftHead) ? 3 : 0, r = Utf8Bom(rightHead) ? 3 : 0;
-        var reason = Verdict(leftPath, l, Encoding.Latin1, rightPath, r, Encoding.Latin1, l != r, ct, out bool decodingMatters);
+        var reason = Verdict(leftPath, l, Encoding.Latin1, rightPath, r, Encoding.Latin1, l != r, rules, ct, out bool decodingMatters);
         // ASCII up to the first difference, and an ASCII character on one side of it: any decoding of either side reads
         // the same there, so content it is — without reading both files whole to learn whether each is UTF-8.
         if (reason != ChangeReason.Content || !decodingMatters) return reason;
         bool lu = IsUtf8(leftPath, l, ct), ru = IsUtf8(rightPath, r, ct);
         if (lu == ru) return reason;
-        return Verdict(leftPath, l, lu ? Utf8Strict : Encoding.Latin1, rightPath, r, ru ? Utf8Strict : Encoding.Latin1, true, ct, out _);
+        return Verdict(leftPath, l, lu ? Utf8Strict : Encoding.Latin1, rightPath, r, ru ? Utf8Strict : Encoding.Latin1, true, rules, ct, out _);
     }
 
     private static readonly Encoding Utf8Strict = new UTF8Encoding(false, true);
 
     /// <param name="decodingMatters">On <c>content</c>: whether another decoding of either side could read differently
     /// up to the first difference (a non-ASCII byte before it, or on both sides of it).</param>
-    private static ChangeReason Verdict(string a, int skipA, Encoding encA, string b, int skipB, Encoding encB, bool encodingMayDiffer, CancellationToken ct,
-        out bool decodingMatters)
+    private static ChangeReason Verdict(string a, int skipA, Encoding encA, string b, int skipB, Encoding encB, bool encodingMayDiffer,
+        StringRules rules, CancellationToken ct, out bool decodingMatters)
     {
         decodingMatters = true;
-        if (encodingMayDiffer && Same(a, skipA, encA, b, skipB, encB, Norm.None, ct, out _)) return ChangeReason.Encoding;
+        if (encodingMayDiffer && Same(a, skipA, encA, b, skipB, encB, Norm.None, rules, ct, out _)) return ChangeReason.Encoding;
         // Whitespace-normalized first: it is implied by eol-equality, and a content change ends it at the first difference.
-        if (!Same(a, skipA, encA, b, skipB, encB, Norm.Whitespace, ct, out decodingMatters)) return ChangeReason.Content;
-        if (Same(a, skipA, encA, b, skipB, encB, Norm.Eol, ct, out _)) return ChangeReason.Eol;
-        return Same(a, skipA, encA, b, skipB, encB, Norm.WhitespaceLiteral, ct, out decodingMatters) ? ChangeReason.Whitespace : ChangeReason.Content;
+        if (!Same(a, skipA, encA, b, skipB, encB, Norm.Whitespace, rules, ct, out decodingMatters)) return ChangeReason.Content;
+        return Same(a, skipA, encA, b, skipB, encB, Norm.Eol, rules, ct, out _) ? ChangeReason.Eol : ChangeReason.Whitespace;
     }
 
     /// <summary>Whether a file past <paramref name="skip"/> bytes is valid UTF-8, streamed.</summary>
@@ -126,11 +127,11 @@ public sealed class ReasonClassifier
     private static bool Utf8Bom(byte[] h) => h is [0xEF, 0xBB, 0xBF, ..];
     private static bool Wide(byte[] h) => h is [0xFF, 0xFE, ..] or [0xFE, 0xFF, ..] or [0x00, 0x00, 0xFE, 0xFF, ..];
 
-    private static bool Same(string a, int skipA, Encoding encA, string b, int skipB, Encoding encB, Norm norm, CancellationToken ct,
-        out bool decodingMatters)
+    private static bool Same(string a, int skipA, Encoding encA, string b, int skipB, Encoding encB, Norm norm, StringRules rules,
+        CancellationToken ct, out bool decodingMatters)
     {
-        using var fa = new Feed(a, skipA, encA, ct);
-        using var fb = new Feed(b, skipB, encB, ct);
+        using var fa = new Feed(a, skipA, encA, rules, ct);
+        using var fb = new Feed(b, skipB, encB, rules, ct);
         while (true)
         {
             int x = Next(fa, norm), y = Next(fb, norm);
@@ -148,23 +149,29 @@ public sealed class ReasonClassifier
         while (true)
         {
             int c = f.Next();
+            bool escaped = norm == Norm.Whitespace && f.Scan.Step(c);
             switch (norm)
             {
                 // TextInspector.WhitespaceKey, byte by byte (line endings normalized too).
-                case Norm.Whitespace or Norm.WhitespaceLiteral when TextInspector.IsHorizontalSpace(c):
-                    while (TextInspector.IsHorizontalSpace(f.Peek())) f.Next();
+                case Norm.Whitespace when TextInspector.IsHorizontalSpace(c):
+                    while (TextInspector.IsHorizontalSpace(f.Peek())) f.Scan.Step(f.Next());
                     int after = f.Peek();
-                    if (f.LineStart || after is '\n' or '\r' or -1 || (f.Quote == '\0' && !TextInspector.Separates(f.Last, after))) continue;
+                    bool lineEnd = after is '\n' or '\r' or -1;
+                    if (escaped)
+                    {
+                        if (lineEnd) continue; // an escaped space is a character, but trailing whitespace still
+                        f.LineStart = false;
+                        f.Last = c;
+                        return c;
+                    }
+                    if (f.LineStart || lineEnd || (!f.Scan.InString && !TextInspector.Separates(f.Last, after))) continue;
                     return ' ';
-                case Norm.Whitespace or Norm.WhitespaceLiteral or Norm.Eol when c == '\r':
+                case Norm.Whitespace or Norm.Eol when c == '\r':
                     if (f.Peek() == '\n') f.Next();
                     f.LineStart = true;
-                    f.Quote = '\0';
                     return '\n';
                 default:
                     f.LineStart = c == '\n';
-                    if (f.LineStart) f.Quote = '\0';
-                    else if (TextInspector.IsQuote(c) && (norm == Norm.WhitespaceLiteral || !f.Escaped)) f.Quote = TextInspector.Quote(f.Quote, c);
                     f.Last = c;
                     return c;
             }
@@ -185,17 +192,13 @@ public sealed class ReasonClassifier
         /// <summary>The last byte returned that wasn't whitespace (whitespace normalization).</summary>
         public int Last = -1;
 
-        /// <summary>The quote of the string on this line the comparison is in, or '\0' (whitespace normalization).</summary>
-        public char Quote;
+        /// <summary>Whether the comparison is in a string on this line (whitespace normalization).</summary>
+        public StringScan Scan;
 
-        /// <summary>The last character <see cref="Next()"/> returned follows an odd run of backslashes: it is escaped
-        /// (in <c>"\\"</c> the closing quote is not).</summary>
-        public bool Escaped { get; private set; }
-        private bool _oddBackslashes;
-
-        public Feed(string path, int skip, Encoding encoding, CancellationToken ct)
+        public Feed(string path, int skip, Encoding encoding, StringRules rules, CancellationToken ct)
         {
             _ct = ct;
+            Scan = new StringScan(rules);
             var fs = TextInspector.OpenShared(path, 1);
             fs.Position = skip;
             _r = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: false, bufferSize: 1 << 16);
@@ -212,8 +215,6 @@ public sealed class ReasonClassifier
             int c = _i < _n || Fill() ? _buf[_i++] : -1;
             HighBefore = _high;
             _high |= c >= 0x80;
-            Escaped = _oddBackslashes;
-            _oddBackslashes = c == '\\' && !_oddBackslashes;
             return c;
         }
 

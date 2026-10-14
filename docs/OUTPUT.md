@@ -316,12 +316,21 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   digit and a dot (`1 .5` → `1.5`), a space taken out of a quoted string (`split(" ")` → `split("")`,
   `"Total: "` → `"Total:"`), a line joined, split or added, and NBSP / NEL (characters, not whitespace) are
   `content`. Whitespace is ASCII space, tab, VT and FF, whole or streamed alike. Strings and comments aren't
-  parsed: a quote not escaped by a backslash (one after an odd run of them: in `"\\"` the second quote closes the
-  string) opens a string until the same quote or the line's end (so an
-  apostrophe in a comment only makes the rest of its line stricter), and a run of spaces widened inside a string
-  literal reads as whitespace. A change is `whitespace` only if it is so with a backslash read as text too, as a C#
-  verbatim string, PowerShell and batch read it: in `@"C:\temp\"` the quote after the backslash closes the string,
-  so `Log("a, b")` → `Log("a,b")` beside it is `content`. A whitespace-only change is diffed line for line (each changed line a replace of
+  parsed: a quote not escaped opens a string until the same quote or the line's end (so an apostrophe in a comment
+  only makes the rest of its line stricter), and a run of spaces widened inside a string literal reads as
+  whitespace. Which quote is escaped is the file's language's, by its extension (the new side's):
+  - C, C++, Java, JS/TS, JSON, Python, Go, Rust, HLSL/GLSL/USF and the like: a backslash escapes (one after an
+    odd run of them: in `"\\"` the second quote closes the string), so `if (c == '\'' || c == '"') {` →
+    `if (c=='\''||c=='"') {` is `whitespace`;
+  - C# (`.cs`, `.csx`): the same, but in a verbatim string (`@"…"`, `$@"…"`, `@$"…"`) a backslash is text and `""`
+    is a quote: in `@"C:\temp\"` the quote after the backslash closes the string, so `Log("a, b")` → `Log("a,b")`
+    beside it is `content`;
+  - PowerShell (`.ps1`, `.psm1`, `.psd1`): a backtick escapes, in a double-quoted string; batch (`.bat`, `.cmd`):
+    nothing does;
+  - any other file: `whitespace` only if it is so with a backslash read as an escape and as text, both.
+
+  A backslash before a space escapes it (taken out, the backslash escapes what follows): that space is kept, but
+  never trailing whitespace. A whitespace-only change is diffed line for line (each changed line a replace of
   itself), never a line paired with an identical one elsewhere.
 - A reason is the text's: line endings changed along with the encoding (UTF-8 CRLF → UTF-16 LF) are `eol`, and
   the patch note says the encoding changed too; a shown diff of a whitespace or content change says so as well,

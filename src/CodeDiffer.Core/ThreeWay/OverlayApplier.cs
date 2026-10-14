@@ -151,7 +151,7 @@ public static class OverlayApplier
             if (ct.IsCancellationRequested) { Interlocked.Increment(ref notReached); return; }
             var src = Path.Combine(files, rel);
             var dest = Path.Combine(target, rel);
-            var tmp = dest + ChangePorter.TempSuffix;
+            var tmp = Walk.TempNames.Beside(dest, ChangePorter.TempSuffix);
             try
             {
                 if (Link(dest) is { } why) throw new IOException(why);

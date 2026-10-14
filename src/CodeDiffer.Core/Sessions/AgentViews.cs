@@ -385,9 +385,11 @@ public static class AgentViews
                      || paths.Any(p => !string.Equals(p, rel, StringComparison.Ordinal) && string.Equals(p, rel, StringComparison.OrdinalIgnoreCase));
         for (var dir = Path.GetDirectoryName(mirrored); !clash && dir is not null && dir.Length > root.Length; dir = Path.GetDirectoryName(dir))
             clash = File.Exists(dir);
+        // A name with the suffix too long to be one (a tree's name can already be 255 characters): the same.
+        clash |= Path.GetFileName(mirrored).Length > Walk.TempNames.MaxName;
         if (!clash) return mirrored;
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(rel)))[..16].ToLowerInvariant();
-        return Path.Combine(root, "_clash", $"{Path.GetFileName(rel)}.{hash}{suffix}");
+        return Path.Combine(root, "_clash", $"{Walk.TempNames.Fit(Path.GetFileName(rel), hash.Length + 1 + suffix.Length)}.{hash}{suffix}");
     }
 
     /// <summary>
@@ -399,7 +401,7 @@ public static class AgentViews
     internal static void WriteWhole(string file, string text)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        var tmp = $"{file}.{Guid.NewGuid():N}.tmp";
+        var tmp = Walk.TempNames.Unique(file);
         File.WriteAllText(tmp, text, new UTF8Encoding(false));
         for (int attempt = 1; ; attempt++)
         {
@@ -478,13 +480,25 @@ public static class AgentViews
                 return $"error: {file} is inside the compared tree {tree} — the patch would become part of what it describes; write it somewhere else\n";
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         PatchStats ps;
-        var tmp = file + ".tmp";
+        long size;
+        // Its own name beside the patch's (two exports at once each write their own) and moved into place: a failure
+        // never leaves a truncated patch behind. A move held off by a reader of the last patch is retried.
+        var tmp = Walk.TempNames.Unique(file);
         try
         {
-            // Written beside its name and moved into place: a failure never leaves a truncated patch behind.
             using (var w = new StreamWriter(tmp, false, new UTF8Encoding(false)) { NewLine = "\n" })
                 ps = PatchWriter.Write(w, r, s.Left, s.Right, new PatchOptions { Context = context, Literal = literal, Parallelism = s.Options.Parallelism });
-            File.Move(tmp, file, overwrite: true);
+            size = new FileInfo(tmp).Length; // this patch's, whichever export moves last
+            for (int attempt = 1; ; attempt++)
+                try
+                {
+                    File.Move(tmp, file, overwrite: true);
+                    break;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 40 && !Directory.Exists(file))
+                {
+                    Thread.Sleep(25);
+                }
         }
         catch
         {
@@ -493,7 +507,7 @@ public static class AgentViews
         }
         ResultStore.Restore(s); // pruned as the patch was written
         // A reopened compare's patch is of the trees as they are now, under the saved verdicts: say so, as write_merge does.
-        return ReopenedNote(s) + $"changeset {s.Id}: {file}  ({Bytes(new FileInfo(file).Length)})\n" +
+        return ReopenedNote(s) + $"changeset {s.Id}: {file}  ({Bytes(size)})\n" +
                $"  {ps.Summary(literal)}\n" +
                "  `git apply` it: what it doesn't carry is described in '#' lines, which git skips\n";
     }

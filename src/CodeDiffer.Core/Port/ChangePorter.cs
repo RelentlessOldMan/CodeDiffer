@@ -367,7 +367,7 @@ public static class ChangePorter
         public void WriteTo(string path)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            var tmp = path + TempSuffix;
+            var tmp = Walk.TempNames.Beside(path, TempSuffix);
             try
             {
                 if (_bytes is not null) File.WriteAllBytes(tmp, _bytes);

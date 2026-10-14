@@ -125,7 +125,7 @@ public static class MergeOverlay
         Parallel.ForEach(writes, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism) }, w =>
         {
             var target = Path.GetFullPath(Full(files, w.Dest));
-            var temp = target + ".codediffer-tmp";
+            var temp = Walk.TempNames.Beside(target, ".codediffer-tmp");
             try
             {
                 if (!target.StartsWith(filesRoot, StringComparison.OrdinalIgnoreCase))
@@ -211,6 +211,22 @@ public static class MergeOverlay
             """.Replace("\r\n", "\n"), new UTF8Encoding(false));
         File.Delete(Path.Combine(dir, Incomplete));
         return result;
+    }
+
+    /// <summary>Whether the overlay <paramref name="o"/> describes is all still there: its three lists, no claim left, and
+    /// as many files in files\ as it says (a prune of the result it was written into, racing it, takes files away).</summary>
+    public static bool Intact(OverlayResult o)
+    {
+        try
+        {
+            if (File.Exists(Path.Combine(o.Dir, Incomplete))) return false;
+            foreach (var f in new[] { "OVERLAY.txt", "deletes.txt", "conflicts.txt" })
+                if (!File.Exists(Path.Combine(o.Dir, f))) return false;
+            var files = Path.Combine(o.Dir, "files");
+            int want = o.FromV2 + o.Merged + o.Markers + o.Moved;
+            return want == 0 || (Directory.Exists(files) && Directory.EnumerateFiles(files, "*", SearchOption.AllDirectories).Count() == want);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }
 
     /// <summary>One side of an unresolved conflict: its file, "(deleted)" when it removed it, or — when that side

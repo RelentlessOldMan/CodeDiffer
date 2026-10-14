@@ -46,11 +46,12 @@ public static class HunkApplier
     /// <paramref name="whitespaceOnly"/>, each hunk must also change only whitespace
     /// (<see cref="Compare.TextInspector.SameButWhitespace"/>).
     /// </summary>
-    public static string? Problem(IEnumerable<string> oldLines, IEnumerable<string> newLines, IReadOnlyList<Hunk> hunks, bool whitespaceOnly = false)
+    public static string? Problem(IEnumerable<string> oldLines, IEnumerable<string> newLines, IReadOnlyList<Hunk> hunks, bool whitespaceOnly = false,
+        Compare.StringRules rules = Compare.StringRules.Both)
     {
         foreach (var h in hunks)
             if (!OpFits(h)) return $"{Show(h)}: its op doesn't fit its line counts";
-        return ProblemInOrder(oldLines, newLines, hunks.OrderBy(OrderKey).ThenBy(h => h.NewStart).ToList(), whitespaceOnly);
+        return ProblemInOrder(oldLines, newLines, hunks.OrderBy(OrderKey).ThenBy(h => h.NewStart).ToList(), whitespaceOnly, rules);
     }
 
     /// <summary>Where a hunk sits in the old file, for ordering: an insert after its <c>OldStart</c>, others at it.</summary>
@@ -60,7 +61,8 @@ public static class HunkApplier
     /// <see cref="Problem"/> over hunks already in order (<see cref="OrderKey"/>, then <c>NewStart</c>) and streamed too,
     /// so a giant file's run rules are never held at once: one out of order overlaps the one before it.
     /// </summary>
-    public static string? ProblemInOrder(IEnumerable<string> oldLines, IEnumerable<string> newLines, IEnumerable<Hunk> ordered, bool whitespaceOnly = false)
+    public static string? ProblemInOrder(IEnumerable<string> oldLines, IEnumerable<string> newLines, IEnumerable<Hunk> ordered, bool whitespaceOnly = false,
+        Compare.StringRules rules = Compare.StringRules.Both)
     {
         using var o = oldLines.GetEnumerator();
         using var n = newLines.GetEnumerator();
@@ -104,7 +106,7 @@ public static class HunkApplier
             // a replace, or two hunks merged over the lines between them); a minimal diff would have kept it.
             if (h.Op == HunkOp.Replace && h.OldLines != h.NewLines && Kept(oldBlock, newBlock) is { } kept)
                 return $"{Show(h)}: keeps a line it replaces (\"{Clip(kept)}\" is on both sides: an unchanged line inside the hunk)";
-            if (whitespaceOnly && !Compare.TextInspector.SameButWhitespace(Text(oldBlock), Text(newBlock)))
+            if (whitespaceOnly && !Compare.TextInspector.SameButWhitespace(Text(oldBlock), Text(newBlock), rules))
                 return $"{Show(h)}: changes more than whitespace";
         }
         while (true)

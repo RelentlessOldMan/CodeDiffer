@@ -62,12 +62,12 @@ public static class LineDiffer
     /// one elsewhere instead (<c>x / ␠␠x</c> → <c>␠␠x / x</c>: a delete and an insert), hunks that change more than
     /// whitespace in a file whose only change is whitespace.
     /// </summary>
-    public static List<Hunk>? WhitespaceAligned(IReadOnlyList<string> a, IReadOnlyList<string> b)
+    public static List<Hunk>? WhitespaceAligned(IReadOnlyList<string> a, IReadOnlyList<string> b, Compare.StringRules rules = Compare.StringRules.Both)
     {
         if (a.Count != b.Count) return null;
         static string Line(string line) => line.EndsWith('\r') ? line[..^1] : line;
         for (int i = 0; i < a.Count; i++)
-            if (!string.Equals(a[i], b[i], StringComparison.Ordinal) && !Compare.TextInspector.SameButWhitespace(Line(a[i]), Line(b[i])))
+            if (!string.Equals(a[i], b[i], StringComparison.Ordinal) && !Compare.TextInspector.SameButWhitespace(Line(a[i]), Line(b[i]), rules))
                 return null;
         var hunks = new List<Hunk>();
         for (int i = 0; i < a.Count;)

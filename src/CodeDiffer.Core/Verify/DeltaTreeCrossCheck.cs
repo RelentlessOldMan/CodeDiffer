@@ -1,3 +1,4 @@
+using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Diff;
 using CodeDiffer.Core.Model;
 
@@ -69,6 +70,7 @@ public static class DeltaTreeCrossCheck
             var relative = f.Path.Replace('/', Path.DirectorySeparatorChar);
             var baseRelative = (renamedFrom.TryGetValue(f.Path, out var from) ? from : f.Path).Replace('/', Path.DirectorySeparatorChar);
             bool ws = f.Reason == ChangeReason.Whitespace;
+            var rules = TextInspector.RulesFor(f.Path); // strings read as the engine reads them
             if (f.RunHunks.Count > 0)
             {
                 // A giant file: its run rules expanded as they are checked (never held: a rule can claim 2³¹ lines), both
@@ -77,7 +79,7 @@ public static class DeltaTreeCrossCheck
                 try
                 {
                     why = HunkApplier.ProblemInOrder(TreeLines.Stream(Path.Combine(baseDir, baseRelative)), TreeLines.Stream(Path.Combine(variantDir, relative)),
-                        InOrder(f), ws);
+                        InOrder(f), ws, rules);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or OverflowException)
                 {
@@ -98,9 +100,9 @@ public static class DeltaTreeCrossCheck
                 continue;
             }
 
-            var mine = (ws ? LineDiffer.WhitespaceAligned(baseLines, variantLines) : null) ?? LineDiffer.Diff(baseLines, variantLines);
+            var mine = (ws ? LineDiffer.WhitespaceAligned(baseLines, variantLines, rules) : null) ?? LineDiffer.Diff(baseLines, variantLines);
 
-            var problem = HunkApplier.Problem(baseLines, variantLines, f.Hunks, ws);
+            var problem = HunkApplier.Problem(baseLines, variantLines, f.Hunks, ws, rules);
             bool mineRebuilds = Reconstructs(baseLines, variantLines, mine);
             bool exact = HunksEqual(mine, f.Hunks);
 

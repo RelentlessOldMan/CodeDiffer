@@ -239,7 +239,9 @@ public static class CodeDifferTools
         if (out_dir is null) ResultStore.Restore(t); // pruned by another process: saved again before the overlay goes into it
         // The default is a fresh directory each time (merge, merge-2, ...): an overlay written earlier may be in use, and
         // one another writer claims between the look and the write, or a file of that name, moves this one on to the next.
+        // One a prune of the result takes files out of as it is written is written again (a few times), into the next.
         const int maxDefault = 1000;
+        int pruned = 0;
         for (int n = 1; ; n++)
         {
             if (n > maxDefault) return $"error: {t.ResultDir}: merge, merge-2 … merge-{maxDefault} are all taken; give out_dir or prune the old overlays";
@@ -247,7 +249,24 @@ public static class CodeDifferTools
             try
             {
                 if (out_dir is null && (File.Exists(dir) || (Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any()))) continue;
-                var o = MergeOverlay.Write(t.Report!, t.Base, t.V1, t.V2, dir, t.Options.Parallelism);
+                OverlayResult o;
+                try { o = MergeOverlay.Write(t.Report!, t.Base, t.V1, t.V2, dir, t.Options.Parallelism); }
+                catch (IOException) when (out_dir is null && pruned < 3 && !Directory.Exists(dir))
+                {
+                    pruned++;
+                    ResultStore.Restore(t);
+                    continue;
+                }
+                if (out_dir is null)
+                {
+                    ResultStore.Restore(t); // pruned as it was written: saved again, so the overlay is in a listed result
+                    if (!MergeOverlay.Intact(o))
+                    {
+                        try { Directory.Delete(o.Dir, recursive: true); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
+                        if (++pruned <= 3) continue;
+                        return $"error: {o.Dir}: the result was pruned while the overlay was written into it, {pruned} times; write_merge again or give out_dir";
+                    }
+                }
                 return (t.Reopened ? "note: reopened compare — written from the trees as they are now\n" : "") + ThreeWayViews.OverlayText(o);
             }
             catch (OverlayDirTakenException) when (out_dir is null) { }

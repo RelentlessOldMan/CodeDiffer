@@ -906,6 +906,7 @@ static int Compare3(string[] args)
         try
         {
             var o = MergeOverlay.Write(r, s.Base, s.V1, s.V2, outDir, threads);
+            ResultStore.Restore(s); // an overlay inside this compare's result, pruned as it was written: the result saved again
             Console.Write(ThreeWayViews.OverlayText(o));
             if (o.Failed > 0)
             {
