@@ -174,6 +174,16 @@ internal static class TextInspector
     public static bool SameButWhitespace(string a, string b, StringRules rules = StringRules.Both)
         => string.Equals(WhitespaceKey(a, rules), WhitespaceKey(b, rules), StringComparison.Ordinal);
 
+    /// <summary>Whether a text's last line has no line ending and is only whitespace (<c>"b.\n␠"</c>): a line of its own,
+    /// which <see cref="WhitespaceKey"/>, dropping trailing whitespace, can't tell from no line (<c>"b.\n"</c>). One added
+    /// or taken away is a line added or taken away: content.</summary>
+    public static bool EndsInBlankLine(string s)
+    {
+        int i = s.Length;
+        while (i > 0 && IsHorizontalSpace(s[i - 1])) i--;
+        return i < s.Length && (i == 0 || s[i - 1] is '\n' or '\r');
+    }
+
     /// <summary>How a file's language reads a backslash (or a backtick) before a quote, by the file's extension.</summary>
     public static StringRules RulesFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {

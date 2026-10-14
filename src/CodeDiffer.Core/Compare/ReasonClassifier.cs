@@ -59,7 +59,7 @@ public sealed class ReasonClassifier
         if (string.Equals(leftEol, rightEol, StringComparison.Ordinal))
             return ChangeReason.Eol;
 
-        if (TextInspector.SameButWhitespace(leftEol, rightEol, rules))
+        if (TextInspector.SameButWhitespace(leftEol, rightEol, rules) && TextInspector.EndsInBlankLine(leftEol) == TextInspector.EndsInBlankLine(rightEol))
             return ChangeReason.Whitespace;
 
         return ChangeReason.Content;
@@ -140,7 +140,11 @@ public sealed class ReasonClassifier
                 decodingMatters = fa.HighBefore || fb.HighBefore || (x >= 0x80 && y >= 0x80);
                 return false;
             }
-            if (x < 0) { decodingMatters = false; return true; }
+            if (x < 0)
+            {
+                decodingMatters = false;
+                return fa.BlankTail == fb.BlankTail; // a whitespace-only last line without a line ending is a line
+            }
         }
     }
 
@@ -164,6 +168,7 @@ public sealed class ReasonClassifier
                         f.Last = c;
                         return c;
                     }
+                    if (after == -1 && f.LineStart) f.BlankTail = true; // TextInspector.EndsInBlankLine
                     if (f.LineStart || lineEnd || (!f.Scan.InString && !TextInspector.Separates(f.Last, after))) continue;
                     return ' ';
                 case Norm.Whitespace or Norm.Eol when c == '\r':
@@ -194,6 +199,9 @@ public sealed class ReasonClassifier
 
         /// <summary>Whether the comparison is in a string on this line (whitespace normalization).</summary>
         public StringScan Scan;
+
+        /// <summary>The file ended in a line of whitespace only, without a line ending (whitespace normalization).</summary>
+        public bool BlankTail;
 
         public Feed(string path, int skip, Encoding encoding, StringRules rules, CancellationToken ct)
         {

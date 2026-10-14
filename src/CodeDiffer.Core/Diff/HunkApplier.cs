@@ -106,6 +106,9 @@ public static class HunkApplier
             // a replace, or two hunks merged over the lines between them); a minimal diff would have kept it.
             if (h.Op == HunkOp.Replace && h.OldLines != h.NewLines && Kept(oldBlock, newBlock) is { } kept)
                 return $"{Show(h)}: keeps a line it replaces (\"{Clip(kept)}\" is on both sides: an unchanged line inside the hunk)";
+            // A whitespace change keeps every line where it is: a line added, taken away, joined or split is content.
+            if (whitespaceOnly && (h.Op != HunkOp.Replace || h.OldLines != h.NewLines))
+                return $"{Show(h)}: adds or takes away lines, more than whitespace";
             if (whitespaceOnly && !Compare.TextInspector.SameButWhitespace(Text(oldBlock), Text(newBlock), rules))
                 return $"{Show(h)}: changes more than whitespace";
         }

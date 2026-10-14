@@ -62,7 +62,7 @@ public sealed class PatchStats
 
     /// <summary>The one-line summary of a written patch.</summary>
     public string Summary(bool literal) =>
-        $"{TextFiles:N0} text · {NoteFiles:N0} eol/encoding note(s)" + (CoarseFiles > 0 ? $" · {CoarseFiles:N0} coarse (edit-distance budget exceeded)" : "") +
+        $"{TextFiles:N0} text · {NoteFiles:N0} eol/encoding note(s)" + (CoarseFiles > 0 ? $" · {CoarseFiles:N0} coarse (too many changes to align exactly: wider than the change)" : "") +
         (NotCarried > 0 ? $" · NOT CARRIED (described in '#' lines; copy them by hand): {BinaryFiles:N0} binary · {GiantFiles:N0} large · " +
                           $"{OtherFiles:N0} non-UTF-8 text · {UnreadableFiles:N0} unreadable" +
                           (CaseFiles > 0 ? $" · {CaseFiles:N0} case-only path change(s)" : "") +
@@ -278,7 +278,7 @@ public static class PatchWriter
         if (giant)
         {
             var g = new StringWriter { NewLine = "\n" };
-            WriteGiant(g, oldRel, newRel, oldFull, newFull, oldLen, newLen, opt);
+            if (WriteGiant(g, oldRel, newRel, oldFull, newFull, oldLen, newLen, opt)) stats.CoarseFiles++;
             if (forGit) w.Write($"# {what}: large file, not in this patch ({Side(oldRel, newRel, oldFull, newFull)}); its changed byte ranges:\n" +
                                 string.Concat(g.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => $"#   {l}\n")));
             else w.Write($"diff --git a/{oldRel} b/{newRel}\n{extraHeader}{g}");
@@ -323,13 +323,14 @@ public static class PatchWriter
         => newFull is null ? $"delete a/{oldRel} by hand" : oldFull is null ? $"copy b/{newRel} by hand"
             : oldRel != newRel ? $"copy b/{newRel} by hand and delete a/{oldRel}" : $"copy b/{newRel} by hand";
 
-    private static void WriteGiant(TextWriter w, string oldRel, string newRel, string? oldFull, string? newFull,
+    /// <returns>Whether the block diff was coarse (its regions wider than the change).</returns>
+    private static bool WriteGiant(TextWriter w, string oldRel, string newRel, string? oldFull, string? newFull,
         long oldLen, long newLen, PatchOptions opt)
     {
         if (oldFull is null || newFull is null)
         {
             w.Write($"Large file {(oldFull is null ? "added" : "removed")}: {(oldFull is null ? "b/" + newRel : "a/" + oldRel)} ({Math.Max(oldLen, newLen):N0} bytes)\n");
-            return;
+            return false;
         }
         var r = GiantFileDiffer.Diff(oldFull, newFull, ct: opt.Cancellation);
         w.Write($"Large files a/{oldRel} and b/{newRel} differ: {r.Changes.Count} changed region(s), " +
@@ -340,6 +341,7 @@ public static class PatchWriter
             w.Write($"  {CanonicalTokens.Token(ch.Op)} old[{ch.OldOffset:N0}, +{ch.OldLength:N0}) -> new[{ch.NewOffset:N0}, +{ch.NewLength:N0})\n");
         if (r.Changes.Count > opt.MaxGiantRanges)
             w.Write($"  ... {r.Changes.Count - opt.MaxGiantRanges} more region(s)\n");
+        return r.Coarse;
     }
 
     /// <summary>"Encoding differs too: …" when the two files' encodings differ, else null.</summary>

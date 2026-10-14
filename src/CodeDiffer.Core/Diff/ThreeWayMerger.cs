@@ -31,15 +31,15 @@ public sealed record FileMergeResult(string Path, IReadOnlyList<Conflict> Confli
 /// </summary>
 public static class ThreeWayMerger
 {
-    public static FileMergeResult Merge(string path, string baseText, string v1Text, string v2Text)
-        => Merge(path, LineText.SplitLines(baseText), LineText.SplitLines(v1Text), LineText.SplitLines(v2Text));
+    public static FileMergeResult Merge(string path, string baseText, string v1Text, string v2Text, CancellationToken ct = default)
+        => Merge(path, LineText.SplitLines(baseText), LineText.SplitLines(v1Text), LineText.SplitLines(v2Text), ct);
 
     public static FileMergeResult Merge(
-        string path, IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines, IReadOnlyList<string> v2Lines)
+        string path, IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines, IReadOnlyList<string> v2Lines, CancellationToken ct = default)
     {
         var conflicts = new List<Conflict>();
         var clean = new List<CleanMerge>();
-        foreach (var r in Regions(baseLines, v1Lines, v2Lines))
+        foreach (var r in Regions(baseLines, v1Lines, v2Lines, ct))
         {
             int baseLen = r.BaseLines, len1 = r.V1Lines, len2 = r.V2Lines;
             // baseStart: an insert region (baseLen 0) anchors on the line after which it goes (= BaseStart0);
@@ -68,11 +68,12 @@ public static class ThreeWayMerger
     /// The diff3 regions, in base order: each a maximal coalesced span of change from either side, with
     /// its 0-based half-open spans in base, V1 and V2. Lines between regions are identical in all three.
     /// </summary>
+    /// <param name="ct">Checked as the two line diffs run (each can take seconds on files of 100,000s of lines).</param>
     public static List<MergeRegion> Regions(
-        IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines, IReadOnlyList<string> v2Lines)
+        IReadOnlyList<string> baseLines, IReadOnlyList<string> v1Lines, IReadOnlyList<string> v2Lines, CancellationToken ct = default)
     {
-        var d1 = LineDiffer.Diff(baseLines, v1Lines);
-        var d2 = LineDiffer.Diff(baseLines, v2Lines);
+        var d1 = LineDiffer.Diff(baseLines, v1Lines, LineDiffer.DefaultMaxEditDistance, out _, ct: ct);
+        var d2 = LineDiffer.Diff(baseLines, v2Lines, LineDiffer.DefaultMaxEditDistance, out _, ct: ct);
         var h1 = InPlace(d1, baseLines, v1Lines);
         var h2 = InPlace(d2, baseLines, v2Lines);
         var regions = Regions(baseLines, v1Lines, v2Lines, h1, h2);

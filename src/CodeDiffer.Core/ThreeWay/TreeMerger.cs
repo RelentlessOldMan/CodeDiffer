@@ -236,7 +236,7 @@ public static class TreeMerger
         var lb = Split(tb.Content, form.Normalize);
         var l1 = Split(t1.Content, form.Normalize);
         var l2 = Split(t2.Content, form.Normalize);
-        var regions = ThreeWayMerger.Regions(lb, l1, l2);
+        var regions = ThreeWayMerger.Regions(lb, l1, l2, ct);
         int conflicts = regions.Count(r => r.Kind == RegionKind.Conflict);
         int clean = regions.Count - conflicts;
         // Conflicting lines are written with markers; a conflict in the encoding or line endings too must not vanish

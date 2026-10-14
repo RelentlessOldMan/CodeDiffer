@@ -122,7 +122,7 @@ public static class ChangePorter
                     : LinkIn(c, target, links) is { } link
                     ? new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Conflict, "none", [],
                         $"the target has a symlink/junction at {link} — never written or deleted through")
-                    : One(c, leftRoot, rightRoot, target, write, maxTextBytes);
+                    : One(c, leftRoot, rightRoot, target, write, maxTextBytes, ct);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -141,7 +141,7 @@ public static class ChangePorter
     private static string? LinkIn(FileChange c, string target, LinkGuard links)
         => links.LinkOnTheWay(Full(target, c.RelativePath)) ?? (c.RenamedFrom is { } f ? links.LinkOnTheWay(Full(target, f)) : null);
 
-    private static PortFile One(FileChange c, string leftRoot, string rightRoot, string target, bool write, long maxText)
+    private static PortFile One(FileChange c, string leftRoot, string rightRoot, string target, bool write, long maxText, CancellationToken ct)
     {
         string path = c.RelativePath;
         string fromRel = c.RenamedFrom ?? path;                 // where the base content lives (and lives in C)
@@ -178,7 +178,7 @@ public static class ChangePorter
         if (!File.Exists(tFrom))
         {
             if (renamed && File.Exists(tTo))
-                return RenameDone(c, aPath, bPath, tTo, maxText) is var (done, how) && done
+                return RenameDone(c, aPath, bPath, tTo, maxText, ct) is var (done, how) && done
                     ? File1(c, PortStatus.Already, "none", HunkOutcome.Already, how)
                     : File1(c, PortStatus.Conflict, "none", HunkOutcome.Conflict,
                         $"target has no {fromRel}, and its {path} is not the renamed file — check by hand");
@@ -189,7 +189,7 @@ public static class ChangePorter
         if (renamed && TreeMerger.PathComparer.Equals(tFrom, tTo))
             return File1(c, PortStatus.Conflict, "none", HunkOutcome.Conflict, $"a case-only rename ({fromRel} -> {path}) — rename it by hand");
 
-        var (f, output) = Plan(c, aPath, bPath, tFrom, maxText);
+        var (f, output) = Plan(c, aPath, bPath, tFrom, maxText, ct);
         if (f.Status != PortStatus.Clean) return f;
 
         if (renamed && File.Exists(tTo))
@@ -211,7 +211,7 @@ public static class ChangePorter
 
     /// <summary>The port of one modified/renamed file onto the target's copy <paramref name="tPath"/>: its verdict, and
     /// for a clean one what to write.</summary>
-    private static (PortFile, Output?) Plan(FileChange c, string aPath, string bPath, string tPath, long maxText)
+    private static (PortFile, Output?) Plan(FileChange c, string aPath, string bPath, string tPath, long maxText, CancellationToken ct)
     {
         long big = Math.Max(Math.Max(new FileInfo(aPath).Length, new FileInfo(bPath).Length), new FileInfo(tPath).Length);
         if (big > maxText || c.Reason is ChangeReason.Binary or ChangeReason.Eol or ChangeReason.Encoding)
@@ -221,7 +221,7 @@ public static class ChangePorter
         var t = TextInspector.ReadAll(tPath);
         if (Text.TryRead(a, out var at) && Text.TryRead(b, out var bt) && Text.TryRead(t, out var tt))
         {
-            var (f, bytes) = Merge(c, at, bt, tt);
+            var (f, bytes) = Merge(c, at, bt, tt, ct);
             return (f, bytes is null ? null : Output.Of(bytes));
         }
         return ByteLevel(c, aPath, bPath, tPath, "not round-trippable text (legacy encoding?) — compared as bytes");
@@ -235,10 +235,10 @@ public static class ChangePorter
     /// verdict says so (an unrelated file much like the base would pass it too).
     /// </summary>
     /// <returns>Done, and the note saying how it was judged when that was by likeness.</returns>
-    private static (bool Done, string? How) RenameDone(FileChange c, string aPath, string bPath, string tTo, long maxText)
+    private static (bool Done, string? How) RenameDone(FileChange c, string aPath, string bPath, string tTo, long maxText, CancellationToken ct)
     {
         if (TextInspector.SameBytes(tTo, bPath)) return (true, null);
-        var (f, _) = Plan(c with { Status = ChangeStatus.Modified, RenamedFrom = null }, aPath, bPath, tTo, maxText);
+        var (f, _) = Plan(c with { Status = ChangeStatus.Modified, RenamedFrom = null }, aPath, bPath, tTo, maxText, ct);
         if (f.Status != PortStatus.Already) return (false, null);
         if (f.Hunks.Any(h => h.Outcome == HunkOutcome.Already && h.BaseLine > 0)) return (true, null);
         if (Math.Max(new FileInfo(aPath).Length, new FileInfo(tTo).Length) > maxText) return (false, null);
@@ -251,7 +251,7 @@ public static class ChangePorter
 
     private static string Join(string? a, string b) => a is null ? b : a + "; " + b;
 
-    private static (PortFile, byte[]?) Merge(FileChange c, Text a, Text b, Text t)
+    private static (PortFile, byte[]?) Merge(FileChange c, Text a, Text b, Text t, CancellationToken ct)
     {
         // Merge on raw lines (terminators kept, so a gained/lost final newline is a real line change). If the
         // target's line-ending style differs from the base's, merge EOL-normalized and write the target's style.
@@ -271,7 +271,7 @@ public static class ChangePorter
         var hunks = new List<PortHunk>();
         var merged = new StringBuilder(t.Content.Length + 256);
         int cursor = 0; // base position; lines between regions are identical in all three
-        foreach (var r in ThreeWayMerger.Regions(al, bl, tl))
+        foreach (var r in ThreeWayMerger.Regions(al, bl, tl, ct))
         {
             for (; cursor < r.BaseStart0; cursor++) merged.Append(al[cursor]);
             cursor = r.BaseStart0 + r.BaseLines;

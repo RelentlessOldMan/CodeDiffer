@@ -63,14 +63,28 @@ public static class ResultStore
                                             "its own input — set CODEDIFFER_RESULTS_DIR to somewhere else");
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
         var dir = Path.Combine(root, $"{stamp}-{id}");
-        for (int n = 2; Directory.Exists(dir); n++) dir = Path.Combine(root, $"{stamp}-{id}-{n}"); // never reuse
-        Directory.CreateDirectory(dir);
+        // Never reuse, even with another process naming one the same second (ids are 16-bit): a directory is this run's
+        // once it holds the claim this run created, which no other can.
+        for (int n = 2; !Claim(dir); n++) dir = Path.Combine(root, $"{stamp}-{id}-{n}");
         WriteMeta(dir, w =>
         {
             Head(w, kind, id, "running", DateTime.UtcNow, null);
             Roots(w, kind, roots);
         });
         return dir;
+    }
+
+    /// <summary>Whether <paramref name="dir"/>, new, is now this run's: created with its claim file, which exists only once.</summary>
+    private static bool Claim(string dir)
+    {
+        if (Directory.Exists(dir)) return false;
+        Directory.CreateDirectory(dir);
+        try
+        {
+            new FileStream(Path.Combine(dir, ".claim"), FileMode.CreateNew, FileAccess.Write, FileShare.None).Dispose();
+            return true;
+        }
+        catch (IOException) when (File.Exists(Path.Combine(dir, ".claim"))) { return false; } // another run's
     }
 
     /// <summary>

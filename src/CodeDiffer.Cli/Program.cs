@@ -208,7 +208,11 @@ static int? WriteHtml(Session s, string[] args, TextWriter info)
             (r.NotRendered > 0 ? $" · {r.NotRendered:N0} past --max-diffs" : "") +
             (r.Unreadable > 0 ? $" · {r.Unreadable:N0} unreadable" : "") +
             (r.Stopped > 0 ? $" · STOPPED: {r.Stopped:N0} without a diff (write it again for the rest)" : ""));
-        return r.Stopped > 0 ? 130 : null;
+        if (r.Stopped > 0) return 130;
+        if (r.Unreadable == 0) return null;
+        // Listed with why, but a diff the report holds no page of: done but incomplete, as a compare with a file unread.
+        Console.Error.WriteLine($"WARNING: {r.Unreadable:N0} diff(s) could not be read or rendered — listed in the report with why");
+        return 3;
     }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
     {

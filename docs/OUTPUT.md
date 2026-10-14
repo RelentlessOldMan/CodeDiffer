@@ -318,7 +318,9 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   `content`. Whitespace is ASCII space, tab, VT and FF, whole or streamed alike. Strings and comments aren't
   parsed: a quote not escaped opens a string until the same quote or the line's end (so an apostrophe in a comment
   only makes the rest of its line stricter), and a run of spaces widened inside a string literal reads as
-  whitespace. Which quote is escaped is the file's language's, by its extension (the new side's):
+  whitespace. A string is read a line at a time: one that goes on past its line (a Python `"""` docstring, a C#
+  raw or multi-line verbatim string, a JS template literal) is a string on its first line only, so a space taken
+  out of it on a later line reads as whitespace — the review's diff shows it. Which quote is escaped is the file's language's, by its extension (the new side's):
   - C, C++, Java, JS/TS, JSON, Python, Go, Rust, HLSL/GLSL/USF and the like: a backslash escapes (one after an
     odd run of them: in `"\\"` the second quote closes the string), so `if (c == '\'' || c == '"') {` →
     `if (c=='\''||c=='"') {` is `whitespace`;
@@ -432,7 +434,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 | 0 | done: nothing conflicts and nothing is missing |
 | 1 | done, with conflicts (`compare3`, `apply`), a file that failed (`apply-overlay`), a `verify` gate failed, or a prune that could not delete everything |
 | 2 | error: a tree or file not found, a refused directory, an unreadable manifest, a failed `--html` / `--merge-out`, a file or directory that could not be read or written where the command can't go on without it (denied, a share lost) |
-| 3 | done but INCOMPLETE: a directory could not be listed or a file could not be read (the warnings say which) |
+| 3 | done but INCOMPLETE: a directory could not be listed or a file could not be read (the warnings say which), or a report written with a diff it could not read or render (listed with why) |
 | 64 | usage: a missing argument, an unknown option, a flag without its value |
 | 130 | stopped by Ctrl+C (a compare, an apply, or a report written part way) |
 

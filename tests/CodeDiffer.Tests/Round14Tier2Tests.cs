@@ -107,7 +107,8 @@ public sealed class Round14Tier2Tests : IDisposable
             var whole = Classify(l, r, ext, streamed: false);
             var streamed = Classify(l, r, ext, streamed: true);
             Assert.True(whole == streamed, $"{ext} {Show(l)} / {Show(r)}: whole {whole}, streamed {streamed}");
-            Assert.Equal(whole == "whitespace", TextInspector.SameButWhitespace(l, r, rules));
+            Assert.Equal(whole == "whitespace", TextInspector.SameButWhitespace(l, r, rules)
+                                                && TextInspector.EndsInBlankLine(l) == TextInspector.EndsInBlankLine(r));
         }
     }
 
