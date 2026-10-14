@@ -75,19 +75,23 @@ public static class ThreeWayMerger
         var d2 = LineDiffer.Diff(baseLines, v2Lines);
         var h1 = InPlace(d1, baseLines, v1Lines);
         var h2 = InPlace(d2, baseLines, v2Lines);
-        // A line one side inserts outright is not, on the other side, half of an edit in place: the other side made the
-        // same insert and cut a copy of the run besides (merging a merge of the two again, say). Pair again without it.
-        if (!ReferenceEquals(h1, d1) || !ReferenceEquals(h2, d2))
-            (h1, h2) = (InPlace(d1, baseLines, v1Lines, Inserted(h2, v2Lines)), InPlace(d2, baseLines, v2Lines, Inserted(h1, v1Lines)));
         var regions = Regions(baseLines, v1Lines, v2Lines, h1, h2);
         if (ReferenceEquals(h1, d1) && ReferenceEquals(h2, d2)) return regions;
 
-        // Where the lines as written show one side already holding every change of the other (merging a merge again, say),
-        // the merge is that side. If the edits in place don't merge to it — a conflict, or a copy of a run cut twice — they
-        // misread the other side's insert and its own cut of a copy as an edit of the copy: the lines as written stand.
+        // Where the lines as written show one side already holding every change of the other (merging a merge again, say)
+        // and the edits in place don't merge to that side, the lines read two ways and nothing tells which: v1 `}; }` and
+        // v2 `}` from `} }` is an edit and a cut (both kept: `};`) or v1 already holding v2's cut (v1). Taking either would
+        // lose an edit or make one twice without a word, so where the two readings part they are one conflict, from the
+        // first region the lines as written don't have to the last (each side's edits in it, not one side's alone).
         var raw = Regions(baseLines, v1Lines, v2Lines, d1, d2);
         int holds = Holder(raw);
-        return holds != 0 && (Holder(regions) & holds) == 0 ? raw : regions;
+        if (holds == 0 || (Holder(regions) & holds) != 0) return regions;
+        var agreed = new HashSet<MergeRegion>(raw);
+        int first = regions.FindIndex(r => !agreed.Contains(r)), last = regions.FindLastIndex(r => !agreed.Contains(r));
+        var (f, l) = (regions[first], regions[last]);
+        var span = new MergeRegion(RegionKind.Conflict, f.BaseStart0, l.BaseStart0 + l.BaseLines - f.BaseStart0,
+            f.V1Start0, l.V1Start0 + l.V1Lines - f.V1Start0, f.V2Start0, l.V2Start0 + l.V2Lines - f.V2Start0);
+        return [.. regions.Take(first), span, .. regions.Skip(last + 1)];
     }
 
     /// <summary>Which side a conflict-free merge is: 1 if it is V1 (V2 changed nothing V1 lacks), 2 if V2, 3 both, else 0.</summary>
@@ -154,27 +158,16 @@ public static class ThreeWayMerger
     /// moves to an insert in its run (nearest first), and the pair is the replace of the line it stands on. The same for
     /// a run of identical new lines with one changed into it. As many lines kept as before: still a minimal diff.
     /// Only a line that is an edit of the run's line pairs (<see cref="Resembles"/>): an unrelated line inserted into a run
-    /// while another copy is cut is an insert and a delete, as written; so is a line in <paramref name="keep"/>.
+    /// while another copy is cut is an insert and a delete, as written.
     /// </summary>
-    internal static List<Hunk> InPlace(List<Hunk> hunks, IReadOnlyList<string> a, IReadOnlyList<string> b,
-        HashSet<string>? keep = null)
+    internal static List<Hunk> InPlace(List<Hunk> hunks, IReadOnlyList<string> a, IReadOnlyList<string> b)
     {
         if (hunks.Count < 2) return hunks; // a delete and an insert apart are two hunks
         var map = BuildMatchMap(hunks, a.Count);
-        bool moved = PairRuns(map, a, b, keep);
+        bool moved = PairRuns(map, a, b);
         var inv = Invert(map, b.Count);
-        moved |= PairRuns(inv, b, a, null);
+        moved |= PairRuns(inv, b, a);
         return moved ? HunksOf(Invert(inv, a.Count), a.Count, b.Count) : hunks;
-    }
-
-    /// <summary>The lines a side's hunks insert outright, not as a replace.</summary>
-    private static HashSet<string> Inserted(List<Hunk> hunks, IReadOnlyList<string> variant)
-    {
-        var ins = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var h in hunks)
-            if (h.Op == HunkOp.Insert)
-                for (int j = 0; j < h.NewLines; j++) ins.Add(variant[h.NewStart - 1 + j]);
-        return ins;
     }
 
     /// <summary>Whether <paramref name="line"/> reads as an edit of the run line <paramref name="run"/>: past indentation,
@@ -193,7 +186,7 @@ public static class ThreeWayMerger
 
     /// <summary>Within each run of identical lines of <paramref name="a"/>, moves its deletes (lines mapped to −1) to the
     /// lines of <paramref name="b"/> inserted between its kept lines that are edits of the run's line. True if any moved.</summary>
-    private static bool PairRuns(int[] map, IReadOnlyList<string> a, IReadOnlyList<string> b, HashSet<string>? keep)
+    private static bool PairRuns(int[] map, IReadOnlyList<string> a, IReadOnlyList<string> b)
     {
         bool moved = false;
         for (int r0 = 0; r0 < a.Count;)
@@ -201,7 +194,7 @@ public static class ThreeWayMerger
             int r1 = r0 + 1;
             while (r1 < a.Count && string.Equals(a[r1], a[r0], StringComparison.Ordinal)) r1++;
             string line = a[r0];
-            if (r1 - r0 > 1) moved |= PairRun(map, r0, r1, b, j => keep?.Contains(b[j]) != true && Resembles(line, b[j]));
+            if (r1 - r0 > 1) moved |= PairRun(map, r0, r1, b, j => Resembles(line, b[j]));
             r0 = r1;
         }
         return moved;

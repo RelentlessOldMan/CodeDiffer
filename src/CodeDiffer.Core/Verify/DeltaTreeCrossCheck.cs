@@ -76,7 +76,7 @@ public static class DeltaTreeCrossCheck
                 string? why;
                 try
                 {
-                    why = HunkApplier.ProblemInOrder(StreamLines(Path.Combine(baseDir, baseRelative)), StreamLines(Path.Combine(variantDir, relative)),
+                    why = HunkApplier.ProblemInOrder(TreeLines.Stream(Path.Combine(baseDir, baseRelative)), TreeLines.Stream(Path.Combine(variantDir, relative)),
                         InOrder(f), ws);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or OverflowException)
@@ -89,8 +89,8 @@ public static class DeltaTreeCrossCheck
             string[] baseLines, variantLines;
             try
             {
-                baseLines = LineText.SplitLines(File.ReadAllText(Path.Combine(baseDir, baseRelative)));
-                variantLines = LineText.SplitLines(File.ReadAllText(Path.Combine(variantDir, relative)));
+                baseLines = TreeLines.Read(Path.Combine(baseDir, baseRelative));
+                variantLines = TreeLines.Read(Path.Combine(variantDir, relative));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -152,24 +152,6 @@ public static class DeltaTreeCrossCheck
         {
             foreach (var s in sources) s.Dispose();
         }
-    }
-
-    /// <summary>A file's lines as <see cref="LineText.SplitLines"/> gives them (split on '\n', a '\r' kept), streamed.</summary>
-    private static IEnumerable<string> StreamLines(string path)
-    {
-        using var r = new StreamReader(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16),
-            System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        var sb = new System.Text.StringBuilder();
-        var buf = new char[1 << 15];
-        int got;
-        while ((got = r.Read(buf, 0, buf.Length)) > 0)
-            for (int i = 0; i < got; i++)
-            {
-                if (buf[i] != '\n') { sb.Append(buf[i]); continue; }
-                yield return sb.ToString();
-                sb.Clear();
-            }
-        if (sb.Length > 0) yield return sb.ToString();
     }
 
     private static bool Reconstructs(IReadOnlyList<string> baseLines, IReadOnlyList<string> variantLines, IReadOnlyList<Hunk> hunks)

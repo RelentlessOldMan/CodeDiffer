@@ -131,9 +131,9 @@ public static class ConflictTreeCrossCheck
             string[] b, v1, v2;
             try
             {
-                b = LineText.SplitLines(File.ReadAllText(bPath));
-                v1 = LineText.SplitLines(File.ReadAllText(v1Path));
-                v2 = LineText.SplitLines(File.ReadAllText(v2Path));
+                b = TreeLines.Read(bPath);
+                v1 = TreeLines.Read(v1Path);
+                v2 = TreeLines.Read(v2Path);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; } // fails reconstruction below
             trees[path] = (b, v1, v2);
@@ -189,9 +189,12 @@ public static class ConflictTreeCrossCheck
                 unsound.AddRange(Unsound(path, t.b, t.v1, t.v2, manifest, mineC));
                 // A line of a run edited in place is a replace where it stands (as my merge reads it): a side's changes
                 // that write one as an insert and a cut of another copy can set two sides' edits of one line side by side.
+                // The side's own diff, paired in place: each edit in place it finds must lie inside one of the side's
+                // hunks (a conflict's side spans its region, wider than the side's own diff: which copy of a run goes
+                // inside it is the region's business).
                 if (sides.TryGetValue(path, out var h))
                     foreach (var (name, hunks, v) in new[] { ("v1", h.V1, t.v1), ("v2", h.V2, t.v2) })
-                        if (!ReferenceEquals(ThreeWayMerger.InPlace(hunks, t.b, v), hunks))
+                        if (WritesApart(t.b, v, hunks))
                             unsound.Add($"{name} {path}: an edit in place of a line among identical lines is written as an insert " +
                                         "and a cut of another copy apart (it is a replace where it stands: two sides' edits of " +
                                         "one line could merge side by side)");
@@ -210,6 +213,24 @@ public static class ConflictTreeCrossCheck
             myConflicts.Select(c => c.Path).Except(manifest.Conflicts.Select(c => c.Path), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(),
             manifest.Conflicts.Select(c => c.Path).Except(myConflicts.Select(c => c.Path), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(),
             unsound);
+    }
+
+    /// <summary>Whether an edit in place of a line among identical lines (a replace where it stands, as my merge reads
+    /// it) is not inside one of <paramref name="hunks"/>: they write it as an insert and a cut of another copy apart.</summary>
+    private static bool WritesApart(string[] b, string[] v, List<Hunk> hunks)
+    {
+        var diff = LineDiffer.Diff(b, v);
+        var paired = ThreeWayMerger.InPlace(diff, b, v);
+        if (ReferenceEquals(paired, diff)) return false;
+        // Each hunk as half-open line spans, 0-based: an insert stands before line OldStart (old lines before it), a
+        // delete before line NewStart − 1 of the new side.
+        static (int A, int B, int C, int D) Span(Hunk x)
+        {
+            int a = x.OldLines == 0 ? x.OldStart : x.OldStart - 1, c = x.NewStart - 1;
+            return (a, a + x.OldLines, c, c + x.NewLines);
+        }
+        var outer = hunks.Select(Span).ToList();
+        return paired.Except(diff).Select(Span).Any(p => !outer.Any(o => o.A <= p.A && p.B <= o.B && o.C <= p.C && p.D <= o.D));
     }
 
     /// <summary>
@@ -365,32 +386,54 @@ public static class ConflictTreeCrossCheck
         if (cleanV1 is not null) foreach (var h in cleanV1) events.Add((h, false));
         events.Sort((x, y) => x.h.OldStart != y.h.OldStart ? x.h.OldStart.CompareTo(y.h.OldStart) : x.h.OldLines.CompareTo(y.h.OldLines));
 
+        // A clean v1 insert is v1's alone or an insert both made, and the lines can't always tell (an inserted line the
+        // same as the base line after it reads both ways): each such insert is tried both ways, agreed first, and the
+        // first choice that rebuilds v2 stands — within a bound, past which only the first reading is tried.
         var v2Hunks = new List<Hunk>();
-        long offset = 0; // running (V2 - base) line delta from v2 changes seen so far
-        foreach (var (h, definite) in events)
+        int tries = 0;
+        List<Hunk>? found = null;
+        bool Walk(int k, long offset)
         {
-            if (definite)
+            for (; k < events.Count; k++)
             {
-                v2Hunks.Add(h);
+                var (h, definite) = events[k];
+                if (definite)
+                {
+                    v2Hunks.Add(h);
+                    offset += (long)h.NewLines - h.OldLines;
+                    continue;
+                }
+
+                // clean side "v1" region: is V2 unchanged (one-sided v1) or an agreed identical edit?
+                long at = (long)h.OldStart + offset; // 1-based V2 line where this base region begins (an insert: lines before it)
+                if (at < 0 || at > int.MaxValue) return false; // 0: an insert at the top
+                int pos = (int)at;
+                bool unchanged = SeqEqual(v2Lines, pos - 1, h.OldLines, baseLines, h.OldStart - 1, h.OldLines);
+                // Agreed only if V2 holds exactly V1's edit there: a V2 change the manifest doesn't record is no agreed edit.
+                int from = h.OldLines == 0 ? pos : pos - 1;
+                bool agreed = SeqEqual(v2Lines, from, h.NewLines, v1Lines, h.NewStart - 1, h.NewLines);
+                if (h.OldLines > 0 && unchanged) continue; // v2 did not touch it — nothing to apply
+                if (!agreed && !(h.OldLines == 0 && unchanged)) return false;
+                if (agreed && h.OldLines == 0 && unchanged && ++tries < 4096)
+                {
+                    int mark = v2Hunks.Count;
+                    v2Hunks.Add(new Hunk(h.Op, h.OldStart, h.OldLines, from + 1, h.NewLines));
+                    if (Walk(k + 1, offset + h.NewLines)) return true;
+                    v2Hunks.RemoveRange(mark, v2Hunks.Count - mark);
+                    continue; // v1's alone
+                }
+                if (!agreed) continue; // an insert v2 doesn't hold: v1's alone
+                v2Hunks.Add(new Hunk(h.Op, h.OldStart, h.OldLines, from + 1, h.NewLines));
                 offset += (long)h.NewLines - h.OldLines;
-                continue;
             }
-
-            // clean side "v1" region: is V2 unchanged (one-sided v1) or an agreed identical edit?
-            long at = (long)h.OldStart + offset; // 1-based V2 line where this base region begins
-            if (at < 0 || at > int.MaxValue) return false; // 0: an insert at the top
-            int pos = (int)at;
-            bool v2Unchanged = SeqEqual(v2Lines, pos - 1, h.OldLines, baseLines, h.OldStart - 1, h.OldLines);
-            if (v2Unchanged) continue; // v2 did not touch it — nothing to apply
-
-            // Agreed only if V2 holds exactly V1's edit there: a V2 change the manifest doesn't record is no agreed edit.
-            if (!SeqEqual(v2Lines, pos - 1, h.NewLines, v1Lines, h.NewStart - 1, h.NewLines)) return false;
-            v2Hunks.Add(new Hunk(h.Op, h.OldStart, h.OldLines, pos, h.NewLines));
-            offset += (long)h.NewLines - h.OldLines;
+            var all = v2Hunks.OrderBy(h => h.OldStart).ThenBy(h => h.NewStart).ToList();
+            if (!HunkApplier.Rebuilds(baseLines, v2Lines, all)) return false;
+            found = all;
+            return true;
         }
-
-        sorted = v2Hunks.OrderBy(h => h.OldStart).ThenBy(h => h.NewStart).ToList();
-        return HunkApplier.Rebuilds(baseLines, v2Lines, sorted);
+        bool ok = Walk(0, 0);
+        sorted = found ?? v2Hunks.OrderBy(h => h.OldStart).ThenBy(h => h.NewStart).ToList();
+        return ok;
     }
 
     private static bool SeqEqual(

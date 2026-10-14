@@ -33,6 +33,10 @@ be patch-applicable unified diffs (tested against `git apply`/`patch`).
 
 - **Hunks** — 1-based unified-diff coords. `op ∈ insert|delete|replace` (insert ⇒ `oldLines` 0;
   delete ⇒ `newLines` 0; replace ⇒ both ≥ 1). Contiguous touched lines **coalesce** into one hunk.
+  Lines split on `\n` (a `\r` stays part of its line), and a last line without a `\n` is **not** the same
+  line as it is with one (git's convention): adding or dropping only the final newline is a 1-line replace of
+  the last line. Text is decoded as CodeDiffer decodes it (a BOM honoured, else strict UTF-8, else Latin-1, so
+  two files with different bytes never read as the same line).
 - **Shas** — SHA-256 of raw file bytes, lowercase hex (= CodeDiffer's prefilter hash). `oldSize`/`newSize`
   are decimal bytes (feed the size-prefilter + binary summary).
 - **Reason** (THE honesty-contract ground truth; a `--edit-kind` knob generates each):

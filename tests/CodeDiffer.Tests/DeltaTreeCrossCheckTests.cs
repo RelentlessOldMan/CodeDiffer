@@ -139,4 +139,45 @@ public sealed class DeltaTreeCrossCheckTests : IDisposable
         var wrong = DeltaTreeCrossCheck.Run(_base, _variant, manifest with { Modified = [binary with { NewSha = new string('1', 64) }] });
         Assert.False(wrong.Ok); // ...and checked, whatever the reason
     }
+
+    // ---- Round 14, tier 1: the trees' files read as the engine reads them ----
+
+    private TreeCrossCheckResult CheckOne(byte[] b, byte[] v, IReadOnlyList<Hunk> hunks, IReadOnlyList<RunHunk>? runs = null)
+    {
+        File.WriteAllBytes(Path.Combine(_base, "f.txt"), b);
+        File.WriteAllBytes(Path.Combine(_variant, "f.txt"), v);
+        var f = Real(new FileDelta("f.txt", ChangeReason.Content, "", "", 0, 0, hunks, runs ?? []));
+        return DeltaTreeCrossCheck.Run(_base, _variant, new DeltaManifest(1, [], [], [], [f], DiffTruthSha: null));
+    }
+
+    [Fact]
+    public void TwoLatin1Lines_AreNotTheSameLine()
+    {
+        // caf\xE9 and caf\xE8 aren't UTF-8: read as replacement characters they were the same line, and a manifest saying
+        // nothing changed passed.
+        byte[] b = [.. "caf"u8, 0xE9, (byte)'\n'], v = [.. "caf"u8, 0xE8, (byte)'\n'];
+        Assert.False(CheckOne(b, v, []).Ok);
+        Assert.True(CheckOne(b, v, [new Hunk(HunkOp.Replace, 1, 1, 1, 1)]).Ok);
+    }
+
+    [Fact]
+    public void OnlyTheLastNewlineChanged_IsAnEditOfTheLastLine()
+    {
+        byte[] b = "a\nb\n"u8.ToArray(), v = "a\nb"u8.ToArray();
+        Assert.False(CheckOne(b, v, []).Ok);
+        Assert.True(CheckOne(b, v, [new Hunk(HunkOp.Replace, 2, 1, 2, 1)]).Ok);
+    }
+
+    [Fact]
+    public void AGiantFileStreamed_KnowsItsLastNewline_AndLatin1()
+    {
+        // Run rules are checked streamed: a rule claiming line 1 alone fails where line 2 lost its newline, or is another
+        // Latin-1 line.
+        byte[] b = [.. "a\nb"u8, 0xE9, (byte)'\n'];
+        foreach (byte[] v in new byte[][] { [.. "A\nb"u8, 0xE9], [.. "A\nb"u8, 0xE8, (byte)'\n'] })
+        {
+            Assert.False(CheckOne(b, v, [], [new RunHunk(HunkOp.Replace, 2, 1, 1, 1)]).Ok);
+            Assert.True(CheckOne(b, v, [], [new RunHunk(HunkOp.Replace, 1, 1, 1, 2)]).Ok);
+        }
+    }
 }

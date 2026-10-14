@@ -15,7 +15,7 @@ namespace CodeDiffer.Core.Diff;
 public static class UnifiedDiff
 {
     public const int DefaultContext = 3;
-    private const string NoEolMarker = "\0␀noeol"; // can't occur in decoded text; tags a last line lacking '\n'
+    internal const string NoEolMarker = "\0␀noeol"; // can't occur in decoded text; tags a last line lacking '\n'
 
     /// <summary>The lines of a text, last line tagged when the text lacks a trailing newline.</summary>
     public static string[] DiffLines(string text)
