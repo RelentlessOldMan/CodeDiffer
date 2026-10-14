@@ -52,6 +52,10 @@ be patch-applicable unified diffs (tested against `git apply`/`patch`).
 - **Renames** — `similarityMilli = round(sim*1000)`, sim = commonLines / max(oldLineCount,newLineCount)
   over EOL-normalized lines (multiset intersection). Graded ~0.9/0.6/0.3; decoy non-renames scattered
   for false-positive scoring. `rename+edit` hunks live in the modified/hunks-explicit set keyed by `to`.
+  The manifest records every move it made, whatever its similarity; CodeDiffer's compare pairs a rename at
+  ≥ 500 (git's 50%), so verify expects a recorded rename below that as `removed from` + `added to`, and
+  reports how many. Build rename fixtures with `gen --source-bodies varied` (CodeSpawner ≥ 1.1.12), or
+  shared filler bodies make every source ~98% like every other.
 
 ## Giant files — run-rule hunk
 

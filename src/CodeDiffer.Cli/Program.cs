@@ -492,19 +492,22 @@ static int Verify(string[] args)
         // CodeDiffer's own compare of the two trees (hash cache on: warm, it reads only the changed files) against
         // the manifest's file operations — the verdicts a user actually sees.
         CompareReport report;
+        var options = new CompareOptions();
         using var stop = new CancellationTokenSource();
         var progress = new CompareProgress();
         try
         {
-            report = WithProgress(() => new DirectoryComparer(new CompareOptions()).Compare(baseDir, variantDir, progress, ct: stop.Token),
+            report = WithProgress(() => new DirectoryComparer(options).Compare(baseDir, variantDir, progress, ct: stop.Token),
                 () => ProgressView.Line(progress), stop.Cancel);
         }
         catch (OperationCanceledException) { return Cancelled(TimeSpan.Zero, CacheMode.On); }
-        var fo = DeltaFileOpsCheck.Run(report, manifest, baseDir: baseDir, variantDir: variantDir);
+        var fo = DeltaFileOpsCheck.Run(report, manifest, baseDir: baseDir, variantDir: variantDir, renameThresholdMilli: options.RenameSimilarityThresholdMilli);
         Console.WriteLine($"  file-ops cross-check (CodeDiffer's own compare): {fo.Matched:N0}/{fo.Expected:N0} match · " +
                           $"{fo.MissingCount:N0} missing · {fo.ExtraCount:N0} extra · {fo.WrongReasonCount:N0} wrong reason · {fo.WrongSimilarityCount:N0} wrong rename similarity or reason");
         if (fo.MetadataCount > 0)
             Console.WriteLine($"    ({fo.MetadataCount:N0} metadata record(s): content identical, so expected unchanged — CodeDiffer doesn't diff metadata)");
+        if (fo.BelowThresholdCount > 0)
+            Console.WriteLine($"    ({fo.BelowThresholdCount:N0} rename(s) below the {options.RenameSimilarityThresholdMilli / 10}% rename threshold, so expected removed and added)");
         foreach (var m in fo.Missing) Console.WriteLine($"    MISSING  {m}");
         foreach (var x in fo.Extra) Console.WriteLine($"    EXTRA    {x}");
         foreach (var w in fo.WrongReason.Concat(fo.WrongSimilarity)) Console.WriteLine($"    WRONG    {w}");

@@ -6,7 +6,7 @@ namespace CodeDiffer.Core.Verify;
 public sealed record FileOpsCheckResult(
     int Expected, int Matched,
     IReadOnlyList<string> Missing, IReadOnlyList<string> Extra, IReadOnlyList<string> WrongReason, IReadOnlyList<string> WrongSimilarity,
-    int MissingCount, int ExtraCount, int WrongReasonCount, int WrongSimilarityCount, int MetadataCount = 0)
+    int MissingCount, int ExtraCount, int WrongReasonCount, int WrongSimilarityCount, int MetadataCount = 0, int BelowThresholdCount = 0)
 {
     /// <summary>Pass iff CodeDiffer reports exactly the manifest's file operations, with the same reasons and rename similarities.</summary>
     public bool Ok => MissingCount + ExtraCount + WrongReasonCount + WrongSimilarityCount == 0;
@@ -21,11 +21,14 @@ public sealed record FileOpsCheckResult(
 /// reason is compared too: its modified record's reason, or "identical" without one, against CodeDiffer's classifier on
 /// the pair (a compare gives a rename no reason of its own). A <c>metadata</c> record is content identical
 /// (<c>oldSha==newSha</c>) and CodeDiffer doesn't diff metadata, so the compare must report that file unchanged (a rename
-/// with one, identical).
+/// with one, identical). A rename less similar than the compare's rename threshold (the contract grades renames down to
+/// ~0.3 and sets no threshold; CodeDiffer's is git's 50%) is no rename to the compare: it must report the file removed
+/// and added.
 /// </summary>
 public static class DeltaFileOpsCheck
 {
-    public static FileOpsCheckResult Run(CompareReport report, DeltaManifest manifest, int maxListed = 20, string? baseDir = null, string? variantDir = null)
+    public static FileOpsCheckResult Run(CompareReport report, DeltaManifest manifest, int maxListed = 20, string? baseDir = null, string? variantDir = null,
+        int renameThresholdMilli = 500)
     {
         bool reasons = baseDir is not null && variantDir is not null;
         // Each operation as a key; its detail (reason / similarity) compared when both sides have it.
@@ -34,8 +37,15 @@ public static class DeltaFileOpsCheck
         foreach (var p in manifest.Removed) expected[$"removed {p}"] = "";
         var modifiedAt = new Dictionary<string, FileDelta>(StringComparer.Ordinal);
         foreach (var m in manifest.Modified) modifiedAt.TryAdd(m.Path, m);
+        int below = 0;
         foreach (var r in manifest.Renamed)
-            expected[$"renamed {r.From} -> {r.To}"] = $"similarity {r.SimilarityMilli}" +
+            if (r.SimilarityMilli < renameThresholdMilli)
+            {
+                expected[$"removed {r.From}"] = "";
+                expected[$"added {r.To}"] = "";
+                below++;
+            }
+            else expected[$"renamed {r.From} -> {r.To}"] = $"similarity {r.SimilarityMilli}" +
                 (!reasons ? "" : modifiedAt.TryGetValue(r.To, out var m) && m.Reason != ChangeReason.Metadata ? $", {CanonicalTokens.Token(m.Reason)}" : ", identical");
         var renameTo = manifest.Renamed.Select(r => r.To).ToHashSet(StringComparer.Ordinal);
         var metadata = new List<string>();
@@ -74,7 +84,7 @@ public static class DeltaFileOpsCheck
 
         return new FileOpsCheckResult(expected.Count, expected.Count - missing.Count - wrong.Count,
             missing.Take(maxListed).ToList(), extra.Take(maxListed).ToList(), reason.Take(maxListed).ToList(), sim.Take(maxListed).ToList(),
-            missing.Count, extra.Count, reason.Count, sim.Count, metadata.Count);
+            missing.Count, extra.Count, reason.Count, sim.Count, metadata.Count, below);
     }
 
     private static string RenameReason(Compare.ReasonClassifier classifier, string baseDir, string variantDir, FileChange c)
