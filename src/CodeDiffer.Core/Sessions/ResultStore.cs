@@ -138,6 +138,7 @@ public static class ResultStore
     {
         if (s.ResultDir is not { } dir) return null;
         var path = LockPath(dir);
+        int gone = 0;
         for (int attempt = 1; ; attempt++)
         {
             try
@@ -145,8 +146,9 @@ public static class ResultStore
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 return new FileStream(path, FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read, 1);
             }
-            // A prune deleting this result holds the file unshared (its handle goes, and the file with it, when it is done).
-            catch (IOException) when (attempt < HoldAttempts && File.Exists(path)) { Thread.Sleep(25); }
+            // A prune deleting this result holds the file unshared (its handle goes, and the file with it, when it is done);
+            // one that let go between the open and the look has left no file: open again, it is free.
+            catch (IOException) when (attempt < HoldAttempts && (File.Exists(path) || ++gone <= 40)) { Thread.Sleep(25); }
             catch (IOException ex) when (File.Exists(path))
             {
                 throw new IOException($"{dir} has been held by a prune for over a minute: {ex.Message}", ex);
