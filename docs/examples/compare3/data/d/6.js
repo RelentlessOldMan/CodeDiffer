@@ -1,0 +1,1 @@
+CD.diff(6,{"mode":"patch","total":7,"text":"diff --git a/src/users.py b/src/users.py\n--- a/src/users.py\n\u002B\u002B\u002B b/src/users.py\n@@ -1,2 \u002B1,2 @@\n def display_name(user):\n-    return user[\u0022name\u0022]\n\u002B    return user.get(\u0022nickname\u0022) or user[\u0022name\u0022]\n","shown":7});

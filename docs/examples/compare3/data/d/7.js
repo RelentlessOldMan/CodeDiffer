@@ -1,0 +1,1 @@
+CD.diff(7,{"mode":"patch","total":6,"text":"diff --git a/src/version.py b/src/version.py\n--- a/src/version.py\n\u002B\u002B\u002B b/src/version.py\n@@ -1 \u002B1 @@\n-VERSION = \u00221.4.0\u0022\n\u002BVERSION = \u00221.5.0\u0022\n","shown":6});

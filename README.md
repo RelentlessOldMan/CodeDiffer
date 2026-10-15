@@ -81,6 +81,22 @@ The HTML report is a small static page that opens straight from disk: a folder t
 filters, identical files hidden, and each file's diff (inline or side by side, intra-line marks; 3-way merges
 with colored conflict sections) loaded only when expanded.
 
+### What the report looks like
+
+Live examples (open in the browser, click any file): a
+[2-way compare](https://relentlessoldman.github.io/CodeDiffer/examples/compare/) and a
+[3-way compare](https://relentlessoldman.github.io/CodeDiffer/examples/compare3/), of a small made-up project
+with one file for each kind of change.
+
+| 2-way, inline | 2-way, side by side |
+|---|---|
+| ![A 2-way report with a file's diff open inline](docs/examples/img/compare-inline.png) | ![The same report side by side](docs/examples/img/compare-split.png) |
+| **3-way, a conflict with diff3 markers** | **3-way, a clean merge (base → merged)** |
+| ![A 3-way report showing a conflict](docs/examples/img/compare3.png) | ![A 3-way report showing a clean merge](docs/examples/img/compare3-merge.png) |
+
+[`docs/examples/make-examples.ps1`](docs/examples/make-examples.ps1) regenerates all of it from this checkout
+(or from trees of your own: `-Left/-Right`, `-Base/-V1/-V2`), with nothing of the machine left in it.
+
 ## Build & test
 
 ```powershell

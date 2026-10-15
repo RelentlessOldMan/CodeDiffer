@@ -1,0 +1,1 @@
+CD.diff(0,{"mode":"patch","total":10,"text":"diff --git a/src/cart.py b/src/cart.py\n--- a/src/cart.py\n\u002B\u002B\u002B b/src/cart.py\n@@ -4,3 \u002B4,6 @@\n \n     def clear(self):\n         self.items = {}\n\u002B\n\u002B    def count(self):\n\u002B        return sum(self.items.values())\n","shown":10});

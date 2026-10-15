@@ -1,0 +1,1 @@
+A CodeDiffer HTML report (open index.html). Writing a new report here replaces this directory.
