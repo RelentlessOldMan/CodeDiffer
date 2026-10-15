@@ -132,9 +132,12 @@ public static class ThreeWayViews
         startLine = Math.Clamp(startLine, 1, Math.Max(1, total));
         if (startLine == 1 && AgentViews.Fits(lines, total, maxLines)) return o.Append(body).ToString();
 
-        var file = AgentViews.OutFile(s, "merges", e.Path, ".merge.txt", r.Entries.Select(x => x.Path));
-        AgentViews.WriteWhole(file, body);
-        ResultStore.Restore(s); // pruned as it was written
+        string file;
+        using (ResultStore.Hold(s))
+        {
+            file = AgentViews.OutFile(s, "merges", e.Path, ".merge.txt", r.Entries.Select(x => x.Path));
+            AgentViews.WriteWhole(file, body);
+        }
         int end = AgentViews.WindowEnd(lines, total, startLine, maxLines);
         o.Append($"capped: showing lines {startLine:N0}-{end:N0} of {total:N0}{AgentViews.CutNote(lines, startLine, end, maxLines, total)}; whole file: {file}\n");
         if (startLine == 1)

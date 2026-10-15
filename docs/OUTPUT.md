@@ -133,7 +133,11 @@ unpaired UTF-16 surrogate (legal on NTFS) is saved losslessly, so it reopens as 
 the directory) reopens without re-comparing (`list_compares`, CLI `results`), and a diff rendered later
 from the live trees warns when a file's size no longer matches what was compared. Capped patches, apply
 reports and the HTML report go into the same directory; one pruned by another process while this one still holds
-the compare is saved again first, so nothing written there is left unlisted and never pruned.
+the compare is saved again first, so nothing written there is left unlisted and never pruned. While one is written
+the result is held (a lock file in `<results>\.locks\`, shared by any number of writers in any process): a prune
+leaves a held result alone (`not deleted: … is in use`, exit 1, prune again later), and a write that meets a prune
+already deleting its result waits for it, then saves the result again, so a write told it succeeded is in a listed
+result. A prune from CodeDiffer 1.0.61 or earlier doesn't take the lock.
 
 Renames cost little on a warm compare: the pure (byte-identical) pass hashes only adds and removes whose size
 occurs on both sides, in parallel, and uses the hash ledgers (a second run reads nothing for it); the edited

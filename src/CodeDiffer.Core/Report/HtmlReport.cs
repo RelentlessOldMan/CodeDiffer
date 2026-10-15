@@ -55,6 +55,7 @@ public static class HtmlReport
     {
         var opt = options ?? new HtmlReportOptions();
         if (!s.IsDone || s.Error is not null) throw new InvalidOperationException($"compare {s.Id} has not finished successfully");
+        using var held = ResultStore.Hold(s); // no prune takes the result away under the report
         var outDir = Path.GetFullPath(opt.OutDir ?? Path.Combine(AgentViews.OutDir(s), "report"));
         // One writer a directory at a time: two at once each deleted what the other was writing (all but one failed). In
         // this process by a lock, and across processes (the CLI and every MCP server) by a mutex named for the directory.
@@ -68,7 +69,6 @@ public static class HtmlReport
             try { result = WriteTo(s, opt, outDir, progress, ct); }
             finally { across?.ReleaseMutex(); }
         }
-        ResultStore.Restore(s); // pruned as the report was written
         return result;
     }
 

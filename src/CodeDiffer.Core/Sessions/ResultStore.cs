@@ -91,8 +91,7 @@ public static class ResultStore
     /// A finished compare's directory that another process pruned while this one still holds the compare, saved again
     /// (change lists and compare.json): a diff, patch, report or overlay written into it next would otherwise recreate
     /// it without compare.json, never listed and never pruned. A save that fails is left to the write that follows.
-    /// Called before such a write and again after it: a prune that deleted compare.json while the write went in leaves the
-    /// directory with only what was written.
+    /// Called before such a write, inside <see cref="Hold"/>, so no prune can take it away again until the write is done.
     /// </summary>
     public static void Restore(Session s)
     {
@@ -110,6 +109,66 @@ public static class ResultStore
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
+
+    /// <summary>
+    /// The compare's result directory held against a prune while a diff, patch, report or overlay is written into it
+    /// (<see cref="Restore"/> first, inside the hold): a prune in any process leaves a held result alone, and one already
+    /// deleting it is waited out, so a write told it succeeded is in a listed result. Any number of writers hold one
+    /// result at once. Nothing to hold (null) for a compare without a result directory.
+    /// </summary>
+    /// <remarks>A lock file in the results root's <c>.locks\</c>, opened shared by writers and unshared by a prune: the
+    /// system closes a dead process's handle, so a crash leaves no lock behind. Outside the result, so a prune's delete
+    /// never trips on it.</remarks>
+    public static IDisposable? Hold(Session s)
+    {
+        if (s.ResultDir is not { } dir) return null;
+        var path = LockPath(dir);
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read, 1);
+            }
+            // A prune deleting this result holds the file unshared (its handle goes, and the file with it, when it is done).
+            catch (IOException) when (attempt < HoldAttempts && File.Exists(path)) { Thread.Sleep(25); }
+            catch (IOException ex) when (File.Exists(path))
+            {
+                throw new IOException($"{dir} has been held by a prune for over a minute: {ex.Message}", ex);
+            }
+            // The lock file a prune just let go, still being deleted, or a results root we can't write to: then nor can the
+            // write, which says so.
+            catch (UnauthorizedAccessException) when (attempt < 40) { Thread.Sleep(25); }
+            catch (UnauthorizedAccessException) { return null; }
+        }
+    }
+
+    /// <summary>The result directory <paramref name="dir"/> held for a prune to delete it: null when a write holds it (or
+    /// another prune does). The lock file goes when it is let go.</summary>
+    private static FileStream? HoldToDelete(string dir)
+    {
+        var path = LockPath(dir);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+        }
+        catch (IOException) when (File.Exists(path)) { return null; }
+    }
+
+    /// <summary>How many times <see cref="Hold"/> tries, 25 ms apart (about a minute): a prune holds one result only as
+    /// long as it takes to delete it.</summary>
+    private const int HoldAttempts = 2400;
+
+    /// <summary>A result's lock file: <c>&lt;root&gt;\.locks\&lt;its directory's name&gt;.lock</c> (the file system resolves
+    /// it, so every spelling of the root names one file).</summary>
+    internal static string LockPath(string dir)
+    {
+        dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+        return Path.Combine(Path.GetDirectoryName(dir)!, LocksName, Path.GetFileName(dir) + ".lock");
+    }
+
+    internal const string LocksName = ".locks";
 
     /// <summary>Save a finished compare: the change list(s) first, then compare.json flips to "done".</summary>
     internal static void Save(Session s, object result)
@@ -267,6 +326,8 @@ public static class ResultStore
             throw new ArgumentException($"{dir} is not directly under the results directory {root}");
         if (new DirectoryInfo(dir).Attributes.HasFlag(FileAttributes.ReparsePoint))
             throw new ArgumentException($"{dir} is a link, not a saved compare; refusing to delete through it");
+        using var held = HoldToDelete(dir)
+            ?? throw new IOException($"{Path.GetFileName(dir)} is in use: a diff, patch, report or overlay is being written into it");
         using (ReadMeta(dir)) { } // throws unless it is a CodeDiffer result
         DeleteContents(new DirectoryInfo(dir), keep: MetaName);
         var meta = new FileInfo(Path.Combine(dir, MetaName));
@@ -278,9 +339,9 @@ public static class ResultStore
         try { Directory.Delete(dir); }
         catch (IOException) when (Directory.Exists(dir))
         {
-            // A diff or report written into it while it was being emptied (another process still holds the compare):
-            // emptied again, so no directory is left without compare.json, never listed and never pruned. A file still
-            // held open fails the prune, said as any other.
+            // A diff or report written into it while it was being emptied by a writer that doesn't hold it (a CodeDiffer
+            // before 1.0.62): emptied again, so no directory is left without compare.json, never listed and never pruned.
+            // A file still held open fails the prune, said as any other.
             DeleteContents(new DirectoryInfo(dir), keep: null);
             Directory.Delete(dir);
         }

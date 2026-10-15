@@ -236,10 +236,16 @@ public static class CodeDifferTools
         if (!t.IsDone) return $"compare {t.Id} is still running — wait for it (get_summary wait_seconds) first";
         if (t.Error is { } failed) return $"compare {t.Id} {(t.Cancelled ? "was cancelled" : $"failed: {failed}")}";
         if (out_dir is null && t.ResultDir is null) return "error: out_dir is required (this compare has no result directory)";
+        // Held: no prune takes the result away as the overlay is written into it.
+        IDisposable? held;
+        try { held = out_dir is null ? ResultStore.Hold(t) : null; }
+        catch (IOException ex) { return $"error: {ex.Message}"; }
+        using var _ = held;
         if (out_dir is null) ResultStore.Restore(t); // pruned by another process: saved again before the overlay goes into it
         // The default is a fresh directory each time (merge, merge-2, ...): an overlay written earlier may be in use, and
         // one another writer claims between the look and the write, or a file of that name, moves this one on to the next.
-        // One a prune of the result takes files out of as it is written is written again (a few times), into the next.
+        // One a prune that doesn't hold results (a CodeDiffer before 1.0.62) takes files out of as it is written is written
+        // again (a few times), into the next.
         const int maxDefault = 1000;
         int pruned = 0;
         for (int n = 1; ; n++)

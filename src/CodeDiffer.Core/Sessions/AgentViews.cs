@@ -296,10 +296,13 @@ public static class AgentViews
 
         // Capped: write the whole section once, then show the requested window plus the hunk map. Another context is a
         // sibling directory, never a suffix: x at context 5 and a file named x.U5 would share one name.
-        var file = OutFile(s, context == PatchOptions.DefaultContextLines ? "diffs" : $"diffs-U{context}", c.RelativePath, ".patch",
-            changes.Select(x => x.RelativePath));
-        WriteWhole(file, section);
-        ResultStore.Restore(s); // pruned as it was written
+        string file;
+        using (ResultStore.Hold(s))
+        {
+            file = OutFile(s, context == PatchOptions.DefaultContextLines ? "diffs" : $"diffs-U{context}", c.RelativePath, ".patch",
+                changes.Select(x => x.RelativePath));
+            WriteWhole(file, section);
+        }
         int end = WindowEnd(all, total, startLine, maxLines);
         o.Append($"capped: showing lines {startLine:N0}-{end:N0} of {total:N0}{CutNote(all, startLine, end, maxLines, total)}; full patch: {file}\n");
         if (startLine == 1 && info.Hunks > 0)
@@ -466,6 +469,7 @@ public static class AgentViews
             return $"error: compare {s.Id} is incomplete ({r.LeftDroppedDirectories} left / {r.RightDroppedDirectories} right director(ies) " +
                    "could not be listed): its adds and removes there may be listing failures, which a patch would carry out as deletes — " +
                    "no patch written; compare again";
+        using var held = ResultStore.Hold(s); // no prune takes the result away under the patch
         string file;
         try { file = string.IsNullOrWhiteSpace(outPath) ? Path.Combine(OutDir(s), "changeset.patch") : Path.GetFullPath(outPath); }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
@@ -505,7 +509,6 @@ public static class AgentViews
             try { File.Delete(tmp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
             throw;
         }
-        ResultStore.Restore(s); // pruned as the patch was written
         // A reopened compare's patch is of the trees as they are now, under the saved verdicts: say so, as write_merge does.
         return ReopenedNote(s) + $"changeset {s.Id}: {file}  ({Bytes(size)})\n" +
                $"  {ps.Summary(literal)}\n" +
@@ -521,9 +524,8 @@ public static class AgentViews
     {
         if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
         var r = ChangePorter.Run(s.Report!, s.Left, s.Right, target, write, parallelism: s.Options.Parallelism);
-        var text = PortText(r, $"compare {s.Id}", Path.Combine(OutDir(s), $"apply-{(write ? "written" : "dryrun")}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt"), maxFiles);
-        ResultStore.Restore(s); // pruned as the report was written
-        return text;
+        using (ResultStore.Hold(s)) // no prune takes the result away under the report
+            return PortText(r, $"compare {s.Id}", Path.Combine(OutDir(s), $"apply-{(write ? "written" : "dryrun")}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt"), maxFiles);
     }
 
     /// <summary>The bounded port report (also used by the CLI); the full detail goes to <paramref name="reportFile"/>.</summary>
