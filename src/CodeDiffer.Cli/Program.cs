@@ -907,13 +907,26 @@ static int Compare3(string[] args)
     }
     if (outDir is not null)
     {
+        // The first Ctrl+C stops writing the overlay (left with its INCOMPLETE.txt, never to be applied); a second one
+        // ends the process.
+        using var cts = new CancellationTokenSource();
+        bool stopping = false;
+        ConsoleCancelEventHandler onCtrlC = (_, e) =>
+        {
+            if (stopping) return;
+            stopping = true;
+            e.Cancel = true;
+            Console.Error.WriteLine("\nstopping the merge overlay (Ctrl+C again to quit at once)");
+            cts.Cancel();
+        };
+        Console.CancelKeyPress += onCtrlC;
         try
         {
             OverlayResult o;
             using (ResultStore.Hold(s)) // an overlay inside this compare's result: no prune takes it away as it is written
             {
                 ResultStore.Restore(s);
-                o = MergeOverlay.Write(r, s.Base, s.V1, s.V2, outDir, threads);
+                o = MergeOverlay.Write(r, s.Base, s.V1, s.V2, outDir, threads, cts.Token);
             }
             Console.Write(ThreeWayViews.OverlayText(o));
             if (o.Failed > 0)
@@ -922,11 +935,18 @@ static int Compare3(string[] args)
                 failed = 2;
             }
         }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            Console.Error.WriteLine($"stopped: the merge overlay in {Path.GetFullPath(outDir)} is not finished (it holds INCOMPLETE.txt): " +
+                                    "never apply it; write it again into a new or empty directory");
+            return 130;
+        }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
             Console.Error.WriteLine($"error: merge overlay: {ex.Message}");
             failed = 2;
         }
+        finally { Console.CancelKeyPress -= onCtrlC; }
     }
     if (failed is { } code) return code;
     if (r.DroppedDirectories + r.UnreadableFiles > 0) return 3;

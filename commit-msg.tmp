@@ -1,0 +1,14 @@
+The merge views, the merge overlay and MCP apply can be stopped, and a failed write leaves no temp behind
+
+A diff3 merge (TreeMerger's merged text, bytes and merge diff), the 3-way file view and a compare3 HTML report stop on
+their token; compare3 --merge-out stops on the first Ctrl+C (exit 130), the overlay keeping its INCOMPLETE.txt, so it
+is never applied. The MCP server's apply_changeset, write_merge, write_report and get_file_diff stop when their
+request is cancelled (apply between files, as the CLI's apply does; write_report says how many it left without a
+diff); the token is bound by the SDK and is not in the tool schemas. A result file (compare.json, a .jsonl) or a capped
+diff written part way, as on a full disk, has its temp taken away (one another writer has open is left alone); a
+result directory whose claim fails goes if empty, and one whose first compare.json fails goes too, instead of
+staying unlisted and never pruned. StopTests (5); 525 pass. Not tried by hand with Ctrl+C on a real --merge-out, and
+the claim and run-directory cleanup have no disk-full test.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TFFCj1hJG99ePdYnYe1PtA

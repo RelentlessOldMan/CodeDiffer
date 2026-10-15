@@ -58,7 +58,10 @@ public static class MergeOverlay
     }
 
     /// <param name="dir">A new or empty directory, not inside any of the three trees.</param>
-    public static OverlayResult Write(ThreeWayReport r, string baseDir, string v1, string v2, string dir, int parallelism = 8)
+    /// <param name="ct">Stops the write: throws <see cref="OperationCanceledException"/>, the overlay left with its
+    /// <c>INCOMPLETE.txt</c> (never to be applied; write it again into a new directory).</param>
+    public static OverlayResult Write(ThreeWayReport r, string baseDir, string v1, string v2, string dir, int parallelism = 8,
+        CancellationToken ct = default)
     {
         dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
         CheckDir(dir, baseDir, v1, v2);
@@ -122,7 +125,7 @@ public static class MergeOverlay
         long bytes = 0;
         var failed = new System.Collections.Concurrent.ConcurrentBag<(Merge3Entry E, string Why)>();
         var written = new System.Collections.Concurrent.ConcurrentBag<(string Dest, Kind Kind, Merge3Entry E, string? AlsoDelete)>();
-        Parallel.ForEach(writes, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism) }, w =>
+        Parallel.ForEach(writes, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism), CancellationToken = ct }, w =>
         {
             var target = Path.GetFullPath(Full(files, w.Dest));
             var temp = Walk.TempNames.Beside(target, ".codediffer-tmp");
@@ -142,7 +145,7 @@ public static class MergeOverlay
                         break;
                     default:
                         // Re-merged from the trees as they are now: it must still be what the compare found.
-                        var merged = TreeMerger.MergedBytes(w.E, baseDir, v1, v2, out int now)
+                        var merged = TreeMerger.MergedBytes(w.E, baseDir, v1, v2, out int now, ct)
                                      ?? throw new IOException("a side is no longer readable text (changed since the compare? compare again)");
                         int expected = w.Kind == Kind.Merged ? 0 : w.E.ConflictRegions;
                         if (now != expected)
@@ -154,12 +157,14 @@ public static class MergeOverlay
                 Interlocked.Add(ref bytes, new FileInfo(target).Length);
                 written.Add(w);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { } // stopped in its merge, before its temp was written
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 try { File.Delete(temp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
                 failed.Add((w.E, $"not written: {ex.Message}"));
             }
         });
+        ct.ThrowIfCancellationRequested(); // INCOMPLETE.txt stays: a stopped overlay is never applied
         unresolved.AddRange(failed);
         unresolved.Sort((a, b) => string.CompareOrdinal(a.E.Path, b.E.Path));
         var done = written.OrderBy(w => w.Dest, StringComparer.Ordinal).ToList();

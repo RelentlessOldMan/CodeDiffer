@@ -255,7 +255,8 @@ public static class TreeMerger
     /// <c>&lt;&lt;&lt;&lt;&lt;&lt;&lt; v1 / ||||||| base / ======= / &gt;&gt;&gt;&gt;&gt;&gt;&gt; v2</c>. Null for an
     /// entry that has no line-level merge (one-sided, binary, delete conflicts…).
     /// </summary>
-    public static string? MergedText(Merge3Entry e, string b, string v1, string v2) => Compose(e, b, v1, v2)?.Merged;
+    /// <param name="ct">Stops the line merge (a giant file's diffs may run long): throws <see cref="OperationCanceledException"/>.</param>
+    public static string? MergedText(Merge3Entry e, string b, string v1, string v2, CancellationToken ct = default) => Compose(e, b, v1, v2, ct)?.Merged;
 
     /// <summary>
     /// The merged file as bytes to write: <see cref="MergedText"/> in the merged encoding and line endings — 3-way like
@@ -264,10 +265,10 @@ public static class TreeMerger
     public static byte[]? MergedBytes(Merge3Entry e, string b, string v1, string v2) => MergedBytes(e, b, v1, v2, out _);
 
     /// <param name="conflicts">How many conflict regions the merge has now (re-merged from the trees as they are).</param>
-    public static byte[]? MergedBytes(Merge3Entry e, string b, string v1, string v2, out int conflicts)
+    public static byte[]? MergedBytes(Merge3Entry e, string b, string v1, string v2, out int conflicts, CancellationToken ct = default)
     {
         conflicts = 0;
-        if (Compose(e, b, v1, v2) is not { } m) return null;
+        if (Compose(e, b, v1, v2, ct) is not { } m) return null;
         conflicts = m.Conflicts;
         var text = m.Form.Normalize && m.Form.Eol == "CRLF" ? m.Merged.Replace("\n", "\r\n") : m.Merged;
         return m.Form.Encoding.Encode(text);
@@ -278,17 +279,20 @@ public static class TreeMerger
     /// no line-level merge. When the sides' line endings differed, the base is compared EOL-normalized, the
     /// way it was merged.
     /// </summary>
-    public static string? MergeDiff(Merge3Entry e, string b, string v1, string v2, int context = UnifiedDiff.DefaultContext)
+    public static string? MergeDiff(Merge3Entry e, string b, string v1, string v2, int context = UnifiedDiff.DefaultContext,
+        CancellationToken ct = default)
     {
-        if (Compose(e, b, v1, v2) is not { } m) return null;
+        if (Compose(e, b, v1, v2, ct) is not { } m) return null;
         var w = new StringWriter { NewLine = "\n" };
-        UnifiedDiff.Write(w, e.Path, e.MergedPath ?? e.Path, m.Base, m.Merged, context, null);
+        UnifiedDiff.Write(w, e.Path, e.MergedPath ?? e.Path, m.Base, m.Merged, context, null, ct);
         return w.ToString();
     }
 
-    private static (string Base, string Merged, Form Form, int Conflicts)? Compose(Merge3Entry e, string b, string v1, string v2)
+    private static (string Base, string Merged, Form Form, int Conflicts)? Compose(Merge3Entry e, string b, string v1, string v2,
+        CancellationToken ct)
     {
         if (e.V1 is null || e.V2 is null || e.ConflictKind is not (null or "content" or "add/add") || e.Outcome == Merge3Outcome.Agreed) return null;
+        ct.ThrowIfCancellationRequested(); // before three files are read whole
         // Taken whole from one side (it may be binary or large): no line merge to show, and the file is never read whole.
         if (e.Outcome == Merge3Outcome.Merged && e.CleanRegions == 0 && e.ConflictRegions == 0 && WholeFrom(e.V1, e.V2) != 0) return null;
         bool added = e.V1.Status == ChangeStatus.Added;
@@ -299,7 +303,7 @@ public static class TreeMerger
         var lb = Split(tb.Content, form.Normalize);
         var l1 = Split(t1.Content, form.Normalize);
         var l2 = Split(t2.Content, form.Normalize);
-        var regions = ThreeWayMerger.Regions(lb, l1, l2);
+        var regions = ThreeWayMerger.Regions(lb, l1, l2, ct);
 
         // A "mixed" result has no one line ending to convert to: emit each side's own lines as they are (only CRLF was
         // collapsed to compare them, so the line numbers match), the unchanged ones from the side whose style won.

@@ -66,11 +66,20 @@ public static class ResultStore
         // Never reuse, even with another process naming one the same second (ids are 16-bit): a directory is this run's
         // once it holds the claim this run created, which no other can.
         for (int n = 2; !Claim(dir); n++) dir = Path.Combine(root, $"{stamp}-{id}-{n}");
-        WriteMeta(dir, w =>
+        try
         {
-            Head(w, kind, id, "running", DateTime.UtcNow, null);
-            Roots(w, kind, roots);
-        });
+            WriteMeta(dir, w =>
+            {
+                Head(w, kind, id, "running", DateTime.UtcNow, null);
+                Roots(w, kind, roots);
+            });
+        }
+        catch
+        {
+            // This run's (it holds the claim), and with no compare.json never listed nor pruned: not left behind (a full disk).
+            try { Directory.Delete(dir, recursive: true); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
         return dir;
     }
 
@@ -85,6 +94,12 @@ public static class ResultStore
             return true;
         }
         catch (IOException) when (File.Exists(Path.Combine(dir, ".claim"))) { return false; } // another run's
+        catch
+        {
+            // Not claimed (a full disk, a lost share): the directory goes if it is still empty (one another run claimed stays).
+            try { Directory.Delete(dir); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
     }
 
     /// <summary>
@@ -416,14 +431,30 @@ public static class ResultStore
     {
         var path = Path.Combine(dir, MetaName);
         var tmp = path + ".tmp";
-        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
-        using (var w = new Utf8JsonWriter(fs, MetaOptions))
+        Replace(tmp, path, new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None), fs =>
         {
+            using var w = new Utf8JsonWriter(fs, MetaOptions);
             w.WriteStartObject();
             body(w);
             w.WriteEndObject();
+        });
+    }
+
+    /// <summary><paramref name="write"/> writes <paramref name="tmp"/>, opened as <paramref name="fs"/> (and closed), then it
+    /// replaces <paramref name="path"/>; a failure either way (a full disk) takes the temp away rather than leaving it in
+    /// the result. One that couldn't be opened (another writer's, open) is never touched.</summary>
+    internal static void Replace(string tmp, string path, FileStream fs, Action<FileStream> write)
+    {
+        try
+        {
+            using (fs) write(fs);
+            File.Move(tmp, path, overwrite: true);
         }
-        File.Move(tmp, path, overwrite: true);
+        catch
+        {
+            try { File.Delete(tmp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
     }
 
     private static JsonDocument ReadMeta(string dir)
@@ -598,7 +629,7 @@ public static class ResultStore
     private static void WriteLines<T>(string path, IEnumerable<T> items, Action<Utf8JsonWriter, T> write)
     {
         var tmp = path + ".tmp";
-        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
+        Replace(tmp, path, new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16), fs =>
         {
             var w = new Utf8JsonWriter(fs, LineOptions);
             foreach (var item in items)
@@ -609,8 +640,7 @@ public static class ResultStore
                 w.Reset(fs);
             }
             w.Dispose();
-        }
-        File.Move(tmp, path, overwrite: true);
+        });
     }
 
     private static List<T> ReadLines<T>(string path, Func<JsonElement, T> read)

@@ -103,7 +103,7 @@ public static class HtmlReport
         var items = s switch
         {
             CompareSession c => Items2(c, opt, ct),
-            Compare3Session t => Items3(t),
+            Compare3Session t => Items3(t, ct),
             _ => throw new ArgumentException("unknown compare kind"),
         };
 
@@ -265,7 +265,7 @@ public static class HtmlReport
         return list;
     }
 
-    private static List<Item> Items3(Compare3Session s)
+    private static List<Item> Items3(Compare3Session s, CancellationToken ct)
     {
         long maxText = new PatchOptions().MaxTextBytes;
         var list = new List<Item>();
@@ -291,12 +291,12 @@ public static class HtmlReport
             {
                 // A clean merge reads best as what it does to the base; a conflicted one as the merged file
                 // with its marker blocks; anything else as the side patch(es).
-                if (e.Outcome == Merge3Outcome.Merged && TreeMerger.MergeDiff(e, s.Base, s.V1, s.V2) is { } diff)
+                if (e.Outcome == Merge3Outcome.Merged && TreeMerger.MergeDiff(e, s.Base, s.V1, s.V2, ct: ct) is { } diff)
                 {
                     row["k"] = "base → clean merge result";
                     return (diff, "patch", ThreeWayViews.Stale(s, e));
                 }
-                var text = ThreeWayViews.Body(s, e, out var kind, out var merge);
+                var text = ThreeWayViews.Body(s, e, out var kind, out var merge, new PatchOptions { Cancellation = ct });
                 row["k"] = kind;
                 return (text, merge ? "merge" : "patch", ThreeWayViews.Stale(s, e));
             }));

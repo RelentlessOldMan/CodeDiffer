@@ -116,7 +116,9 @@ in: stopped in 0.1 s), saves the hashes it already read to the ledgers, and is s
 `cancelled`. So a cancelled cold run is not wasted: the next run of the same compare reads only the rest. A
 cancelled `--rehash` keeps the old ledger entries it didn't get to; a finished one keeps none it didn't re-read
 (nor one dated after it ran, from a clock that was ahead).
-Stopping a report (Ctrl+C) stops a giant file's block diff mid-read too.
+Stopping a report (Ctrl+C) stops a giant file's block diff mid-read too, and a compare3 report's merges.
+In the MCP server a cancelled request stops the same way: `write_report` (written whole, the rest listed
+without a diff), `apply_changeset` (between files, as Ctrl+C does `apply`), `write_merge` and `get_file_diff`.
 
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
 `<results>\yyyyMMdd-HHmmss-<id>\` (default `%LOCALAPPDATA%\CodeDiffer\results`, `CODEDIFFER_RESULTS_DIR`
@@ -186,6 +188,9 @@ A move's old path is listed only once its new file is written, so a failed read 
 file is written beside its name and renamed into place (a failed write leaves nothing half-written), and a
 merge is checked against the compare as it is written: a file whose merge changed since (a tree edited in
 between) is listed as not written instead. `INCOMPLETE.txt` is present until the overlay is finished.
+Ctrl+C (in `compare3 --merge-out`; a cancelled `write_merge` request in the MCP server) stops the writing,
+a giant file's merge included: the overlay keeps its `INCOMPLETE.txt` and is never applied (exit 130). Write
+it again into a new or empty directory.
 Unlike `apply --write` (which skips any file with a conflict), conflicts land in the overlay with markers.
 
 `codediffer apply-overlay <overlay-dir> <target> [--write] [--again]` does those steps (on v1, or better a copy
@@ -447,7 +452,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 | 2 | error: a tree or file not found, a refused directory, an unreadable manifest, a failed `--html` / `--merge-out`, a file or directory that could not be read or written where the command can't go on without it (denied, a share lost) |
 | 3 | done but INCOMPLETE: a directory could not be listed or a file could not be read (the warnings say which), or a report written with a diff it could not read or render (listed with why) |
 | 64 | usage: a missing argument, an unknown option, a flag without its value |
-| 130 | stopped by Ctrl+C (a compare, an apply, or a report written part way) |
+| 130 | stopped by Ctrl+C (a compare, an apply, or a report or merge overlay written part way) |
 
 Net: the agent pays for a summary plus what it opens; the human gets a shareable shell that lazily
 loads; the 1 GB header is touched a few MB at a time and reported as a bounded, honest summary with the

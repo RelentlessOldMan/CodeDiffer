@@ -118,15 +118,16 @@ public static class CodeDifferTools
         [Description("Compare id (default: the most recent).")] string? compare_id = null,
         [Description("2-way only: context lines around each change (default 3).")] int? context = null,
         [Description("Most lines to return (default 2000).")] int max_lines = AgentViews.DefaultMaxLines,
-        [Description("1-based line to start from (for paging capped output).")] int start_line = 1)
+        [Description("1-based line to start from (for paging capped output).")] int start_line = 1,
+        CancellationToken cancellationToken = default)
     {
         if (Find(compare_id, out var s) is { } err) return err;
         if (s is Compare3Session && context is not null)
             return "error: context is 2-way only; a 3-way file is the whole merged file with its conflict markers\n";
         return Safe(() => s switch
         {
-            Compare3Session t => ThreeWayViews.FileDiff(t, path, max_lines, start_line),
-            CompareSession c => AgentViews.FileDiff(c, path, context ?? PatchOptions.DefaultContextLines, max_lines, start_line),
+            Compare3Session t => ThreeWayViews.FileDiff(t, path, max_lines, start_line, cancellationToken),
+            CompareSession c => AgentViews.FileDiff(c, path, context ?? PatchOptions.DefaultContextLines, max_lines, start_line, cancellationToken),
             _ => "error: unknown compare kind",
         });
     }
@@ -169,11 +170,12 @@ public static class CodeDifferTools
         [Description("Directory to apply the changes onto.")] string target,
         [Description("Compare id (default: the most recent).")] string? compare_id = null,
         [Description("Actually modify the target (default false = dry run).")] bool write = false,
-        [Description("Most conflicted files listed inline (default 50); the full per-hunk report goes to a file.")] int max_files = 50)
+        [Description("Most conflicted files listed inline (default 50); the full per-hunk report goes to a file.")] int max_files = 50,
+        CancellationToken cancellationToken = default)
     {
         if (Find(compare_id, out var s) is { } err) return err;
         if (s is not CompareSession c) return $"error: compare {s!.Id} is 3-way; apply_changeset needs a 2-way compare";
-        try { return AgentViews.Apply(c, target, write, Math.Clamp(max_files, 1, 500)); }
+        try { return AgentViews.Apply(c, target, write, Math.Clamp(max_files, 1, 500), cancellationToken); }
         catch (Exception ex) when (ex is DirectoryNotFoundException or IOException or UnauthorizedAccessException or ArgumentException)
         {
             return $"error: {ex.Message}";
@@ -229,7 +231,8 @@ public static class CodeDifferTools
     public static string WriteMerge(
         [Description("compare3 id (default: the most recent).")] string? compare_id = null,
         [Description("A new or empty directory outside the three trees (default: merge\\ in the compare's result directory, or merge-2\\, merge-3\\ … once that holds an " +
-                     "overlay).")] string? out_dir = null)
+                     "overlay).")] string? out_dir = null,
+        CancellationToken cancellationToken = default)
     {
         if (Find(compare_id, out var s) is { } err) return err;
         if (s is not Compare3Session t) return $"compare {s!.Id} is a 2-way compare; write_merge needs a compare3 (apply_changeset ports a 2-way change set)";
@@ -256,7 +259,7 @@ public static class CodeDifferTools
             {
                 if (out_dir is null && (File.Exists(dir) || (Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any()))) continue;
                 OverlayResult o;
-                try { o = MergeOverlay.Write(t.Report!, t.Base, t.V1, t.V2, dir, t.Options.Parallelism); }
+                try { o = MergeOverlay.Write(t.Report!, t.Base, t.V1, t.V2, dir, t.Options.Parallelism, cancellationToken); }
                 catch (IOException) when (out_dir is null && pruned < 3 && !Directory.Exists(dir))
                 {
                     pruned++;
@@ -276,6 +279,10 @@ public static class CodeDifferTools
                 return (t.Reopened ? "note: reopened compare — written from the trees as they are now\n" : "") + ThreeWayViews.OverlayText(o);
             }
             catch (OverlayDirTakenException) when (out_dir is null) { }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return $"stopped: {dir} is not finished (it holds INCOMPLETE.txt) — never apply it; write_merge again";
+            }
             catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
             {
                 return $"error: {ex.Message}";
@@ -291,20 +298,22 @@ public static class CodeDifferTools
         [Description("Compare id (default: the most recent).")] string? compare_id = null,
         [Description("Also block-diff large files (over 16 MB; reads them whole).")] bool include_large = false,
         [Description("List identical files too (2-way).")] bool include_identical = false,
-        [Description("Most file diffs to render (default 5000).")] int max_diffs = 5000)
+        [Description("Most file diffs to render (default 5000).")] int max_diffs = 5000,
+        CancellationToken cancellationToken = default)
     {
         if (Find(compare_id, out var s) is { } err) return err;
         if (!s!.IsDone) return $"compare {s.Id} is still running — wait for it (get_summary wait_seconds) first";
         if (s.Error is { } failed) return $"compare {s.Id} {(s.Cancelled ? "was cancelled" : $"failed: {failed}")}";
         try
         {
-            var r = HtmlReport.Write(s, new HtmlReportOptions { IncludeLarge = include_large, IncludeIdentical = include_identical, MaxDiffs = Math.Max(0, max_diffs) });
+            var r = HtmlReport.Write(s, new HtmlReportOptions { IncludeLarge = include_large, IncludeIdentical = include_identical, MaxDiffs = Math.Max(0, max_diffs) }, ct: cancellationToken);
             return $"report: {r.IndexPath}\n" +
                    $"  {r.Files:N0} file(s) listed · {r.Rendered:N0} diff(s) rendered" +
                    (r.Capped > 0 ? $" · {r.Capped:N0} cut (whole diff linked)" : "") +
                    (r.Large > 0 ? $" · {r.Large:N0} large not block-diffed (include_large=true)" : "") +
                    (r.NotRendered > 0 ? $" · {r.NotRendered:N0} past max_diffs" : "") +
-                   (r.Unreadable > 0 ? $" · {r.Unreadable:N0} unreadable or not renderable" : "") + "\n" +
+                   (r.Unreadable > 0 ? $" · {r.Unreadable:N0} unreadable or not renderable" : "") +
+                   (r.Stopped > 0 ? $" · STOPPED: {r.Stopped:N0} without a diff (write_report again for the rest)" : "") + "\n" +
                    "  open index.html in a browser (works from disk, no server)\n";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)

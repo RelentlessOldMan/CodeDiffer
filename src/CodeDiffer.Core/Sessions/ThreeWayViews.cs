@@ -101,7 +101,8 @@ public static class ThreeWayViews
     /// One path: for a both-sides text change, the merged file with diff3 conflict markers; for a one-sided
     /// (or agreed) change, that side's patch. Capped at <paramref name="maxLines"/>; the whole goes to a file.
     /// </summary>
-    public static string FileDiff(Compare3Session s, string path, int maxLines = AgentViews.DefaultMaxLines, int startLine = 1)
+    public static string FileDiff(Compare3Session s, string path, int maxLines = AgentViews.DefaultMaxLines, int startLine = 1,
+        CancellationToken ct = default)
     {
         if (Pending(s) is { } pending) return $"compare3 {s.Id}: {pending}";
         var r = s.Report!;
@@ -123,7 +124,7 @@ public static class ThreeWayViews
         if (e is null && AgentViews.CaseAmbiguous(r.Entries.Select(x => x.Path), path) is { } cased) return cased;
         if (e is null) return $"not touched by either side in compare3 {s.Id}: {path}\n";
 
-        var body = Body(s, e, out var kind, out _);
+        var body = Body(s, e, out var kind, out _, new PatchOptions { Cancellation = ct });
         var lines = body.Split('\n');
         int total = lines.Length - (body.EndsWith('\n') ? 1 : 0);
         var o = new StringBuilder(Line(e)).Append($"\n{kind} · {total:N0} line(s)\n");
@@ -162,7 +163,7 @@ public static class ThreeWayViews
     {
         var opt = options ?? new PatchOptions();
         merge = false;
-        if (TreeMerger.MergedText(e, s.Base, s.V1, s.V2) is { } merged)
+        if (TreeMerger.MergedText(e, s.Base, s.V1, s.V2, opt.Cancellation) is { } merged)
         {
             merge = true;
             kind = e.Outcome == Merge3Outcome.Conflict ? $"merged with {e.ConflictRegions} conflict marker block(s)" : "clean merge result";

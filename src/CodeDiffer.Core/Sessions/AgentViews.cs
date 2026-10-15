@@ -242,7 +242,7 @@ public static class AgentViews
     /// returned, with the hunk headers listed, so the agent can page or open it instead of being flooded.
     /// </summary>
     public static string FileDiff(CompareSession s, string path, int context = PatchOptions.DefaultContextLines,
-        int maxLines = DefaultMaxLines, int startLine = 1)
+        int maxLines = DefaultMaxLines, int startLine = 1, CancellationToken ct = default)
     {
         context = Math.Clamp(context, 0, 1000); // what is rendered, and so what the saved file's name says
         // While running, any difference found so far can be shown (diffs are rendered from the trees anyway).
@@ -277,7 +277,7 @@ public static class AgentViews
 
         // An add/remove found mid-run may still become a rename: show it, but don't remember its line counts.
         bool mayBeRename = found?.Any(f => f.MayBeRename && f.Change.RelativePath == c.RelativePath) == true;
-        var (section, info) = RenderOne(s, c, context, remember: !mayBeRename);
+        var (section, info) = RenderOne(s, c, context, remember: !mayBeRename, ct: ct);
         var all = section.Split('\n');
         int total = all.Length - (section.EndsWith('\n') ? 1 : 0);
         maxLines = Math.Max(1, maxLines);
@@ -405,7 +405,13 @@ public static class AgentViews
     {
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         var tmp = Walk.TempNames.Unique(file);
-        File.WriteAllText(tmp, text, new UTF8Encoding(false));
+        try { File.WriteAllText(tmp, text, new UTF8Encoding(false)); }
+        catch
+        {
+            // Written part way (a full disk): not left beside the file.
+            try { File.Delete(tmp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
         for (int attempt = 1; ; attempt++)
         {
             try
@@ -520,10 +526,11 @@ public static class AgentViews
     /// <paramref name="write"/>): totals, then the conflicted and fuzzy files (bounded), with the full
     /// per-hunk report written to a file.
     /// </summary>
-    public static string Apply(CompareSession s, string target, bool write, int maxFiles = 50)
+    /// <param name="ct">Stops it between files (a file is written whole or not at all): the files not reached are counted.</param>
+    public static string Apply(CompareSession s, string target, bool write, int maxFiles = 50, CancellationToken ct = default)
     {
         if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
-        var r = ChangePorter.Run(s.Report!, s.Left, s.Right, target, write, parallelism: s.Options.Parallelism);
+        var r = ChangePorter.Run(s.Report!, s.Left, s.Right, target, write, parallelism: s.Options.Parallelism, ct: ct);
         using (ResultStore.Hold(s)) // no prune takes the result away under the report
             return PortText(r, $"compare {s.Id}", Path.Combine(OutDir(s), $"apply-{(write ? "written" : "dryrun")}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt"), maxFiles);
     }
@@ -594,11 +601,12 @@ public static class AgentViews
         });
     }
 
-    private static (string Text, FileDiffInfo Info) RenderOne(CompareSession s, FileChange c, int context, bool remember = true)
+    private static (string Text, FileDiffInfo Info) RenderOne(CompareSession s, FileChange c, int context, bool remember = true,
+        CancellationToken ct = default)
     {
         var w = new StringWriter { NewLine = "\n" };
         var stats = new PatchStats();
-        PatchWriter.WriteChange(w, c, s.Left, s.Right, new PatchOptions { Context = Math.Clamp(context, 0, 1000) }, stats);
+        PatchWriter.WriteChange(w, c, s.Left, s.Right, new PatchOptions { Context = Math.Clamp(context, 0, 1000), Cancellation = ct }, stats);
         var text = w.ToString();
         var info = Count(text, stats);
         // Remembered for the listings, which count hunks at the default context (more context merges hunks); not when
