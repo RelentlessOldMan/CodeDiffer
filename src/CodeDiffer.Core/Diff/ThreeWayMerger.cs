@@ -176,14 +176,20 @@ public static class ThreeWayMerger
     /// <c>acc = 1;</c> → <c>acc = 2;</c>, a comment appended). A blank run line resembles nothing.</summary>
     internal static bool Resembles(string run, string line)
     {
-        var r = run.AsSpan().Trim();
-        var s = line.AsSpan().Trim();
+        var r = Body(run);
+        var s = Body(line);
         if (r.IsEmpty) return false;
         int p = r.CommonPrefixLength(s);
         int lim = Math.Min(r.Length, s.Length) - p, q = 0;
         while (q < lim && r[r.Length - 1 - q] == s[s.Length - 1 - q]) q++;
         return 2 * (p + q) >= r.Length;
     }
+
+    /// <summary>A line's text past indentation and its ending, however it was split: the engine's lines keep their
+    /// '\n', verify's (<see cref="UnifiedDiff.DiffLines"/>) tag a last line without one, and the two must pair alike.</summary>
+    private static ReadOnlySpan<char> Body(string line)
+        => (line.EndsWith(UnifiedDiff.NoEolMarker, StringComparison.Ordinal)
+            ? line.AsSpan(0, line.Length - UnifiedDiff.NoEolMarker.Length) : line.AsSpan()).Trim();
 
     /// <summary>Within each run of identical lines of <paramref name="a"/>, moves its deletes (lines mapped to −1) to the
     /// lines of <paramref name="b"/> inserted between its kept lines that are edits of the run's line. True if any moved.</summary>

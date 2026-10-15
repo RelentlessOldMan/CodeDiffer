@@ -386,7 +386,7 @@ public static class AgentViews
         for (var dir = Path.GetDirectoryName(mirrored); !clash && dir is not null && dir.Length > root.Length; dir = Path.GetDirectoryName(dir))
             clash = File.Exists(dir);
         // A name with the suffix too long to be one (a tree's name can already be 255 characters): the same.
-        clash |= Path.GetFileName(mirrored).Length > Walk.TempNames.MaxName;
+        clash |= !Walk.TempNames.Fits(Path.GetFileName(mirrored));
         if (!clash) return mirrored;
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(rel)))[..16].ToLowerInvariant();
         return Path.Combine(root, "_clash", $"{Walk.TempNames.Fit(Path.GetFileName(rel), hash.Length + 1 + suffix.Length)}.{hash}{suffix}");

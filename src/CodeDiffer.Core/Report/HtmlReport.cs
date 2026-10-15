@@ -59,7 +59,9 @@ public static class HtmlReport
         // One writer a directory at a time: two at once each deleted what the other was writing (all but one failed). In
         // this process by a lock, and across processes (the CLI and every MCP server) by a mutex named for the directory.
         HtmlReportResult result;
-        var key = outDir.TrimEnd(Path.DirectorySeparatorChar);
+        // Keyed by the directory as the file system resolves it, not as it was spelled: C:\x, \\?\C:\x, an 8.3 name, a subst
+        // or mapped drive and its share are one directory, one lock.
+        var key = Walk.RealPath.Of(outDir);
         lock (Gates.GetOrAdd(key, _ => new object()))
         {
             using var across = AcrossProcesses(key);

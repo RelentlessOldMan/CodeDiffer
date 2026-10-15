@@ -128,6 +128,12 @@ public static class ChangePorter
             {
                 files[i] = new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Conflict, "none", [], $"I/O error: {ex.Message}");
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Stopped in its merge, before anything of it was written: not reached (thrown out of the loop, it would
+                // reach the caller wrapped, with the files done before it unreported).
+                files[i] = new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.NotReached, "none", [], null);
+            }
             if (progress is not null)
             {
                 progress.Step();

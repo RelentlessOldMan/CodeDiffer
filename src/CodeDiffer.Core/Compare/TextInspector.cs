@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace CodeDiffer.Core.Compare;
@@ -191,12 +192,17 @@ internal static class TextInspector
         ".ps1" or ".psm1" or ".psd1" => StringRules.PowerShell,
         ".bat" or ".cmd" => StringRules.Literal,
         ".c" or ".h" or ".cc" or ".cpp" or ".cxx" or ".c++" or ".hpp" or ".hh" or ".hxx" or ".h++" or ".inl" or ".ipp"
-            or ".m" or ".mm" or ".java" or ".kt" or ".kts" or ".scala" or ".groovy" or ".gradle" or ".js" or ".jsx"
+            or ".mm" or ".java" or ".kt" or ".kts" or ".scala" or ".groovy" or ".gradle" or ".js" or ".jsx"
             or ".mjs" or ".cjs" or ".ts" or ".tsx" or ".json" or ".py" or ".pyi" or ".rb" or ".go" or ".rs" or ".swift"
             or ".php" or ".pl" or ".pm" or ".lua" or ".dart" or ".hlsl" or ".hlsli" or ".fx" or ".fxh" or ".glsl"
             or ".vert" or ".frag" or ".usf" or ".ush" or ".shader" or ".cginc" or ".compute" => StringRules.Escape,
-        _ => StringRules.Both,
+        _ => StringRules.Both, // .m too: Objective-C escapes, MATLAB doesn't
     };
+
+    /// <summary>The rules for a file compared under two names (a rename): its language's if both name it, else
+    /// <see cref="StringRules.Both"/>, so a verdict never depends on which side is the new one.</summary>
+    public static StringRules RulesFor(string oldPath, string newPath)
+        => RulesFor(oldPath) is var a && a == RulesFor(newPath) ? a : StringRules.Both;
 
     /// <summary>
     /// What a whitespace-only change leaves alone, of EOL-normalized text: the same lines, each with its leading and
@@ -206,7 +212,8 @@ internal static class TextInspector
     /// space that joins or splits a token ("return x" → "returnx", "- -x" → "--x", "/ *" → "/*", "1 .5" → "1.5") or is
     /// taken out of a string (<c>split(" ")</c> → <c>split("")</c>, <c>"Total: "</c> → <c>"Total:"</c>) and a line
     /// joined, split or added are content. A quote not escaped by a backslash (one after an odd run of them: in <c>"\\"</c> the second quote closes) opens a string, the same quote closes it,
-    /// and so does a line ending (an apostrophe in prose only makes the rest of its line stricter). The width of a run is never kept,
+    /// and so does a line ending; an apostrophe is read both as a quote and as not one (prose in a comment, a Rust
+    /// lifetime), and a string after a raw prefix both as raw and not. The width of a run is never kept,
     /// so a run widened or narrowed inside a string literal reads as whitespace too. Which quote is escaped is the
     /// language's (<paramref name="rules"/>, a <see cref="StringScan"/>): in C a backslash escapes, in a C# verbatim
     /// string (<c>@"C:\temp\"</c>) and in batch it is text, in PowerShell a backtick escapes.
@@ -261,83 +268,133 @@ public enum StringRules
 /// <summary>
 /// Whether a scan, a character at a time, is in a string on its line: the one reading of quotes the whole-text
 /// <see cref="TextInspector.WhitespaceKey"/> and the streamed comparison share, so they always agree. A quote not escaped
-/// opens a string, the same quote closes it, and so does a line ending. <see cref="StringRules.Both"/> runs the escape and
-/// the literal reading side by side, in a string if either is.
+/// opens a string, the same quote closes it, and so does a line ending. Where a line can be read more than one way the
+/// readings run side by side, in a string if any is: an apostrophe a quote (a char literal, a string) or not (prose in
+/// a comment, a Rust lifetime: read as a quote, the next apostrophe, inside a real string, would close it); a string
+/// after a raw prefix (<c>r"…"</c>, <c>R"(…)"</c>, <c>r#"…"#</c>, a backtick string, C#'s <c>"""…"""</c>) one whose
+/// backslashes are text or not; and in <see cref="StringRules.Both"/> a backslash an escape or text. A reading wrong
+/// for the file only puts more of a line in a string, so a verdict is stricter, never one that calls a change in a
+/// string whitespace.
 /// </summary>
 internal struct StringScan
 {
-    private Reading _a, _b;
-    private readonly bool _both;
+    private Readings _r;
+    private readonly int _n;
+    private int _escapeNext, _closedVerbatim, _inString; // a bit a reading
+    private int _p1 = -1, _p2 = -1;                       // the last two characters stepped over but spacing
 
     public StringScan(StringRules rules)
     {
-        _both = rules == StringRules.Both;
-        _a = new Reading(_both ? StringRules.Escape : rules);
-        _b = new Reading(StringRules.Literal);
+        _n = 0;
+        var e = rules == StringRules.Both ? StringRules.Escape : rules;
+        if (e is StringRules.Escape or StringRules.CSharp)
+        {
+            _r[_n++] = new Reading(e, apostrophe: true, raw: false);
+            _r[_n++] = new Reading(e, apostrophe: true, raw: true);
+            _r[_n++] = new Reading(e, apostrophe: false, raw: false);
+            _r[_n++] = new Reading(e, apostrophe: false, raw: true);
+        }
+        if (rules is StringRules.Both or StringRules.Literal or StringRules.PowerShell)
+        {
+            var l = rules == StringRules.PowerShell ? rules : StringRules.Literal;
+            _r[_n++] = new Reading(l, apostrophe: true, raw: false);
+            _r[_n++] = new Reading(l, apostrophe: false, raw: false);
+        }
     }
 
     /// <summary>The scan is in a string, after the characters stepped over.</summary>
-    public readonly bool InString => _a.Quote != '\0' || (_both && _b.Quote != '\0');
+    public readonly bool InString => _inString != 0;
 
-    /// <summary>Steps over one character (-1: the end; a line ending is '\n' or '\r'): whether it is escaped (by either
+    /// <summary>Steps over one character (-1: the end; a line ending is '\n' or '\r'): whether it is escaped (by any
     /// reading).</summary>
     public bool Step(int c)
     {
-        bool escaped = _a.Step(c);
-        if (_both) escaped |= _b.Step(c);
-        return escaped;
-    }
-
-    private struct Reading(StringRules rules)
-    {
-        public char Quote; // the quote of the string the scan is in, or '\0'
-        private bool _verbatim, _closedVerbatim, _escapeNext;
-        private int _p1 = -1, _p2 = -1;
-
-        public bool Step(int c)
+        bool escaped = _escapeNext != 0;
+        if (TextInspector.IsHorizontalSpace(c))
         {
-            bool escaped = _escapeNext;
-            if (!escaped && TextInspector.IsHorizontalSpace(c))
-            {
-                // Spacing never puts a scan in or out of a string, nor makes a quote verbatim: only what is kept does.
-                _escapeNext = false;
-                return false;
-            }
-            _escapeNext = !escaped && rules switch
-            {
-                StringRules.Escape => c == '\\',
-                StringRules.CSharp => c == '\\' && !_verbatim,
-                StringRules.PowerShell => c == '`' && Quote != '\'',
-                _ => false,
-            };
-            if (c is '\n' or '\r')
-            {
-                Quote = '\0';
-                _verbatim = _closedVerbatim = false;
-            }
-            else if (!escaped && (c is '"' or '\'' || (c == '`' && rules != StringRules.PowerShell)))
-            {
-                if (Quote == '\0')
-                {
-                    // C#: @"…", $@"…", @$"…", and the second quote of "" in a verbatim string, which reopens it.
-                    _verbatim = rules == StringRules.CSharp && c == '"' && (_closedVerbatim || _p1 == '@' || (_p1 == '$' && _p2 == '@'));
-                    Quote = (char)c;
-                }
-                else if (Quote == c)
-                {
-                    Quote = '\0';
-                    _closedVerbatim = _verbatim;
-                    _verbatim = false;
-                    _p2 = _p1;
-                    _p1 = c;
-                    return false;
-                }
-                _closedVerbatim = false;
-            }
-            else _closedVerbatim = false;
+            // Spacing never puts a scan in or out of a string, nor makes a quote verbatim: only what is kept does. An
+            // escaped space is a character, after which a verbatim string's closing quote is no longer half of "".
+            _closedVerbatim &= ~_escapeNext;
+            _escapeNext = 0;
+            return escaped;
+        }
+        if (c is not ('"' or '\'' or '`' or '\\' or '\n' or '\r'))
+        {
+            // Nothing any reading treats specially (most of a file): the same step for all of them.
+            _escapeNext = _closedVerbatim = 0;
             _p2 = _p1;
             _p1 = c;
             return escaped;
         }
+        int next = 0, closed = 0, inString = 0;
+        for (int i = 0; i < _n; i++)
+        {
+            ref var r = ref _r[i];
+            int bit = 1 << i;
+            bool e = (_escapeNext & bit) != 0;
+            if (!e && r.Escapes(c)) next |= bit;
+            if (c is '\n' or '\r')
+            {
+                r.Quote = '\0';
+                r.Verbatim = false;
+            }
+            else if (!e && r.IsQuote(c))
+            {
+                if (r.Quote == '\0')
+                {
+                    // C#: @"…", $@"…", @$"…", and the second quote of "" in a verbatim string, which reopens it.
+                    r.Verbatim = (r.Rules == StringRules.CSharp && c == '"' && ((_closedVerbatim & bit) != 0 || _p1 == '@' || (_p1 == '$' && _p2 == '@')))
+                                 || (r.Raw && Raw(r.Rules, c));
+                    r.Quote = (char)c;
+                }
+                else if (r.Quote == c)
+                {
+                    r.Quote = '\0';
+                    if (r.Verbatim) closed |= bit;
+                    r.Verbatim = false;
+                }
+            }
+            if (r.Quote != '\0') inString |= bit;
+        }
+        _escapeNext = next;
+        _closedVerbatim = closed;
+        _inString = inString;
+        _p2 = _p1;
+        _p1 = c;
+        return escaped;
+    }
+
+    /// <summary>Whether a string opening at quote <paramref name="c"/> is raw (its backslashes text): C#'s third quote
+    /// of <c>"""</c>; else a backtick (Go), or a quote after an <c>r</c>/<c>R</c> prefix (<c>r"…"</c>, <c>R"(…)"</c>,
+    /// <c>br"…"</c>, <c>u8R"…"</c>) or after <c>r#</c> (Rust).</summary>
+    private readonly bool Raw(StringRules rules, int c) => rules == StringRules.CSharp
+        ? c == '"' && _p1 == '"' && _p2 == '"'
+        : c == '`'
+          || (_p1 is 'r' or 'R' && !(TextInspector.IsWordChar(_p2) && _p2 is not ('b' or 'B' or 'u' or 'U' or 'L' or '8' or 'f' or 'F')))
+          || (_p1 == '#' && _p2 is 'r' or '#');
+
+    [InlineArray(6)]
+    private struct Readings
+    {
+        private Reading _first;
+    }
+
+    private struct Reading(StringRules rules, bool apostrophe, bool raw)
+    {
+        public readonly StringRules Rules = rules;
+        public readonly bool Raw = raw;
+        public char Quote;    // the quote of the string the reading is in, or '\0'
+        public bool Verbatim; // that string's backslashes are text
+
+        /// <summary>Whether <paramref name="c"/>, not itself escaped, escapes the next character.</summary>
+        public readonly bool Escapes(int c) => Rules switch
+        {
+            StringRules.Escape or StringRules.CSharp => c == '\\' && !Verbatim,
+            StringRules.PowerShell => c == '`' && Quote != '\'',
+            _ => false,
+        };
+
+        /// <summary>Whether <paramref name="c"/>, not escaped, opens or closes a string.</summary>
+        public readonly bool IsQuote(int c) => c == '"' || (c == '\'' && apostrophe) || (c == '`' && Rules != StringRules.PowerShell);
     }
 }

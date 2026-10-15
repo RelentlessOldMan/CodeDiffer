@@ -316,9 +316,13 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   digit and a dot (`1 .5` → `1.5`), a space taken out of a quoted string (`split(" ")` → `split("")`,
   `"Total: "` → `"Total:"`), a line joined, split or added, and NBSP / NEL (characters, not whitespace) are
   `content`. Whitespace is ASCII space, tab, VT and FF, whole or streamed alike. Strings and comments aren't
-  parsed: a quote not escaped opens a string until the same quote or the line's end (so an apostrophe in a comment
-  only makes the rest of its line stricter), and a run of spaces widened inside a string literal reads as
-  whitespace. A string is read a line at a time: one that goes on past its line (a Python `"""` docstring, a C#
+  parsed: a quote not escaped opens a string until the same quote or the line's end, and a run of spaces widened
+  inside a string literal reads as whitespace. Where a line reads more than one way, a space is kept if any reading
+  puts it in a string, so a guess wrong for the file only makes a verdict stricter: an apostrophe is read as a quote
+  and as not one (`can't` in a comment, a Rust `'static`), and a string after a raw prefix (`r"…"`, `R"(…)"`,
+  `r#"…"#`, a backtick string, C#'s `"""…"""`) with its backslashes as text and as escapes. So
+  `/* it's */ puts("don't a= b");` → `a=b` is `content`, and a reformat beside a raw string ending in a backslash
+  is `content` too. A string is read a line at a time: one that goes on past its line (a Python `"""` docstring, a C#
   raw or multi-line verbatim string, a JS template literal) is a string on its first line only, so a space taken
   out of it on a later line reads as whitespace — the review's diff shows it. Which quote is escaped is the file's language's, by its extension (the new side's):
   - C, C++, Java, JS/TS, JSON, Python, Go, Rust, HLSL/GLSL/USF and the like: a backslash escapes (one after an
@@ -329,7 +333,10 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
     beside it is `content`;
   - PowerShell (`.ps1`, `.psm1`, `.psd1`): a backtick escapes, in a double-quoted string; batch (`.bat`, `.cmd`):
     nothing does;
-  - any other file: `whitespace` only if it is so with a backslash read as an escape and as text, both.
+  - any other file, `.m` among them (Objective-C escapes, MATLAB doesn't): `whitespace` only if it is so with a
+    backslash read as an escape and as text, both;
+  - a rename between two of these (`a.c` → `a.txt`): both, as for any other file, so `compare A B` and
+    `compare B A` agree.
 
   A backslash before a space escapes it (taken out, the backslash escapes what follows): that space is kept, but
   never trailing whitespace. A whitespace-only change is diffed line for line (each changed line a replace of

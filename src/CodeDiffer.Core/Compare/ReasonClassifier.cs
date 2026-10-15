@@ -43,8 +43,8 @@ public sealed class ReasonClassifier
                   && (TextInspector.NulPast(leftPath, leftBytes, ct) || TextInspector.NulPast(rightPath, rightBytes, ct)))
             return ChangeReason.Binary;
 
-        // Strings are read as the (new) file's language reads them: a backslash an escape or text.
-        var rules = TextInspector.RulesFor(rightPath);
+        // Strings are read as the files' language reads them: a backslash an escape or text (both ways if the two differ).
+        var rules = TextInspector.RulesFor(leftPath, rightPath);
         if (large)
             return Math.Max(leftLength, rightLength) <= _maxStreamBytes ? Streamed(leftPath, leftBytes, rightPath, rightBytes, rules, ct) : ChangeReason.Content;
 

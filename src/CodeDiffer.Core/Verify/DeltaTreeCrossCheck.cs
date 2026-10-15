@@ -70,7 +70,7 @@ public static class DeltaTreeCrossCheck
             var relative = f.Path.Replace('/', Path.DirectorySeparatorChar);
             var baseRelative = (renamedFrom.TryGetValue(f.Path, out var from) ? from : f.Path).Replace('/', Path.DirectorySeparatorChar);
             bool ws = f.Reason == ChangeReason.Whitespace;
-            var rules = TextInspector.RulesFor(f.Path); // strings read as the engine reads them
+            var rules = TextInspector.RulesFor(baseRelative, relative); // strings read as the engine reads them
             if (f.RunHunks.Count > 0)
             {
                 // A giant file: its run rules expanded as they are checked (never held: a rule can claim 2³¹ lines), both
