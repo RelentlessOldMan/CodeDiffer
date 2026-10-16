@@ -122,6 +122,14 @@ public sealed class CliTests : IDisposable
     }
 
     [Fact]
+    public void PatchWithFastStat_IsRefusedBeforeTheCompare()
+    {
+        var r = Cli("compare", "nowhere-left", "nowhere-right", "--fast-stat", "--patch");
+        Assert.Equal(64, r.ExitCode);
+        Assert.Contains("--patch can't go with --fast-stat", r.Stderr);
+    }
+
+    [Fact]
     public void UnknownCommand_IsAUsageError()
     {
         var r = Cli("frobnicate", "x");

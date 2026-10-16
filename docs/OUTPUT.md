@@ -266,7 +266,10 @@ listing, and it records one only from a read whose handle stat didn't change acr
 the last moments before its read (3 s; 1 h on a share, whose clock may differ) is held pending and trusted only
 on a later stable read. By default a hit is confirmed by a live stat of the file too. `--fast-stat` skips that and
 trusts the listing alone: a same-size edit made through another hard link to the file, which this name's listing
-may not show, can then read as identical; use it only on a tree nothing else writes.
+may not show, can then read as identical; use it only on a tree nothing else writes. So its verdicts are listed
+but never patched or ported: `--patch` with `--fast-stat` is refused before the compare, and `export_changeset`
+or `apply_changeset` on such a saved compare says to compare again without it. On death (warm, 4 threads) it
+takes 16–19 s against 100–110 s, the per-file stat being nearly all of a warm compare's time over a share.
 
 `codediffer statcheck <dir>` measures how far a share's listing lags its open handles. Opening a file to measure
 it refreshes the share's stale entry for it, so a second statcheck straight after reads fewer mismatches: the

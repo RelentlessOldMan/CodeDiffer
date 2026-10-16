@@ -103,6 +103,13 @@ static int Compare(string[] args)
     var options = new CompareOptions { Parallelism = threads, Cache = cache, StrictStat = !args.Contains("--fast-stat") };
     // Every option is checked before a compare that may take an hour, not after it.
     bool patch = args.Contains("--patch");
+    if (patch && !options.StrictStat)
+    {
+        // The listing alone can miss a same-size edit (one made through another hard link): never patched from (W2).
+        Console.Error.WriteLine("error: --patch can't go with --fast-stat: a patch is built from the verdicts, and --fast-stat " +
+            "can miss a same-size edit");
+        return 64;
+    }
     PatchOptions popt = new();
     if (!patch && (FlagValue(args, "-U") is not null || args.Contains("--literal")))
     {
@@ -1148,7 +1155,8 @@ static void PrintUsage()
                                        proves every byte; --rehash re-reads and refreshes it.
                                        Cache hits are confirmed by a live per-file stat;
                                        --fast-stat trusts the directory listing alone (only for
-                                       a tree nothing else writes: see docs/OUTPUT.md).
+                                       a tree nothing else writes: see docs/OUTPUT.md); its
+                                       result is never patched or applied (no --patch).
                                        --timings prints each phase's time (stderr).
                                        --patch writes a git-style unified diff to stdout
                                        (git apply-able; summary goes to stderr).

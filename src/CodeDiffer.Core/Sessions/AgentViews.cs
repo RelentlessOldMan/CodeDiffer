@@ -474,6 +474,7 @@ public static class AgentViews
     {
         if (context < 0) return $"error: context must be 0 or more (got {context})\n";
         if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
+        if (FastStat(s) is { } fast) return fast;
         var r = s.Report!;
         if (r.LeftDroppedDirectories + r.RightDroppedDirectories > 0)
             return $"error: compare {s.Id} is incomplete ({r.LeftDroppedDirectories} left / {r.RightDroppedDirectories} right director(ies) " +
@@ -534,6 +535,7 @@ public static class AgentViews
     public static string Apply(CompareSession s, string target, bool write, int maxFiles = 50, CancellationToken ct = default)
     {
         if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
+        if (FastStat(s) is { } fast) return fast;
         var r = ChangePorter.Run(s.Report!, s.Left, s.Right, target, write, parallelism: s.Options.Parallelism, ct: ct);
         using (ResultStore.Hold(s)) // no prune takes the result away under the report
             return PortText(r, $"compare {s.Id}", Path.Combine(OutDir(s), $"apply-{(write ? "written" : "dryrun")}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt"), maxFiles);
@@ -640,6 +642,12 @@ public static class AgentViews
     }
 
     // ---- helpers ----
+
+    /// <summary>A compare run with --fast-stat trusted the directory listing alone, so a same-size edit the listing
+    /// missed (one made through another hard link) can be called identical: listed, but never patched or ported (W2).</summary>
+    private static string? FastStat(CompareSession s) => s.Options.StrictStat ? null
+        : $"error: compare {s.Id} ran with --fast-stat (the directory listing trusted alone), so it may have missed a " +
+          "same-size edit; a patch or apply needs a compare without it — start the compare again\n";
 
     private static string? Pending(CompareSession s)
     {

@@ -170,6 +170,21 @@ public class AgentViewTests : IDisposable
     }
 
     [Fact]
+    public void AFastStatCompare_IsNeverExportedOrApplied()
+    {
+        // W2: --fast-stat trusts the listing alone and can miss a same-size edit, so its verdicts never feed a patch or a port.
+        var s = new SessionStore(save: false).Start(_left, _right, new CompareOptions { Cache = CacheMode.Off, StrictStat = false });
+        Assert.True(s.Wait(TimeSpan.FromSeconds(60)));
+        var outFile = Path.Combine(_dir, "x", "fast.patch");
+        Assert.Contains("--fast-stat", AgentViews.Export(s, outFile));
+        Assert.False(File.Exists(outFile));
+        var target = Path.Combine(_dir, "target");
+        Directory.CreateDirectory(target);
+        Assert.Contains("--fast-stat", AgentViews.Apply(s, target, write: true));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(target));
+    }
+
+    [Fact]
     public void Export_WritesAPatchFile_AndStatsReportRenderedMovers()
     {
         var s = Run(new SessionStore(save: false));
