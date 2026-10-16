@@ -21,7 +21,7 @@ Every path is classified before any content is read; we descend only when asked.
 | Tier | Work | Cost on ~90 GB | Emits |
 |---|---|---|---|
 | **0 Walk + stat** | enumerate both trees, read size/mtime *off the enumeration* (no per-file stat round-trips); walk dirs concurrently, bounded | minutes, bounded RAM | per-path status candidate |
-| **1 Hash** | SHA-256 of raw bytes where size matches; cached by `(path,size,mtime)`; giants hashed in ~1 MB chunks | streamed | identical vs modified (confirmed) |
+| **1 Hash** | SHA-256 of raw bytes where size matches; cached by path, trusted on size, mtime, ChangeTime and file id (see §4); giants hashed in ~1 MB chunks | streamed | identical vs modified (confirmed) |
 | **2 Reason** | classify modified → `content\|eol\|whitespace\|encoding\|binary\|metadata` from hashes + a small head read | cheap | the reason label |
 | **3 Hunks** | real line diff — **only for the one file a consumer opens**, bounded by a per-file cap | bounded per file | hunks, or "summary only" |
 
@@ -261,6 +261,17 @@ skipped, plus both sides of the 1,561 modified files), 4:19. The 68,661 per-file
 a run on CodeDiffer's own ledger. Locally, a same-size edit with the mtime put back, a delete + recreate
 with the same size and mtime, and a move over an existing file were all re-read and reported modified.
 
+The cache trusts an entry only if size, mtime, ChangeTime and file id (where both sides know it) all match the
+listing, and it records one only from a read whose handle stat didn't change across it. A file stamped within
+the last moments before its read (3 s; 1 h on a share, whose clock may differ) is held pending and trusted only
+on a later stable read. By default a hit is confirmed by a live stat of the file too. `--fast-stat` skips that and
+trusts the listing alone: a same-size edit made through another hard link to the file, which this name's listing
+may not show, can then read as identical; use it only on a tree nothing else writes.
+
+`codediffer statcheck <dir>` measures how far a share's listing lags its open handles. Opening a file to measure
+it refreshes the share's stale entry for it, so a second statcheck straight after reads fewer mismatches: the
+first run's numbers are the ones that describe the share.
+
 ## 5. The human HTML report
 
 Self-contained shell + a sidecar data dir in the result store. Summary tiles; a tree view with folder
@@ -371,7 +382,11 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   `\␠` ending a line, no continuation, made one by trimming the space),
   and NBSP / NEL (characters, not whitespace) are `content`. Whitespace is ASCII space, tab, VT and FF, whole or streamed alike. Strings and comments aren't
   parsed: a quote not escaped opens a string until the same quote or the line's end, and a run of spaces widened
-  inside a string literal reads as whitespace. Where a line reads more than one way, a space is kept if any reading
+  inside a string literal, or a space there turned into a tab (`' '` → `'\t'`, `"a b"` → `"a  b"`), reads as
+  whitespace: inside a string as outside it, a run's width and kind aren't kept, only whether it is there. The
+  verdict is the same for every kind of file: where the language reads indentation or spacing (Python's
+  indentation, a Makefile recipe's tab turned into spaces, a YAML block's indent, a shell's `FOO=bar` →
+  `FOO = bar`), a change it reads as code is still `whitespace` here — the diff shows it. Where a line reads more than one way, a space is kept if any reading
   puts it in a string, so a guess wrong for the file only makes a verdict stricter: an apostrophe is read as a quote
   and as not one (`can't` in a comment, a Rust `'static`), and a string after a raw prefix (`r"…"`, `R"(…)"`,
   `r#"…"#`, a backtick string, C#'s `"""…"""`) with its backslashes as text and as escapes. Where a backslash
@@ -382,7 +397,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   `/* it's */ puts("don't a= b");` → `a=b` is `content`, and a reformat beside a raw string ending in a backslash
   is `content` too. A string is read a line at a time: one that goes on past its line (a Python `"""` docstring, a C#
   raw or multi-line verbatim string, a JS template literal) is a string on its first line only, so a space taken
-  out of it on a later line reads as whitespace — the review's diff shows it. Which quote is escaped is the file's language's, by its extension (the new side's):
+  out of it on a later line reads as whitespace — the review's diff shows it. Which quote is escaped is the file's language's, by its extension:
   - C, C++, Java, JS/TS, JSON, Python, Go, Rust, HLSL/GLSL/USF and the like: a backslash escapes (one after an
     odd run of them: in `"\\"` the second quote closes the string), so `if (c == '\'' || c == '"') {` →
     `if (c=='\''||c=='"') {` is `whitespace`;
@@ -492,7 +507,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 | Per-file inline diff cap | 2,000 lines / 256 KB, lines over 2,000 chars cut | above → window + hunk map + `.patch` by reference |
 | Large-file threshold | 16 MB | above → never line-diffed whole: a block-level diff by reference (`get_file_diff`, `report --large`), a `large` conflict in compare3, byte-for-byte only in `apply` |
 | Result store location | fresh timestamped dir **outside** both trees | never overwrite; never diff own output |
-| Hash cache | on, keyed `(path,size,mtime)` | second compare of a near-identical tree is seconds |
+| Hash cache | on, keyed by path, trusted on size + mtime + ChangeTime + file id, live-checked | second compare of a near-identical tree is seconds |
 | SMB walk | concurrent, bounded; metadata off enumeration | overlaps round-trips on a latency-bound share |
 | Metadata-only diffing (mode) | **off** (opt-in) | over SMB mode is mostly noise |
 

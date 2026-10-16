@@ -14,6 +14,8 @@ files over 1 GB, locally or on a network share, and every answer is bounded so t
 - **list_files**: the changed files, paged and filtered by status, reason or path.
 - **get_file_diff**: one file's diff (2-way) or its merge with diff3 conflict markers (3-way), capped.
 - **get_stats**: detailed totals: files and bytes per status and reason, the biggest changed files.
+  A `whitespace` reason is judged alike for every kind of file: where indentation or spacing is code (Python,
+  a Makefile's tabs, YAML), open the diff before calling the change harmless.
 - **export_changeset**: the whole patch to a file. **apply_changeset**: port the changes onto a third tree
   by 3-way merge (dry run unless write=true).
 - **write_merge**: a 3-way compare's merge as an overlay on v1. **write_report**: the HTML report, for a human.

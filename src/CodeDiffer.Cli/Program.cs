@@ -1142,11 +1142,12 @@ static void PrintUsage()
                                        [--patch [-U N] [--literal]] [--timings] [--no-save]
                                        [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]
                                        compare two trees (parallel; default min(cores,8)).
-                                       Hash cache ON by default: a file whose path+size+mtime
-                                       match a trusted ledger entry isn't re-read. --no-cache
+                                       Hash cache ON by default: a file whose size, mtime, ChangeTime
+                                       and file id match a trusted ledger entry isn't re-read. --no-cache
                                        proves every byte; --rehash re-reads and refreshes it.
                                        Cache hits are confirmed by a live per-file stat;
-                                       --fast-stat trusts the directory listing alone.
+                                       --fast-stat trusts the directory listing alone (only for
+                                       a tree nothing else writes: see docs/OUTPUT.md).
                                        --timings prints each phase's time (stderr).
                                        --patch writes a git-style unified diff to stdout
                                        (git apply-able; summary goes to stderr).
@@ -1171,7 +1172,8 @@ static void PrintUsage()
           codediffer results [--max N]   saved compares, newest first
           codediffer statcheck <dir> [--max N] [--threads N]
                                          why files read as "changed while being read": compares each file's
-                                         listing with its open handle (reads 4 KB a file; numbers only)
+                                         listing with its open handle (reads 4 KB a file; numbers only).
+                                         Opening a file refreshes its listing: a second run reads fewer.
           codediffer runs [--max N]      how recent compares ran: how each ended, peak memory, time per phase,
                                          network vs work (numbers only, safe to share)
           codediffer results --prune [--keep N] [--older-than DAYS] [--yes]
