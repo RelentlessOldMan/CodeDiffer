@@ -691,6 +691,10 @@ public static class AgentViews
         if (r.CachedWithoutId > 0)
             yield return $"{pre}{r.CachedWithoutId:N0} file side(s) cached by size, modified and change time only: the server gives them another " +
                          "file id in its directory listing than when opened.";
+        if (r.SharePauses > 0)
+            yield return $"{pre}the trees stopped answering {r.SharePauses:N0} time(s), {ProgressView.Clock(r.SharePaused)} in all: the compare paused " +
+                         "until they answered again, then carried on (nothing was marked unreadable for it).";
+        if (r.RetriedReads > 0) yield return $"{pre}{r.RetriedReads:N0} read(s) failed and then worked when tried again.";
         if (r.UnstableNoChangeTime > 0) yield return $"{pre}{r.UnstableNoChangeTime:N0} file(s) on a server that gives no change time — compared as read, not cached.";
         if (r.SkippedLinks > 0)
             yield return $"{pre}{r.SkippedLinks:N0} symlink(s)/junction(s) not followed — nothing behind them is compared" +

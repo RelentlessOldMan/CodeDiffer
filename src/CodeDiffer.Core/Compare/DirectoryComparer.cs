@@ -76,6 +76,15 @@ public sealed class CompareOptions
     /// <summary>How often, at least, the hash ledgers are saved while contents are read (a killed run keeps what it
     /// read up to the last save). Slower when a save is slow: never more than about 5% of the time.</summary>
     public TimeSpan CheckpointInterval { get; init; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>How long a compare waits, paused, for trees that stopped answering (a share gone quiet, a dropped
+    /// session) before it stops with what it read kept (see <see cref="ShareGuard"/>). Default 30 minutes.</summary>
+    public TimeSpan ShareWait { get; init; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>Tests: the waits before a file that alone failed is tried again (default 1 s, 4 s), and between
+    /// checks of trees that stopped answering (default 1 s growing to 30 s).</summary>
+    internal IReadOnlyList<TimeSpan>? RetryDelays { get; init; }
+    internal IReadOnlyList<TimeSpan>? ProbeDelays { get; init; }
 }
 
 /// <summary>
@@ -132,7 +141,9 @@ public sealed class DirectoryComparer
         var leftCache = HashCache.Open(left, _options.CacheFor(left), _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing,
             sharedLeft?.StartedUtcTicks ?? 0);
         var rightCache = HashCache.Open(right, _options.CacheFor(right), _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing);
+        var guard = new ShareGuard([left, right], _options, progress);
         long bytesRead = 0;
+        int retriedAtEnd = 0;
 
         int pathCount = 0;
         var changes = new List<FileChange>(Math.Max(leftFiles.Count, rightFiles.Count));
@@ -207,7 +218,7 @@ public sealed class DirectoryComparer
             Parallel.For(0, sizeChanged.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism, CancellationToken = ct }, i =>
             {
                 var (le, re) = (leftFiles[sizeChanged[i].L], rightFiles[sizeChanged[i].R]);
-                try { classified[i] = Modified(classifier, le, re, ct); }
+                try { classified[i] = guard.Run(le.FullPath, () => Modified(classifier, le, re, ct), ct); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     classified[i] = Unknown(le, re, ex); // modified for sure; why is unknown
@@ -233,7 +244,7 @@ public sealed class DirectoryComparer
                     bool hasL = false, hasR = false;
                     try
                     {
-                        (verdicts[i], hasL, hasR) = await Pair(le, re, onChunk, ct).ConfigureAwait(false);
+                        (verdicts[i], hasL, hasR) = await guard.RunAsync(le.FullPath, () => Pair(le, re, onChunk, ct), ct).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     {
@@ -243,9 +254,22 @@ public sealed class DirectoryComparer
                     if (progress is not null)
                     {
                         if (verdicts[i].Status != ChangeStatus.Identical) progress.Add(verdicts[i]);
-                        progress.PairChecked(le.Length - streamed, 0, (hasL ? 1 : 0) + (hasR ? 1 : 0));
+                        progress.PairChecked(Math.Max(0, le.Length - streamed), 0, (hasL ? 1 : 0) + (hasR ? 1 : 0));
                     }
                 }).GetAwaiter().GetResult();
+            // One more try for each pair that couldn't be read, now that the rest is done: a file locked for a
+            // moment, or read while the trees were briefly unreachable, is usually readable by now.
+            for (int i = 0; i < verdicts.Length; i++)
+            {
+                if (verdicts[i].Unreadable is null) continue;
+                var (le, re) = (leftFiles[sameSize[i].L], rightFiles[sameSize[i].R]);
+                try
+                {
+                    verdicts[i] = guard.RunAsync(le.FullPath, () => Pair(le, re, null, ct), ct).GetAwaiter().GetResult().Verdict;
+                    retriedAtEnd++;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { verdicts[i] = Unknown(le, re, ex); }
+            }
             changes.AddRange(verdicts);
 
             async Task<(FileChange Verdict, bool HasL, bool HasR)> Pair(FileEntry le, FileEntry re, Action<int, int>? onChunk, CancellationToken ct)
@@ -305,7 +329,7 @@ public sealed class DirectoryComparer
             Phase("same-size content");
             ct.ThrowIfCancellationRequested();
             progress?.SetPhase(ComparePhase.Renames);
-            (long renameBytes, renameLimit) = AddResolvedAddsRemovesAndRenames(changes, removed, added, leftCache, rightCache, ct);
+            (long renameBytes, renameLimit) = AddResolvedAddsRemovesAndRenames(changes, removed, added, leftCache, rightCache, guard, ct);
             bytesRead += renameBytes;
             progress?.RenamesRead(renameBytes);
             Phase("renames");
@@ -351,6 +375,9 @@ public sealed class DirectoryComparer
             UnstableNoChangeTime = Unstable(leftCache, rightCache, ReadDoubt.NoChangeTime),
             PendingFiles = leftCache.Pending + rightCache.Pending,
             CachedWithoutId = leftCache.WithoutId + rightCache.WithoutId,
+            SharePauses = guard.Pauses,
+            SharePaused = guard.Paused,
+            RetriedReads = guard.Retried + retriedAtEnd,
             ComparedPairs = sameSize.Count,
             BytesRead = bytesRead,
             Timings = timings,
@@ -427,7 +454,7 @@ public sealed class DirectoryComparer
     /// </summary>
     /// <returns>The bytes rename detection read (ledger hits read none), and why edited renames weren't looked for.</returns>
     private (long Read, string? Limit) AddResolvedAddsRemovesAndRenames(List<FileChange> changes, List<FileEntry> removed, List<FileEntry> added,
-        HashCache leftCache, HashCache rightCache, CancellationToken ct)
+        HashCache leftCache, HashCache rightCache, ShareGuard guard, CancellationToken ct)
     {
         IReadOnlyList<FileEntry> leftoverRemoved = removed;
         IReadOnlyList<FileEntry> leftoverAdded = added;
@@ -437,7 +464,7 @@ public sealed class DirectoryComparer
 
         if (_options.DetectRenames)
         {
-            var result = new RenameDetector(_options).Detect(removed, added, leftCache, rightCache, ct);
+            var result = new RenameDetector(_options) { Guard = guard }.Detect(removed, added, leftCache, rightCache, ct);
             read = result.BytesRead;
             leftoverRemoved = result.UnmatchedRemoved;
             leftoverAdded = result.UnmatchedAdded;

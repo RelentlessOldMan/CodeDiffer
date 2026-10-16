@@ -327,6 +327,18 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   as itself, left out of rename matching), every summary warns, and the CLI exits 3. Files are opened so a
   writer can keep writing (a log being appended to is still read), and the hashes read are kept even when a
   compare fails.
+- Trees that stop answering are not 28,000 unreadable files. After any failed read the compare checks that each
+  tree's root is still there and that a file it read earlier still opens. If they do, the file alone is at fault:
+  it is tried again (after 1 s, then 4 s; a vanished file at once is final) and then listed `[unreadable]` as above.
+  If they don't, the whole compare pauses: no read starts, stderr says `PAUSED: the trees stopped answering (<the
+  error> [Windows error N])` at once, the progress line shows the pause and its cause, and the check is repeated
+  (1 s growing to every 30 s). When it passes, stderr says `resumed`, every paused read starts over and nothing
+  is marked unreadable for the pause; the summary notes how many pauses there were and how long. If the trees
+  don't answer within `--share-wait` minutes (default 30; the MCP server waits 30), the compare stops with exit 3
+  and says so. What it read is in the hash cache (saved every minute as it reads, and on the way out), so the same
+  compare run again reads only the rest. Every pair still unreadable when the rest is done is tried once more
+  before the result is written. `runs` shows the unreadable count so far, the pauses and the last cause's
+  Windows error code while a compare runs.
 - Files are what is compared: a directory added or removed with no files in it doesn't show. A directory named
   `.git` (anywhere below the root, in any case) is never walked, on any side and by every command (compare, compare3, apply,
   statcheck): a repository's object store isn't the tree's content, and its packs would swamp the answer. A `.git`
@@ -550,7 +562,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 | 0 | done: nothing conflicts and nothing is missing |
 | 1 | done, with conflicts (`compare3`, `apply`), a file that failed (`apply-overlay`), a `verify` gate failed, or a prune that could not delete everything |
 | 2 | error: a tree or file not found, a refused directory, an unreadable manifest, a failed `--html` / `--merge-out`, a file or directory that could not be read or written where the command can't go on without it (denied, a share lost) |
-| 3 | done but INCOMPLETE: a directory could not be listed or a file could not be read (the warnings say which), or a report written with a diff it could not read or render (listed with why) |
+| 3 | done but INCOMPLETE: a directory could not be listed or a file could not be read (the warnings say which), or a report written with a diff it could not read or render (listed with why); or a compare stopped because the trees stopped answering for longer than `--share-wait` (what it read is cached: run it again) |
 | 64 | usage: a missing argument, an unknown option, a flag without its value |
 | 130 | stopped by Ctrl+C (a compare, an apply, or a report or merge overlay written part way) |
 

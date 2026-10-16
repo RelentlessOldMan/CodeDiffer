@@ -82,7 +82,7 @@ static int Dispatch(string[] args)
 static int Compare(string[] args)
 {
     const string compareUsage = "usage: codediffer compare <left-tree> <right-tree> [--threads N] [--no-cache | --rehash | --rehash-side left|right] [--fast-stat] " +
-                                "[--patch [-U N] [--literal]] [--timings] [--no-save] [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]";
+                                "[--share-wait MIN] [--patch [-U N] [--literal]] [--timings] [--no-save] [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]";
     if (args.Length < 3)
     {
         Console.Error.WriteLine(compareUsage);
@@ -90,10 +90,11 @@ static int Compare(string[] args)
     }
     if (!ArgsOk(args, 2, compareUsage,
             ["--no-cache", "--rehash", "--fast-stat", "--patch", "--literal", "--timings", "--no-save", "--html", "--large", "--include-identical"],
-            ["--threads", "-U", "--max-diffs", "--out", "--rehash-side"]))
+            ["--threads", "-U", "--max-diffs", "--out", "--rehash-side", "--share-wait"]))
         return 64;
 
     int threads = new CompareOptions().Parallelism;
+    if (!ShareWait(args, 2, out var shareWait)) return 64;
     if (FlagValue(args, "--threads") is { } t && (!int.TryParse(t, out threads) || threads < 1))
     {
         Console.Error.WriteLine("error: --threads needs a positive integer");
@@ -102,7 +103,7 @@ static int Compare(string[] args)
     var cache = args.Contains("--no-cache") ? CacheMode.Off : args.Contains("--rehash") ? CacheMode.Rehash : CacheMode.On;
     if (!RehashSides(args, ["left", "right"], [args[1], args[2]], out var rehashRoots, out var rehashSides)) return 64;
     var options = new CompareOptions { Parallelism = threads, Cache = cache, StrictStat = !args.Contains("--fast-stat"),
-                                       RehashRoots = rehashRoots, RehashSides = rehashSides };
+                                       RehashRoots = rehashRoots, RehashSides = rehashSides, ShareWait = shareWait };
     // Every option is checked before a compare that may take an hour, not after it.
     bool patch = args.Contains("--patch");
     if (patch && !options.StrictStat)
@@ -132,12 +133,13 @@ static int Compare(string[] args)
         Console.Error.WriteLine($"error: {ex.Message}");
         return 2;
     }
-    WithProgress(() => session.Wait(Timeout.InfiniteTimeSpan), () => ProgressView.Line(session.Progress!), () => session.Cancel());
+    WithProgress(() => session.Wait(Timeout.InfiniteTimeSpan), () => ProgressView.Line(session.Progress!), () => session.Cancel(),
+        () => session.Progress!.Notices());
     if (session.Cancelled) return Cancelled(session.Elapsed, options.Cache);
     if (session.Error is { } err)
     {
         Console.Error.WriteLine($"error: {err}");
-        return 2;
+        return session.ShareLost ? 3 : 2;
     }
     var report = session.Report!;
 
@@ -971,6 +973,21 @@ static int ApplyOverlay(string[] args)
     return r.Cancelled ? 130 : r.Failed.Count > 0 ? 1 : 0;
 }
 
+/// <summary>--share-wait MIN: how long a compare waits, paused, for trees that stopped answering (default 30). False
+/// (usage said) for anything but a whole number of minutes, 0 or more.</summary>
+static bool ShareWait(string[] args, int from, out TimeSpan wait)
+{
+    wait = new CompareOptions().ShareWait;
+    if (FlagValue(args, "--share-wait", from: from + 1) is not { } v) return true;
+    if (!int.TryParse(v, out int min) || min < 0)
+    {
+        Console.Error.WriteLine("error: --share-wait needs a whole number of minutes (0 or more)");
+        return false;
+    }
+    wait = TimeSpan.FromMinutes(min);
+    return true;
+}
+
 /// <summary>--rehash-side a[,b]: the named trees re-read and their cache refreshed, the others' cache used. False (usage
 /// said) for an unknown name or one given with --no-cache or --rehash.</summary>
 static bool RehashSides(string[] args, string[] names, string[] roots, out IReadOnlyList<string> picked, out string label)
@@ -999,10 +1016,10 @@ static bool RehashSides(string[] args, string[] names, string[] roots, out IRead
 /// <summary>compare3: base vs v1 vs v2. Exit 1 when anything conflicts, 3 on an incomplete walk.</summary>
 static int Compare3(string[] args)
 {
-    const string compare3Usage = "usage: codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache | --rehash-side base|v1|v2[,...]] [--merge-out DIR] [--no-save] " +
+    const string compare3Usage = "usage: codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache | --rehash-side base|v1|v2[,...]] [--share-wait MIN] [--merge-out DIR] [--no-save] " +
                                  "[--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]";
     if (args.Length < 4 || !ArgsOk(args, 3, compare3Usage,
-            ["--all", "--no-cache", "--no-save", "--html", "--large", "--include-identical"], ["--threads", "--merge-out", "--max-diffs", "--out", "--rehash-side"]))
+            ["--all", "--no-cache", "--no-save", "--html", "--large", "--include-identical"], ["--threads", "--merge-out", "--max-diffs", "--out", "--rehash-side", "--share-wait"]))
     {
         if (args.Length < 4) Console.Error.WriteLine(compare3Usage);
         return 64;
@@ -1014,8 +1031,9 @@ static int Compare3(string[] args)
         return 64;
     }
     if (!RehashSides(args, ["base", "v1", "v2"], [args[1], args[2], args[3]], out var rehashRoots, out var rehashSides)) return 64;
+    if (!ShareWait(args, 3, out var shareWait)) return 64;
     var options = new CompareOptions { Parallelism = threads, Cache = args.Contains("--no-cache") ? CacheMode.Off : CacheMode.On,
-                                       RehashRoots = rehashRoots, RehashSides = rehashSides };
+                                       RehashRoots = rehashRoots, RehashSides = rehashSides, ShareWait = shareWait };
     if (!HtmlOptionsOk(args, args[1], args[2], args[3])) return 64;
     var store = new SessionStore(save: !args.Contains("--no-save"));
     var outDir = FlagValue(args, "--merge-out", from: 4);
@@ -1034,12 +1052,13 @@ static int Compare3(string[] args)
     WithProgress(() => s.Wait(Timeout.InfiniteTimeSpan), () =>
         s.Progress1!.Phase != ComparePhase.Done ? "base->v1: " + ProgressView.Line(s.Progress1)
         : s.Progress2!.Phase != ComparePhase.Done ? "base->v2: " + ProgressView.Line(s.Progress2)
-        : "classifying and merging the paths both sides touched", () => s.Cancel());
+        : "classifying and merging the paths both sides touched", () => s.Cancel(),
+        () => [.. s.Progress1!.Notices().Select(n => "base->v1: " + n), .. s.Progress2!.Notices().Select(n => "base->v2: " + n)]);
     if (s.Cancelled) return Cancelled(s.Elapsed, options.Cache);
     if (s.Error is { } err)
     {
         Console.Error.WriteLine($"error: {err}");
-        return 2;
+        return s.ShareLost ? 3 : 2;
     }
     // The paths both sides touched (or every touched path with --all), then the summary.
     var r = s.Report!;
@@ -1112,7 +1131,7 @@ static int Compare3(string[] args)
 /// The first Ctrl+C calls <paramref name="cancel"/> (the work then stops after saving the hashes it read); a second
 /// one ends the process at once.
 /// </summary>
-static T WithProgress<T>(Func<T> work, Func<string> line, Action? cancel = null)
+static T WithProgress<T>(Func<T> work, Func<string> line, Action? cancel = null, Func<string[]>? notices = null)
 {
     bool cancelling = false;
     ConsoleCancelEventHandler? onCtrlC = cancel is null ? null : (_, e) =>
@@ -1124,12 +1143,13 @@ static T WithProgress<T>(Func<T> work, Func<string> line, Action? cancel = null)
         cancel();
     };
     if (onCtrlC is not null) Console.CancelKeyPress += onCtrlC;
-    try { return Show(Task.Run(work), line); }
+    try { return Show(Task.Run(work), line, notices); }
     finally { if (onCtrlC is not null) Console.CancelKeyPress -= onCtrlC; }
 }
 
-static T Show<T>(Task<T> task, Func<string> line)
+static T Show<T>(Task<T> task, Func<string> line, Func<string[]>? notices = null)
 {
+    int noticed = 0;
     bool console = !Console.IsErrorRedirected;
     var sw = System.Diagnostics.Stopwatch.StartNew();
     var logged = TimeSpan.Zero;
@@ -1139,6 +1159,12 @@ static T Show<T>(Task<T> task, Func<string> line)
     while (!((IAsyncResult)task).AsyncWaitHandle.WaitOne(console ? 500 : 1000))
     {
         var t = sw.Elapsed;
+        // A pause, its end: a line of its own, as it happens (not only in the redrawn line, nor 30 s later).
+        if (notices?.Invoke() is { } ns && ns.Length > noticed)
+        {
+            if (drawn > 0) { Console.Error.Write("\r" + new string(' ', drawn) + "\r"); drawn = 0; }
+            for (; noticed < ns.Length; noticed++) Console.Error.WriteLine($"{ProgressView.Clock(t)}  {ns[noticed]}");
+        }
         var text = $"{ProgressView.Clock(t)}  {line()}";
         if (console)
         {
@@ -1176,7 +1202,7 @@ static void PrintUsage()
         usage:
           codediffer version                   print version
           codediffer compare <left> <right> [--threads N] [--no-cache | --rehash | --rehash-side S]
-                                       [--fast-stat]
+                                       [--fast-stat] [--share-wait MIN]
                                        [--patch [-U N] [--literal]] [--timings] [--no-save]
                                        [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]
                                        compare two trees (parallel; default min(cores,8)).
@@ -1188,13 +1214,17 @@ static void PrintUsage()
                                        --fast-stat trusts the directory listing alone (only for
                                        a tree nothing else writes: see docs/OUTPUT.md); its
                                        result is never patched or applied (no --patch).
+                                       Trees that stop answering mid-compare (a share gone quiet)
+                                       pause it, not fail its files: it carries on when they
+                                       answer, or after --share-wait minutes (default 30) stops,
+                                       exit 3, what it read cached for the next run.
                                        --timings prints each phase's time (stderr).
                                        --patch writes a git-style unified diff to stdout
                                        (git apply-able; summary goes to stderr).
                                        The result is saved (see `results`; --no-save skips);
                                        --html also writes the HTML report (report flags below).
           codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache | --rehash-side S]
-                              [--no-save]
+                              [--share-wait MIN] [--no-save]
                               [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]
                               [--merge-out DIR]
                                        3-way: v1 only | v2 only | agreed | merged | conflict
@@ -1254,6 +1284,7 @@ static void PrintUsage()
           codediffer help                      this help
 
         exit codes: 0 done · 1 conflicts / a file failed / a verify gate failed · 2 error
-                    3 done but incomplete (unlistable directory or unreadable file) · 64 usage · 130 Ctrl+C
+                    3 done but incomplete (unlistable directory or unreadable file), or stopped
+                      because the trees stopped answering (run it again) · 64 usage · 130 Ctrl+C
         """);
 }

@@ -54,6 +54,9 @@ public sealed class RenameDetector
 
     public RenameDetector(CompareOptions options) => _options = options;
 
+    /// <summary>The compare's reads go through it (a pause while the trees don't answer; a retry); null: read directly.</summary>
+    internal ShareGuard? Guard { get; init; }
+
     /// <param name="ct">Checked per file and per 1 MB chunk: this pass reads added and removed files.</param>
     public RenameResult Detect(IReadOnlyList<FileEntry> removed, IReadOnlyList<FileEntry> added, CancellationToken ct = default)
         => Detect(removed, added, null, null, ct);
@@ -248,7 +251,8 @@ public sealed class RenameDetector
                 }
                 try
                 {
-                    var h = await PairComparer.HashAsync(e, ct).ConfigureAwait(false);
+                    var h = Guard is null ? await PairComparer.HashAsync(e, ct).ConfigureAwait(false)
+                          : await Guard.RunAsync(e.FullPath, () => PairComparer.HashAsync(e, ct), ct).ConfigureAwait(false);
                     cache?.Record(e, h);
                     ids[i] = new ContentId(h.XxHash128, h.Sha256);
                     Interlocked.Add(ref read, e.Length);
@@ -531,7 +535,7 @@ public sealed class RenameDetector
             if (e.Length == 0 || e.Length > _options.MaxClassifyBytes || unreadable.ContainsKey(e.RelativePath)) return;
 
             byte[] bytes;
-            try { bytes = TextInspector.ReadAll(e.FullPath); }
+            try { bytes = Guard is null ? TextInspector.ReadAll(e.FullPath) : Guard.Run(e.FullPath, () => TextInspector.ReadAll(e.FullPath), ct); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 unreadable[e.RelativePath] = ex.Message;

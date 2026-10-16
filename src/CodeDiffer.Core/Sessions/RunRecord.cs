@@ -120,6 +120,14 @@ internal sealed class RunRecord : IDisposable
                     w.WriteNumber("bytesRead", p.BytesRead);
                     w.WriteNumber("cacheSides", p.CacheSides);
                     w.WriteNumber("differencesFound", p.FoundCount);
+                    w.WriteNumber("unreadableSoFar", p.UnreadableSoFar);
+                    if (p.Pauses > 0)
+                    {
+                        w.WriteNumber("pauses", p.Pauses);
+                        w.WriteNumber("pausedSeconds", Math.Round(p.PausedTime.TotalSeconds, 1));
+                        w.WriteBoolean("pausedNow", p.PausedSinceUtc is not null);
+                        w.WriteNumber("pauseErrorCode", p.PauseCode);
+                    }
                     w.WriteStartObject("phaseSeconds");
                     foreach (var (ph, t) in p.PhaseTimes()) w.WriteNumber(ph.ToString().ToLowerInvariant(), Math.Round(t.TotalSeconds, 1));
                     w.WriteEndObject();

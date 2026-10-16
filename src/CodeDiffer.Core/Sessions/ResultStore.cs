@@ -593,6 +593,9 @@ public static class ResultStore
         w.WriteNumber("unstableListing", r.UnstableListing);
         w.WriteNumber("unstableNoChangeTime", r.UnstableNoChangeTime);
         w.WriteNumber("cachedWithoutId", r.CachedWithoutId);
+        if (r.SharePauses > 0) w.WriteNumber("sharePauses", r.SharePauses);
+        if (r.SharePauses > 0) w.WriteNumber("sharePausedSeconds", Math.Round(r.SharePaused.TotalSeconds, 1));
+        if (r.RetriedReads > 0) w.WriteNumber("retriedReads", r.RetriedReads);
         w.WriteNumber("pendingFiles", r.PendingFiles);
         w.WriteNumber("bytesRead", r.BytesRead);
         w.WriteNumber("leftDroppedDirectories", r.LeftDroppedDirectories);
@@ -661,6 +664,9 @@ public static class ResultStore
             UnstableListing = stats.TryGetProperty("unstableListing", out var ul) ? ul.GetInt32() : 0,
             UnstableNoChangeTime = stats.TryGetProperty("unstableNoChangeTime", out var un) ? un.GetInt32() : 0,
             CachedWithoutId = stats.TryGetProperty("cachedWithoutId", out var cw) ? cw.GetInt32() : 0,
+            SharePauses = stats.TryGetProperty("sharePauses", out var sp) ? sp.GetInt32() : 0,
+            SharePaused = stats.TryGetProperty("sharePausedSeconds", out var sps) ? TimeSpan.FromSeconds(sps.GetDouble()) : TimeSpan.Zero,
+            RetriedReads = stats.TryGetProperty("retriedReads", out var rr) ? rr.GetInt32() : 0,
             PendingFiles = stats.GetProperty("pendingFiles").GetInt32(),
             BytesRead = stats.GetProperty("bytesRead").GetInt64(),
             SkippedLinks = stats.TryGetProperty("skippedLinks", out var links) ? links.GetInt32() : 0, // absent before 2026-10-07

@@ -51,6 +51,11 @@ public static class RunSummary
                               $"checked {done:N0} of {pairs:N0} same-size pairs, {Gb(bdone / 1048576):N1} of {Gb(bytes / 1048576):N1} GB" +
                               (bytes > 0 ? $" ({100 * bdone / bytes:0}%)" : "") +
                               $" · read {Gb(Num(x, "bytesRead") / 1048576):N1} GB · {Num(x, "cacheSides"):N0} sides from the cache · {Num(x, "differencesFound"):N0} differences so far");
+                if (Num(x, "unreadableSoFar") > 0 || Num(x, "pauses") > 0)
+                    sb.AppendLine($"            unreadable so far {Num(x, "unreadableSoFar"):N0}" +
+                                  (Num(x, "pauses") > 0 ? $" · trees stopped answering {Num(x, "pauses"):0} time(s), paused {Clock(Num(x, "pausedSeconds"))} in all" +
+                                                          (x.TryGetProperty("pausedNow", out var pn) && pn.GetBoolean() ? " (paused now)" : "") +
+                                                          $" · last cause Windows error {Num(x, "pauseErrorCode"):0}" : ""));
                 var ph = x.GetProperty("phaseSeconds").EnumerateObject().Select(q => $"{q.Name} {Clock(q.Value.GetDouble())}");
                 sb.AppendLine($"            time: {string.Join(" · ", ph)}");
                 var io = x.GetProperty("contentWorkerSeconds");

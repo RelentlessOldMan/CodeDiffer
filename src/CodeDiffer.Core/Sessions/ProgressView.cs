@@ -18,6 +18,9 @@ public static class ProgressView
             ComparePhase.Saving => "saving the hash cache",
             _ => "finishing",
         };
+        if (p.PausedSinceUtc is { } since)
+            now = $"PAUSED {Clock(DateTime.UtcNow - since)} (of up to {Clock(p.PauseLimit)}): the trees don't answer ({p.PauseReason}) · " + now;
+        if (p.UnreadableSoFar > 0) now += $" · {p.UnreadableSoFar:N0} unreadable so far";
         return !found || p.Phase < ComparePhase.Pairing ? now : $"{now} · {p.FoundCount:N0} difference(s) found so far";
     }
 

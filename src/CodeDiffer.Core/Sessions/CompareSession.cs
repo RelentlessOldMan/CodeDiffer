@@ -65,7 +65,17 @@ public abstract class Session
 
     /// <summary>The failure message when the compare threw or was cancelled, else null.</summary>
     public string? Error => Task.IsCanceled ? "cancelled"
-        : Task.IsFaulted ? (Task.Exception!.InnerException ?? Task.Exception).Message : null;
+        : Task.IsFaulted ? Root(Task.Exception!).Message : null;
+
+    /// <summary>It stopped because the trees stopped answering and didn't come back in time (what was read is cached).</summary>
+    public bool ShareLost => Task.IsFaulted && Root(Task.Exception!) is ShareUnavailableException;
+
+    /// <summary>The failure itself, out of the AggregateExceptions a task or a Parallel loop wraps it in.</summary>
+    private static Exception Root(Exception ex)
+    {
+        while (ex is AggregateException { InnerExceptions.Count: > 0 } a) ex = a.InnerExceptions[0];
+        return ex;
+    }
 
     /// <summary>The token the running compare watches.</summary>
     protected CancellationToken Token => _cts.Token;
@@ -138,7 +148,7 @@ public abstract class Session
             catch (Exception ex)
             {
                 _finished = _clock.Elapsed;
-                var inner = ex.InnerException ?? ex;
+                var inner = Root(ex);
                 _record?.End("failed", inner.GetType().Name);
                 if (ResultDir is not null) ResultStore.TryMarkFailed(this, "failed", inner.Message);
                 throw;

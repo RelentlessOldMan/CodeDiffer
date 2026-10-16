@@ -107,6 +107,11 @@ public sealed class CompareReport
     /// <summary>File sides hashed this run and cached without a FileId: the server's listing and open handle give
     /// different ids, so size, mtime and ChangeTime alone tell the file next time.</summary>
     public int CachedWithoutId { get; init; }
+    /// <summary>Times the trees stopped answering mid-compare and it paused until they did, and for how long in all.</summary>
+    public int SharePauses { get; init; }
+    public TimeSpan SharePaused { get; init; }
+    /// <summary>Reads that failed and then worked when tried again (after a pause, a retry, or at the end).</summary>
+    public int RetriedReads { get; init; }
     /// <summary>Content bytes read to reach the verdicts (an upper bound when early exit applies).</summary>
     public long BytesRead { get; init; }
     /// <summary>Wall time per compare phase, in order (for --timings).</summary>

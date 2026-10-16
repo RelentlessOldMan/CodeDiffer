@@ -56,7 +56,11 @@ The cache is per file and per tree, so it pays off in each of the usual cases:
 A cache entry is used only while the file's size, modified time and change time (and its id, where the
 server gives the same one in its listing as on an opened file) are what they were, and by default each hit
 is confirmed by a live stat of the file too. A miss costs a read, never a wrong answer. To read one tree
-again while the others come from the cache (to re-check its cache, or time it cold): `--rehash-side`. Details: §4 of
+again while the others come from the cache (to re-check its cache, or time it cold): `--rehash-side`.
+
+A share that stops answering mid-run doesn't cost the run either: the compare pauses, says so at once, and
+carries on when the share answers again, without listing anything as unreadable for it. If the share stays away
+longer than `--share-wait` minutes (default 30), it stops, and what it read is cached for the next run. Details: §4 of
 [`docs/OUTPUT.md`](docs/OUTPUT.md).
 
 ## Family

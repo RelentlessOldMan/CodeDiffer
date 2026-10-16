@@ -138,6 +138,18 @@ public sealed class CliTests : IDisposable
     }
 
     [Fact]
+    public void ShareWait_TakesWholeMinutes()
+    {
+        _t.Put("L/a.c", "x\n");
+        _t.Put("R/a.c", "x\n");
+        Assert.Equal(0, Cli("compare", "L", "R", "--share-wait", "5").ExitCode);
+        Assert.Equal(0, Cli("compare3", "L", "R", "R", "--share-wait", "0").ExitCode);
+        var bad = Cli("compare", "L", "R", "--share-wait", "soon");
+        Assert.Equal(64, bad.ExitCode);
+        Assert.Contains("--share-wait needs a whole number of minutes", bad.Stderr);
+    }
+
+    [Fact]
     public void PatchWithFastStat_IsRefusedBeforeTheCompare()
     {
         var r = Cli("compare", "nowhere-left", "nowhere-right", "--fast-stat", "--patch");

@@ -53,6 +53,61 @@ public sealed class CompareProgress
         Interlocked.Exchange(ref _lastCheckpointUtc, DateTime.UtcNow.Ticks);
     }
 
+    // Pauses while the trees don't answer (ShareGuard), and the lines a console prints as they happen.
+    private readonly List<string> _notices = [];
+    private long _pausedSinceUtc;
+    private string? _pauseWhy;
+    private TimeSpan _pauseLimit;
+    private long _unreadable, _pauses, _pausedTicks;
+    private int _pauseCode;
+
+    /// <summary>When the current pause began (UTC; null while not paused), why, and how long it may last.</summary>
+    public DateTime? PausedSinceUtc => Interlocked.Read(ref _pausedSinceUtc) is > 0 and var t ? new DateTime(t, DateTimeKind.Utc) : null;
+    public string? PauseReason { get { lock (_gate) return _pauseWhy; } }
+    public TimeSpan PauseLimit { get { lock (_gate) return _pauseLimit; } }
+    /// <summary>Pairs found unreadable so far (each may still be read on the try at the end).</summary>
+    public long UnreadableSoFar => Interlocked.Read(ref _unreadable);
+    /// <summary>Pauses so far, their time (the current one included) and the Windows error code of the last one's
+    /// cause (0: none, or not a Windows error) — counts only, for the run record.</summary>
+    public long Pauses => Interlocked.Read(ref _pauses);
+    public TimeSpan PausedTime => TimeSpan.FromTicks(Interlocked.Read(ref _pausedTicks)) + (PausedSinceUtc is { } s ? DateTime.UtcNow - s : TimeSpan.Zero);
+    public int PauseCode => Volatile.Read(ref _pauseCode);
+
+    /// <summary>Lines worth a line of their own (a pause, its end), oldest first; a console prints the new ones.</summary>
+    public string[] Notices()
+    {
+        lock (_gate) return [.. _notices];
+    }
+
+    private void Notice(string text)
+    {
+        lock (_gate) _notices.Add(text);
+    }
+
+    internal void SharePaused(string why, int code, TimeSpan limit)
+    {
+        lock (_gate) (_pauseWhy, _pauseLimit) = (why, limit);
+        Interlocked.Increment(ref _pauses);
+        Volatile.Write(ref _pauseCode, code);
+        Interlocked.Exchange(ref _pausedSinceUtc, DateTime.UtcNow.Ticks);
+        Notice($"PAUSED: the trees stopped answering ({why}). Nothing is marked unreadable for it: the compare waits, " +
+               $"checking again every few seconds, for up to {Sessions.ProgressView.Clock(limit)}, and carries on when they answer.");
+    }
+
+    internal void ShareResumed(TimeSpan took)
+    {
+        Interlocked.Add(ref _pausedTicks, took.Ticks);
+        Interlocked.Exchange(ref _pausedSinceUtc, 0);
+        Notice($"resumed: the trees answer again after {Sessions.ProgressView.Clock(took)} paused.");
+    }
+
+    internal void ShareLost(TimeSpan took)
+    {
+        Interlocked.Add(ref _pausedTicks, took.Ticks);
+        Interlocked.Exchange(ref _pausedSinceUtc, 0);
+        Notice("stopping: the trees did not answer again in time; what was read is kept in the hash cache.");
+    }
+
     public ComparePhase Phase => _phase;
     public long ListedLeft => Interlocked.Read(ref _listedLeft);
     public long ListedRight => Interlocked.Read(ref _listedRight);
@@ -191,6 +246,7 @@ public sealed class CompareProgress
 
     internal void Add(FileChange c, bool mayBeRename = false)
     {
+        if (c.Unreadable is not null && !c.BehindLink) Interlocked.Increment(ref _unreadable);
         lock (_gate)
             if (_released < 0) _found.Add(new PartialChange(c, mayBeRename));
     }
