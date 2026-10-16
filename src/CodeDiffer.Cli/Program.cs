@@ -9,6 +9,15 @@ using CodeDiffer.Core.Sessions;
 using CodeDiffer.Core.ThreeWay;
 using CodeDiffer.Core.Verify;
 
+// Redirected (a pipe or a file), stdout and stderr are written in the console code page, which turns a non-ASCII path
+// into '?'. Write UTF-8 there, as --patch and diff already do. A console keeps .NET's own writer: it writes UTF-16 to
+// the console, whatever its code page, and setting Console.OutputEncoding would change the code page of the console
+// we were started from.
+if (Console.IsOutputRedirected)
+    Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { AutoFlush = true });
+if (Console.IsErrorRedirected)
+    Console.SetError(new StreamWriter(Console.OpenStandardError(), new System.Text.UTF8Encoding(false)) { AutoFlush = true });
+
 // A crash is recorded in the running compare's run.json (numbers only), so a dead run says what killed it.
 AppDomain.CurrentDomain.UnhandledException += (_, e) => { if (e.ExceptionObject is Exception ex) Session.RecordCrash(ex); };
 // The console window closed, a logoff or shutdown: stop the compare so it keeps what it read and records why (Windows

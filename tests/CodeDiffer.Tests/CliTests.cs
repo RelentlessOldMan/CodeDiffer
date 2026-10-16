@@ -310,9 +310,7 @@ public sealed class CliTests : IDisposable
         Assert.Contains("cache off", r.Stdout);
     }
 
-    [Fact(Skip = "BUG: with stdout redirected (a pipe or a file) the change list and summary are written in the console code page " +
-                 "(437 here), so a non-ASCII path comes out as '?' (\"A ??.txt\" for 日本.txt) and '·' as a stray byte; only --patch and " +
-                 "diff write UTF-8. Seen on a code-page-437 console; a UTF-8 system code page would hide it")]
+    [Fact]
     public void Compare_RedirectedOutput_KeepsNonAsciiPaths()
     {
         _t.Dir("L");
@@ -854,9 +852,7 @@ public sealed class CliTests : IDisposable
         Assert.Contains("0 saved compare(s)", Cli("results").Stdout);
     }
 
-    [Fact(Skip = "BUG: saved results are ordered by directory name <yyyyMMdd-HHmmss>-<random id>, so compares started in the same " +
-                 "second are listed by their random id, not newest first; `results` shows them out of order and `results --prune " +
-                 "--keep N` (\"all but the newest N\") can delete a newer compare and keep an older one")]
+    [Fact]
     public void ResultsInOneSecond_ListNewestFirst()
     {
         _t.Put("L/a.txt", "a\n");

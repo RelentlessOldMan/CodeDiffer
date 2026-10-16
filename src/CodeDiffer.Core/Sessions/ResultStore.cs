@@ -266,14 +266,20 @@ public static class ResultStore
             .FirstOrDefault();
     }
 
-    /// <summary>Saved compares, newest first (unreadable directories are skipped).</summary>
+    /// <summary>Saved compares, newest first by start time (unreadable directories are skipped).</summary>
+    /// <remarks>Directory names (<c>yyyyMMdd-HHmmss-&lt;id&gt;</c>) order by the second only, then by the random id, so
+    /// the compares started in one second are read together and ordered by their start time.</remarks>
     public static IReadOnlyList<SavedCompare> List(string root, int max = 20)
     {
         if (!Directory.Exists(root)) return [];
         var list = new List<SavedCompare>();
+        string? lastSecond = null;
         foreach (var dir in Directory.EnumerateDirectories(root).OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal))
         {
-            if (list.Count >= max) break;
+            var name = Path.GetFileName(dir);
+            var second = name.Length >= 15 ? name[..15] : name;
+            if (list.Count >= max && second != lastSecond) break;
+            lastSecond = second;
             try
             {
                 // A junction or symlink here is not a result: listing it would let prune delete what it points at.
@@ -293,7 +299,8 @@ public static class ResultStore
                                            or KeyNotFoundException or InvalidOperationException or FormatException
                                            or ArgumentException or OverflowException) { }
         }
-        return list;
+        // Stable: equal start times keep the name order.
+        return list.OrderByDescending(c => c.StartedUtc).Take(max).ToList();
     }
 
     // ---- prune ----
