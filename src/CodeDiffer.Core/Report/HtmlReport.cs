@@ -142,15 +142,14 @@ public static class HtmlReport
                     return;
                 }
                 var (text, mode, warn) = item.Render!();
-                var lines = text.Split('\n');
-                int total = lines.Length - (text.EndsWith('\n') ? 1 : 0);
+                int total = LineCount(text);
                 if (warn is not null) row["w"] = warn;
                 var chunk = new Dictionary<string, object?> { ["mode"] = mode, ["total"] = total };
                 if (mode == "merge")
                 {
                     // A merged file can be 70k lines with the conflicts anywhere: carry the conflict blocks with
                     // context, not the head of the file. The whole file is written only if blocks don't fit.
-                    var c = Condense(lines, total, opt.Context, opt.MaxLines);
+                    var c = Condense(text.Split('\n'), total, opt.Context, opt.MaxLines);
                     chunk["segs"] = c.Segments.Select(s => new object[] { s.Start, s.Text }).ToList();
                     chunk["shown"] = c.Kept;
                     chunk["blocks"] = c.Blocks;
@@ -165,11 +164,13 @@ public static class HtmlReport
                 else
                 {
                     int shown = total;
-                    if (!AgentViews.Fits(lines, total, opt.MaxLines, MaxChunkChars))
+                    if (!Fits(text, total, opt.MaxLines, MaxChunkChars))
                     {
                         chunk["full"] = $"full/{i}.patch";
                         File.WriteAllText(Path.Combine(outDir, $"full/{i}.patch"), text, new UTF8Encoding(false));
-                        shown = AgentViews.WindowEnd(lines, total, 1, opt.MaxLines, MaxChunkChars);
+                        // Only the head can be shown: split that, not the whole patch.
+                        var lines = HeadLines(text, Math.Min(total, opt.MaxLines));
+                        shown = AgentViews.WindowEnd(lines, lines.Length, 1, opt.MaxLines, MaxChunkChars);
                         var cut = new StringBuilder();
                         AgentViews.AppendWindow(cut, lines, 1, shown);
                         text = cut.ToString();
@@ -230,6 +231,44 @@ public static class HtmlReport
     }
 
     // ---- items ----
+
+    /// <summary>The lines of a patch as <c>Split('\n')</c> counts them, less the empty one after a final newline.</summary>
+    private static int LineCount(string text)
+    {
+        int n = text.AsSpan().Count('\n') + 1;
+        return text.EndsWith('\n') ? n - 1 : n;
+    }
+
+    /// <summary><see cref="AgentViews.Fits"/> over the patch's text in place: no line strings.</summary>
+    private static bool Fits(string text, int total, int maxLines, int maxChars)
+    {
+        if (total > maxLines) return false;
+        long chars = 0;
+        int pos = 0;
+        for (int i = 0; i < total; i++)
+        {
+            int nl = text.IndexOf('\n', pos);
+            int len = (nl < 0 ? text.Length : nl) - pos;
+            if (len > AgentViews.MaxLineChars) return false;
+            chars += len + 1;
+            pos = nl + 1;
+        }
+        return chars <= maxChars;
+    }
+
+    /// <summary>The first <paramref name="n"/> lines, as <c>Split('\n')</c> gives them.</summary>
+    private static string[] HeadLines(string text, int n)
+    {
+        var head = new string[n];
+        int pos = 0;
+        for (int i = 0; i < n; i++)
+        {
+            int nl = text.IndexOf('\n', pos);
+            head[i] = text[pos..(nl < 0 ? text.Length : nl)];
+            pos = nl < 0 ? text.Length : nl + 1;
+        }
+        return head;
+    }
 
     private sealed record Item(Dictionary<string, object?> Row, bool Wants, bool Large, Func<(string Text, string Mode, string? Warn)>? Render);
 

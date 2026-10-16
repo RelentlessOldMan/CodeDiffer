@@ -27,13 +27,17 @@ public static class ContentHasher
     public static string HashStream(Stream stream, CancellationToken ct = default)
     {
         using var sha = SHA256.Create();
-        var buffer = new byte[StreamBufferBytes];
-        int read;
-        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(StreamBufferBytes); // 1 MB: a fresh one each call was LOH churn
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            sha.TransformBlock(buffer, 0, read, null, 0);
+            int read;
+            while ((read = stream.Read(buffer, 0, StreamBufferBytes)) > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                sha.TransformBlock(buffer, 0, read, null, 0);
+            }
         }
+        finally { System.Buffers.ArrayPool<byte>.Shared.Return(buffer); }
         sha.TransformFinalBlock([], 0, 0);
         return Convert.ToHexString(sha.Hash!).ToLowerInvariant();
     }

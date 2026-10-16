@@ -12,14 +12,18 @@ namespace CodeDiffer.Core.Verify;
 /// </summary>
 public static class ConflictManifestParser
 {
-    public static ConflictManifest ParseFile(string path) => Parse(File.ReadAllText(path));
+    public static ConflictManifest ParseFile(string path)
+    {
+        using var file = File.OpenRead(path); // from the bytes: no whole UTF-16 copy of the file
+        return Malformed(() => ParseCore(JsonDocument.Parse(file)), "conflict manifest");
+    }
 
     /// <exception cref="FormatException">The JSON is not a conflict manifest (a field missing or of the wrong kind).</exception>
-    public static ConflictManifest Parse(string json) => Malformed(() => ParseCore(json), "conflict manifest");
+    public static ConflictManifest Parse(string json) => Malformed(() => ParseCore(JsonDocument.Parse(json)), "conflict manifest");
 
-    private static ConflictManifest ParseCore(string json)
+    private static ConflictManifest ParseCore(JsonDocument parsed)
     {
-        using var doc = JsonDocument.Parse(json);
+        using var doc = parsed;
         var root = doc.RootElement;
 
         var meta = root.GetProperty("_meta");

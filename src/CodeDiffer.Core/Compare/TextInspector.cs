@@ -101,14 +101,23 @@ internal static class TextInspector
     private static bool SameStream(Stream a, Stream b, long length)
     {
         int size = (int)Math.Clamp(length, 1, 1 << 20);
-        var ba = new byte[size];
-        var bb = new byte[size];
-        while (true)
+        var pool = System.Buffers.ArrayPool<byte>.Shared; // up to 2 × 1 MB a file: pooled, not LOH garbage per call
+        var ba = pool.Rent(size);
+        var bb = pool.Rent(size);
+        try
         {
-            int na = a.ReadAtLeast(ba, ba.Length, throwOnEndOfStream: false);
-            int nb = b.ReadAtLeast(bb, bb.Length, throwOnEndOfStream: false);
-            if (na != nb || !ba.AsSpan(0, na).SequenceEqual(bb.AsSpan(0, nb))) return false;
-            if (na == 0) return true;
+            while (true)
+            {
+                int na = a.ReadAtLeast(ba.AsSpan(0, size), size, throwOnEndOfStream: false);
+                int nb = b.ReadAtLeast(bb.AsSpan(0, size), size, throwOnEndOfStream: false);
+                if (na != nb || !ba.AsSpan(0, na).SequenceEqual(bb.AsSpan(0, nb))) return false;
+                if (na == 0) return true;
+            }
+        }
+        finally
+        {
+            pool.Return(ba);
+            pool.Return(bb);
         }
     }
 

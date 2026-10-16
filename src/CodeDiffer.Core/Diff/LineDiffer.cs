@@ -88,7 +88,10 @@ public static class LineDiffer
     public static List<Hunk> Diff(IReadOnlyList<string> a, IReadOnlyList<string> b, int maxEditDistance, out bool coarse,
         long? maxWork = null, CancellationToken ct = default)
     {
-        var moves = ShortestEdit(a, b, maxEditDistance, ct) ?? LinearSpace.Moves(a, b, maxWork ?? WorkCap(a.Count, b.Count), ct);
+        // The edit distance is at least the difference in length: past the budget, the exact pass would fill its
+        // trace (up to ~36 MB) only to give up.
+        var moves = (Math.Abs(a.Count - b.Count) > maxEditDistance ? null : ShortestEdit(a, b, maxEditDistance, ct))
+                    ?? LinearSpace.Moves(a, b, maxWork ?? WorkCap(a.Count, b.Count), ct);
         coarse = moves is null;
         return moves is null ? CoarseHunks(a, b) : BuildHunks(moves);
     }

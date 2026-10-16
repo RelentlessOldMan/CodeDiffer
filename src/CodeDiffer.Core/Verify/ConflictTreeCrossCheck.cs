@@ -111,49 +111,18 @@ public static class ConflictTreeCrossCheck
     public static ConflictCrossCheckResult Run(
         string baseDir, string v1Dir, string v2Dir, ConflictManifest manifest)
     {
-        // Gate 1: my own diff3 over the touched files.
+        // The touched files: the ones the manifest names.
         var paths = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var c in manifest.Conflicts) paths.Add(c.Path);
         foreach (var m in manifest.CleanMerges) paths.Add(m.Path);
 
-        var myConflicts = new List<Conflict>();
-        var myClean = new List<CleanMerge>();
-        var trees = new Dictionary<string, (string[] b, string[] v1, string[] v2)>(StringComparer.Ordinal);
-
-        foreach (var path in paths)
-        {
-            var rel = path.Replace('/', Path.DirectorySeparatorChar);
-            var bPath = Path.Combine(baseDir, rel);
-            var v1Path = Path.Combine(v1Dir, rel);
-            var v2Path = Path.Combine(v2Dir, rel);
-            if (!File.Exists(bPath) || !File.Exists(v1Path) || !File.Exists(v2Path)) continue;
-
-            string[] b, v1, v2;
-            try
-            {
-                b = TreeLines.Read(bPath);
-                v1 = TreeLines.Read(v1Path);
-                v2 = TreeLines.Read(v2Path);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; } // fails reconstruction below
-            trees[path] = (b, v1, v2);
-
-            var r = ThreeWayMerger.Merge(path, b, v1, v2);
-            myConflicts.AddRange(r.Conflicts);
-            myClean.AddRange(r.CleanMerges);
-        }
-
-        var myDigest = ConflictDigest.Compute(myConflicts, myClean);
-        bool decompMatches = manifest.ConflictTruthSha is not null
-                             && string.Equals(myDigest, manifest.ConflictTruthSha, StringComparison.Ordinal);
-
-        // Gate 2: manifest's per-side coords reconstruct the trees. v1 is complete (conflict.v1 +
-        // clean[v1]); v2 is conflict.v2 + clean[v2], plus identical-overlap regions (recorded once as
-        // clean side "v1") folded back in — see ReconstructsV2.
+        // Gate 2's coords, by path: the manifest's per-side hunks. v1 is complete (conflict.v1 + clean[v1]); v2 is
+        // conflict.v2 + clean[v2], plus identical-overlap regions (recorded once as clean side "v1") folded back in —
+        // see ReconstructsV2.
         var v1ByPath = new Dictionary<string, List<Hunk>>(StringComparer.Ordinal);
         var v2DefByPath = new Dictionary<string, List<Hunk>>(StringComparer.Ordinal);
         var cleanV1ByPath = new Dictionary<string, List<Hunk>>(StringComparer.Ordinal);
-        void Add(Dictionary<string, List<Hunk>> map, string p, Hunk h)
+        void Add<T>(Dictionary<string, List<T>> map, string p, T h)
         {
             if (!map.TryGetValue(p, out var list)) map[p] = list = [];
             list.Add(h);
@@ -169,37 +138,72 @@ public static class ConflictTreeCrossCheck
             if (m.Side == "v2") Add(v2DefByPath, m.Path, h);
             else { Add(v1ByPath, m.Path, h); Add(cleanV1ByPath, m.Path, h); }
         }
+        var conflictsByPath = new Dictionary<string, List<Conflict>>(StringComparer.Ordinal);
+        var cleanByPath = new Dictionary<string, List<CleanMerge>>(StringComparer.Ordinal);
+        foreach (var c in manifest.Conflicts) Add(conflictsByPath, c.Path, c);
+        foreach (var m in manifest.CleanMerges) Add(cleanByPath, m.Path, m);
 
+        // One file at a time, every gate that reads its lines: the three trees' lines of every file the manifest names
+        // used to be held until the last gate had run over all of them.
+        var myConflicts = new List<Conflict>();
+        var myClean = new List<CleanMerge>();
         var files = new List<FileMergeCheck>(paths.Count);
-        var sides = new Dictionary<string, (List<Hunk> V1, List<Hunk> V2)>(StringComparer.Ordinal);
-        foreach (var path in paths)
-        {
-            if (!trees.TryGetValue(path, out var t)) { files.Add(new FileMergeCheck(path, false, false)); continue; }
-            bool v1Ok = ReconstructsSide(t.b, t.v1, v1ByPath.GetValueOrDefault(path), out var h1);
-            bool v2Ok = ReconstructsV2(t.b, t.v1, t.v2, v2DefByPath.GetValueOrDefault(path), cleanV1ByPath.GetValueOrDefault(path), out var h2);
-            files.Add(new FileMergeCheck(path, v1Ok, v2Ok));
-            if (v1Ok && v2Ok) sides[path] = (h1, h2);
-        }
-
-        var mineC = myConflicts.ToHashSet();
         var unsound = new List<string>();
         foreach (var path in paths)
-            if (trees.TryGetValue(path, out var t))
+        {
+            var rel = path.Replace('/', Path.DirectorySeparatorChar);
+            var bPath = Path.Combine(baseDir, rel);
+            var v1Path = Path.Combine(v1Dir, rel);
+            var v2Path = Path.Combine(v2Dir, rel);
+            string[] b, v1, v2;
+            if (!File.Exists(bPath) || !File.Exists(v1Path) || !File.Exists(v2Path))
             {
-                unsound.AddRange(Unsound(path, t.b, t.v1, t.v2, manifest, mineC));
-                // A line of a run edited in place is a replace where it stands (as my merge reads it): a side's changes
-                // that write one as an insert and a cut of another copy can set two sides' edits of one line side by side.
-                // The side's own diff, paired in place: each edit in place it finds must lie inside one of the side's
-                // hunks (a conflict's side spans its region, wider than the side's own diff: which copy of a run goes
-                // inside it is the region's business).
-                if (sides.TryGetValue(path, out var h))
-                    foreach (var (name, hunks, v) in new[] { ("v1", h.V1, t.v1), ("v2", h.V2, t.v2) })
-                        if (WritesApart(t.b, v, hunks))
-                            unsound.Add($"{name} {path}: an edit in place of a line among identical lines is written as an insert " +
-                                        "and a cut of another copy apart (it is a replace where it stands: two sides' edits of " +
-                                        "one line could merge side by side)");
+                files.Add(new FileMergeCheck(path, false, false));
+                continue;
+            }
+            try
+            {
+                b = TreeLines.Read(bPath);
+                v1 = TreeLines.Read(v1Path);
+                v2 = TreeLines.Read(v2Path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                files.Add(new FileMergeCheck(path, false, false)); // fails reconstruction
+                continue;
             }
 
+            // Gate 1: my own diff3.
+            var r = ThreeWayMerger.Merge(path, b, v1, v2);
+            myConflicts.AddRange(r.Conflicts);
+            myClean.AddRange(r.CleanMerges);
+
+            // Gate 2: the manifest's per-side coords reconstruct the trees.
+            bool v1Ok = ReconstructsSide(b, v1, v1ByPath.GetValueOrDefault(path), out var h1);
+            bool v2Ok = ReconstructsV2(b, v1, v2, v2DefByPath.GetValueOrDefault(path), cleanV1ByPath.GetValueOrDefault(path), out var h2);
+            files.Add(new FileMergeCheck(path, v1Ok, v2Ok));
+
+            // Every conflict my merge made here carries this path, so this file's set answers as the whole one would.
+            unsound.AddRange(Unsound(path, b, v1, v2, conflictsByPath.GetValueOrDefault(path) ?? [],
+                cleanByPath.GetValueOrDefault(path) ?? [], r.Conflicts.ToHashSet()));
+            // A line of a run edited in place is a replace where it stands (as my merge reads it): a side's changes
+            // that write one as an insert and a cut of another copy can set two sides' edits of one line side by side.
+            // The side's own diff, paired in place: each edit in place it finds must lie inside one of the side's
+            // hunks (a conflict's side spans its region, wider than the side's own diff: which copy of a run goes
+            // inside it is the region's business).
+            if (v1Ok && v2Ok)
+                foreach (var (name, hunks, v) in new[] { ("v1", h1, v1), ("v2", h2, v2) })
+                    if (WritesApart(b, v, hunks))
+                        unsound.Add($"{name} {path}: an edit in place of a line among identical lines is written as an insert " +
+                                    "and a cut of another copy apart (it is a replace where it stands: two sides' edits of " +
+                                    "one line could merge side by side)");
+        }
+
+        var myDigest = ConflictDigest.Compute(myConflicts, myClean);
+        bool decompMatches = manifest.ConflictTruthSha is not null
+                             && string.Equals(myDigest, manifest.ConflictTruthSha, StringComparison.Ordinal);
+
+        var mineC = myConflicts.ToHashSet();
         var manC = manifest.Conflicts.ToHashSet();
         var mineM = myClean.ToHashSet();
         var manM = manifest.CleanMerges.ToHashSet();
@@ -242,11 +246,9 @@ public static class ConflictTreeCrossCheck
     /// change, or an insert or delete dressed as a replace), or that overlaps or abuts another change (a conflict, or
     /// another clean merge: the union-span rule makes those one region).
     /// </summary>
-    private static IEnumerable<string> Unsound(string path, string[] b, string[] v1, string[] v2, ConflictManifest manifest,
-        IReadOnlySet<Conflict> mine)
+    private static IEnumerable<string> Unsound(string path, string[] b, string[] v1, string[] v2,
+        List<Conflict> conflicts, List<CleanMerge> clean, IReadOnlySet<Conflict> mine)
     {
-        var conflicts = manifest.Conflicts.Where(c => c.Path == path).ToList();
-        var clean = manifest.CleanMerges.Where(m => m.Path == path).ToList();
         foreach (var c in conflicts)
         {
             bool v1Same = SeqEqual(v1, c.V1NewStart - 1, c.V1NewLines, b, c.BaseStart - 1, c.BaseLines);

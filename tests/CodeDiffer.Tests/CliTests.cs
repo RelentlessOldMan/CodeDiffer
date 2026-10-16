@@ -912,6 +912,25 @@ public sealed class CliTests : IDisposable
         Assert.Contains("error:", r.Stderr);
     }
 
+    // The kind is peeked from the head of the file when _meta comes first; otherwise the whole file is parsed. Either
+    // way it routes the same (a bad flag gets the usage of the verify it was routed to).
+    [Theory]
+    [InlineData("{\"_meta\":{\"deltaKind\":\"conflict-3way\"}}", true)]
+    [InlineData("{\"_meta\":{\"x\":{\"deltaKind\":\"diff\"},\"y\":[1,{\"a\":2}],\"deltaKind\":\"conflict-3way\"}}", true)]
+    [InlineData("﻿{\"_meta\":{\"deltaKind\":\"conflict-3way\"}}", true)]
+    [InlineData("{\"fileOps\":{},\"_meta\":{\"deltaKind\":\"conflict-3way\"}}", true)]
+    [InlineData("{\"_meta\":{\"deltaKind\":\"diff\"}}", false)]
+    [InlineData("{\"_meta\":{\"manifestVersion\":1}}", false)]
+    [InlineData("{\"fileOps\":{},\"_meta\":{\"deltaKind\":\"diff\"}}", false)]
+    public void Verify_RoutesOnDeltaKind_WhereverMetaStands(string json, bool conflict)
+    {
+        _t.Put("delta.json", json);
+        var r = Cli("verify", "delta.json", "--bogus", "B");
+        Assert.True(r.ExitCode == 64, r.ToString());
+        Assert.Contains(conflict ? "--v1 DIR" : "--variant DIR", r.Stderr);
+        Assert.DoesNotContain(conflict ? "--variant DIR" : "--v1 DIR", r.Stderr);
+    }
+
     [Fact]
     public void Verify_HalfGivenTreeFlags_IsAUsageError()
     {

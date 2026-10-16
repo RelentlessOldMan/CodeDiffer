@@ -107,10 +107,11 @@ public sealed class TreeWalker
             frontier = [.. next];
         }
 
-        var list = files.ToList();
-        list.Sort((a, b) => string.CompareOrdinal(a.RelativePath, b.RelativePath)); // deterministic order
-        var skips = skipped.ToList();
-        skips.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path));
+        // Arrays, exactly sized: a list grown by doubling kept up to 48 B a file of spare room for the whole compare.
+        var list = files.ToArray();
+        Array.Sort(list, (a, b) => string.CompareOrdinal(a.RelativePath, b.RelativePath)); // deterministic order
+        var skips = skipped.ToArray();
+        Array.Sort(skips, (a, b) => string.CompareOrdinal(a.Path, b.Path));
         return new WalkResult(list, dropped, skips);
     }
 

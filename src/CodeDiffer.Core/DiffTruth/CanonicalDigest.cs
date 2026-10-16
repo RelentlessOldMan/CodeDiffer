@@ -22,37 +22,41 @@ internal static class CanonicalDigest
 
     public static byte[] Record(params string[] fields)
     {
-        using var ms = new MemoryStream();
+        int size = Math.Max(0, fields.Length - 1);
+        foreach (var f in fields) size += Encoding.UTF8.GetByteCount(f);
+        var rec = new byte[size];
+        int at = 0;
         for (int i = 0; i < fields.Length; i++)
         {
-            if (i > 0) ms.WriteByte(US);
-            var bytes = Encoding.UTF8.GetBytes(fields[i]);
-            ms.Write(bytes, 0, bytes.Length);
+            if (i > 0) rec[at++] = US;
+            at += Encoding.UTF8.GetBytes(fields[i], rec.AsSpan(at));
         }
-        return ms.ToArray();
+        return rec;
     }
 
     /// <summary>Hash the sections in order: each dedup-then-ordinal-sorted, records RS-terminated, GS between sections.</summary>
+    /// <remarks>Hashed as it goes: the canonical form was built whole in a MemoryStream and copied once more to hash it
+    /// (2.2M hunk records: 635 MB peak, now 276 MB; over 2 GB it could not be built at all).</remarks>
     public static string Hash(IReadOnlyList<List<byte[]>> sections)
     {
-        using var input = new MemoryStream();
+        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         for (int s = 0; s < sections.Count; s++)
         {
-            if (s > 0) input.WriteByte(GS);
-            WriteSection(input, sections[s]);
+            if (s > 0) sha.AppendData([GS]);
+            WriteSection(sha, sections[s]);
         }
-        return Convert.ToHexString(SHA256.HashData(input.ToArray())).ToLowerInvariant();
+        return Convert.ToHexString(sha.GetHashAndReset()).ToLowerInvariant();
     }
 
-    private static void WriteSection(Stream dest, List<byte[]> records)
+    private static void WriteSection(IncrementalHash dest, List<byte[]> records)
     {
         records.Sort(CompareBytesOrdinal);
         byte[]? prev = null;
         foreach (var rec in records)
         {
             if (prev is not null && CompareBytesOrdinal(prev, rec) == 0) continue; // dedup identical records
-            dest.Write(rec, 0, rec.Length);
-            dest.WriteByte(RS);
+            dest.AppendData(rec);
+            dest.AppendData([RS]);
             prev = rec;
         }
     }

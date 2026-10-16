@@ -106,7 +106,7 @@ public static class PatchWriter
         for (int start = 0; start < changed.Count; start += batch)
         {
             int n = Math.Min(batch, changed.Count - start);
-            var sections = new string[n];
+            var sections = new StringBuilder[n]; // written as built: no second copy of each section
             var local = new PatchStats[n];
             Parallel.For(0, n, new ParallelOptions { MaxDegreeOfParallelism = opt.Parallelism }, i =>
             {
@@ -130,13 +130,13 @@ public static class PatchWriter
                                  "where git apply would refuse the whole patch) — not in this patch; do it by hand\n");
                     }
                     else Section(sw, c, leftRoot, rightRoot, opt, local[i], forGit: true);
-                    sections[i] = sw.ToString();
+                    sections[i] = sw.GetStringBuilder();
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     // Locked, or gone since the compare: say so and keep going — one file must not cost the patch.
                     local[i] = new PatchStats { UnreadableFiles = 1 };
-                    sections[i] = $"# {Name(c)}: could not be read ({OneLine(ex.Message)}) — not in this patch\n";
+                    sections[i] = new StringBuilder($"# {Name(c)}: could not be read ({OneLine(ex.Message)}) — not in this patch\n");
                 }
             });
             for (int i = 0; i < n; i++)
@@ -168,7 +168,7 @@ public static class PatchWriter
         try
         {
             Section(sw, c, leftRoot, rightRoot, opt, local, forGit: false);
-            w.Write(sw.ToString());
+            w.Write(sw.GetStringBuilder()); // whole or not at all (a read failing half way), with no second copy
             stats.Add(local);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

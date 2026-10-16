@@ -620,8 +620,12 @@ public static class AgentViews
         var kind = stats.UnreadableFiles > 0 ? "unreadable" : stats.BinaryFiles > 0 ? "binary" : stats.GiantFiles > 0 ? "large" : stats.NoteFiles > 0 ? "eol/encoding note" : "text";
         int hunks = 0, plus = 0, minus = 0;
         bool body = false; // file headers (---/+++) come before the first @@; after it every +/- is content
-        foreach (var line in section.Split('\n'))
+        // Line by line in place: a split was a second copy of a patch that can be a whole 16 MB file.
+        for (int pos = 0; pos <= section.Length;)
         {
+            int nl = section.IndexOf('\n', pos);
+            var line = section.AsSpan(pos, (nl < 0 ? section.Length : nl) - pos);
+            pos = nl < 0 ? section.Length + 1 : nl + 1;
             if (line.StartsWith("diff --git ", StringComparison.Ordinal)) { body = false; continue; }
             if (line.StartsWith("@@", StringComparison.Ordinal)) { hunks++; body = true; continue; }
             if (!body || line.Length == 0) continue;

@@ -38,7 +38,9 @@ public static class RunSummary
             sb.AppendLine($"  machine   {Num(m, "cores"):0} cores · {Gb(Num(m, "memoryMB")):0.#} GB, {Num(m, "memoryLoadPercent"):0}% in use · " +
                           $"{Num(o, "threads"):0} threads · cache {Str(o, "cache")}");
             sb.AppendLine($"  memory    peak {Num(p, "peakWorkingSetMB"):N0} MB (now {Num(p, "workingSetMB"):N0} MB, private {Num(p, "privateMB"):N0} MB) · " +
-                          $".NET heap peak {Num(p, "peakGcHeapMB"):N0} MB · {Num(p, "gen2Collections"):0} full GCs");
+                          $".NET heap peak {Num(p, "peakGcHeapMB"):N0} MB" +
+                          (p.TryGetProperty("peakLiveAfterGcMB", out _) ? $" ({Num(p, "peakLiveAfterGcMB"):N0} MB in use after a GC, {Num(p, "allocatedMB"):N0} MB allocated in all)" : "") +
+                          $" · {Num(p, "gen2Collections"):0} full GCs");
             sb.AppendLine($"  cpu       {Clock(Num(p, "cpuSeconds"))} CPU over {Clock(elapsed)} · {Num(p, "threads"):0} threads · {Num(p, "handles"):N0} handles");
 
             foreach (var x in r.GetProperty("compares").EnumerateArray())

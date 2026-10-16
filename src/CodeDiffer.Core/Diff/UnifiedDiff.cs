@@ -78,20 +78,19 @@ public static class UnifiedDiff
             int oEnd = Math.Min(a.Count, last.O0 + last.Ol + context);
             int nEnd = last.N0 + last.Nl + (oEnd - (last.O0 + last.Ol));
 
-            var body = new StringBuilder();
+            // The ranges are known before the lines: the hunk goes straight to w (it was built whole first, for an
+            // added file or a coarse diff a whole copy of the file's patch).
+            w.Write($"@@ -{Range(oStart, oEnd - oStart)} +{Range(nStart, nEnd - nStart)} @@\n");
             int pos = oStart;
             for (int k = i; k <= j; k++)
             {
                 var e = edits[k];
-                for (; pos < e.O0; pos++) Line(body, ' ', a[pos]);
-                for (int x = 0; x < e.Ol; x++) Line(body, '-', a[e.O0 + x]);
-                for (int x = 0; x < e.Nl; x++) Line(body, '+', b[e.N0 + x]);
+                for (; pos < e.O0; pos++) Line(w, ' ', a[pos]);
+                for (int x = 0; x < e.Ol; x++) Line(w, '-', a[e.O0 + x]);
+                for (int x = 0; x < e.Nl; x++) Line(w, '+', b[e.N0 + x]);
                 pos = e.O0 + e.Ol;
             }
-            for (; pos < oEnd; pos++) Line(body, ' ', a[pos]);
-
-            w.Write($"@@ -{Range(oStart, oEnd - oStart)} +{Range(nStart, nEnd - nStart)} @@\n");
-            w.Write(body);
+            for (; pos < oEnd; pos++) Line(w, ' ', a[pos]);
             i = j + 1;
         }
     }
@@ -101,10 +100,12 @@ public static class UnifiedDiff
     private static string Range(int start0, int count)
         => count == 0 ? $"{start0},0" : count == 1 ? $"{start0 + 1}" : $"{start0 + 1},{count}";
 
-    private static void Line(StringBuilder sb, char tag, string line)
+    private static void Line(TextWriter w, char tag, string line)
     {
         bool noEol = line.EndsWith(NoEolMarker, StringComparison.Ordinal);
-        sb.Append(tag).Append(noEol ? line[..^NoEolMarker.Length] : line).Append('\n');
-        if (noEol) sb.Append("\\ No newline at end of file\n");
+        w.Write(tag);
+        w.Write(noEol ? line.AsSpan(0, line.Length - NoEolMarker.Length) : line.AsSpan());
+        w.Write('\n');
+        if (noEol) w.Write("\\ No newline at end of file\n");
     }
 }

@@ -29,16 +29,17 @@ public static class DeltaManifestParser
     /// <exception cref="FormatException">Not a delta manifest, or a sharded one whose pages don't match its index.</exception>
     public static DeltaManifest ParseFile(string path)
     {
-        var json = File.ReadAllText(path);
-        return Malformed(() => ParseCore(json, path), "delta manifest");
+        // Parsed from the file's bytes: read as a string first, a 200 MB delta was a 400 MB UTF-16 copy on the way.
+        using var file = File.OpenRead(path);
+        return Malformed(() => ParseCore(JsonDocument.Parse(file), path), "delta manifest");
     }
 
     /// <exception cref="FormatException">The JSON is not a delta manifest (a field missing or of the wrong kind).</exception>
-    public static DeltaManifest Parse(string json) => Malformed(() => ParseCore(json, indexPath: null), "delta manifest");
+    public static DeltaManifest Parse(string json) => Malformed(() => ParseCore(JsonDocument.Parse(json), indexPath: null), "delta manifest");
 
-    private static DeltaManifest ParseCore(string json, string? indexPath)
+    private static DeltaManifest ParseCore(JsonDocument parsed, string? indexPath)
     {
-        using var doc = JsonDocument.Parse(json);
+        using var doc = parsed;
         var root = doc.RootElement;
 
         if (root.ValueKind == JsonValueKind.Object && !root.TryGetProperty("_meta", out _) && root.TryGetProperty("shardIndex", out _))

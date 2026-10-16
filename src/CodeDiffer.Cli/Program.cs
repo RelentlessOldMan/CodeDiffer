@@ -680,7 +680,9 @@ static int VerifyConflict(string[] args)
 /// </summary>
 static string DeltaKind(string path)
 {
-    using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+    if (PeekDeltaKind(path) is { } kind0) return kind0;
+    using var file = File.OpenRead(path);
+    using var doc = System.Text.Json.JsonDocument.Parse(file);
     if (!(doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
           && doc.RootElement.TryGetProperty("_meta", out var meta)
           && meta.ValueKind == System.Text.Json.JsonValueKind.Object
@@ -691,6 +693,45 @@ static string DeltaKind(string path)
         ? kind
         : throw new InvalidOperationException(
             $"_meta.deltaKind {dk.GetRawText()} isn't one verify reads (\"diff\" or \"conflict-3way\")");
+}
+
+/// <summary>
+/// The kind from the head of the file, as CodeSpawner writes it (<c>_meta</c> first, <c>deltaKind</c> a known string),
+/// without parsing the rest: the peek used to parse a whole delta (1.4 GB to peek at a 200 MB one) before the parser
+/// read it all again. Null = anything else (no kind, an unknown one, <c>_meta</c> not first or not in the first MB):
+/// <see cref="DeltaKind"/> then parses the whole file and answers or refuses as before.
+/// </summary>
+static string? PeekDeltaKind(string path)
+{
+    const int Head = 1 << 20;
+    byte[] buf;
+    int n;
+    bool whole;
+    using (var f = File.OpenRead(path))
+    {
+        buf = new byte[(int)Math.Min(Head, f.Length)];
+        n = f.ReadAtLeast(buf, buf.Length, throwOnEndOfStream: false);
+        whole = f.Length <= Head;
+    }
+    var span = buf.AsSpan(0, n);
+    if (span.StartsWith((ReadOnlySpan<byte>)[0xEF, 0xBB, 0xBF])) span = span[3..];
+    try
+    {
+        var r = new System.Text.Json.Utf8JsonReader(span, isFinalBlock: whole, default);
+        if (!r.Read() || r.TokenType != System.Text.Json.JsonTokenType.StartObject) return null;
+        if (!r.Read() || r.TokenType != System.Text.Json.JsonTokenType.PropertyName || !r.ValueTextEquals("_meta")) return null;
+        if (!r.Read() || r.TokenType != System.Text.Json.JsonTokenType.StartObject) return null;
+        while (r.Read() && r.TokenType == System.Text.Json.JsonTokenType.PropertyName)
+        {
+            bool isKind = r.ValueTextEquals("deltaKind");
+            if (!r.Read()) return null;
+            if (isKind)
+                return r.TokenType == System.Text.Json.JsonTokenType.String && r.GetString() is "diff" or "conflict-3way" ? r.GetString() : null;
+            if (r.TokenType is System.Text.Json.JsonTokenType.StartObject or System.Text.Json.JsonTokenType.StartArray && !r.TrySkip()) return null;
+        }
+        return null;
+    }
+    catch (System.Text.Json.JsonException) { return null; }
 }
 
 /// <summary>

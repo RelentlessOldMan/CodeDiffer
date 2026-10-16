@@ -20,7 +20,7 @@ internal sealed class RunRecord : IDisposable
     private readonly Session _session;
     private readonly Timer _timer;
     private readonly object _gate = new();
-    private long _peakGcHeap;
+    private long _peakGcHeap, _peakLive;
     private bool _ended;
 
     public RunRecord(Session session)
@@ -57,6 +57,9 @@ internal sealed class RunRecord : IDisposable
             var gc = GC.GetGCMemoryInfo();
             long heap = GC.GetTotalMemory(false);
             if (heap > _peakGcHeap) _peakGcHeap = heap;
+            // The heap above counts garbage not yet collected; what the last GC found still in use is what the run holds.
+            long live = gc.HeapSizeBytes - gc.FragmentedBytes;
+            if (live > _peakLive) _peakLive = live;
             var dir = _session.ResultDir!;
             var tmp = Path.Combine(dir, FileName + ".tmp");
             using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
@@ -87,6 +90,8 @@ internal sealed class RunRecord : IDisposable
                 w.WriteNumber("privateMB", me.PrivateMemorySize64 >> 20);
                 w.WriteNumber("gcHeapMB", heap >> 20);
                 w.WriteNumber("peakGcHeapMB", _peakGcHeap >> 20);
+                w.WriteNumber("peakLiveAfterGcMB", _peakLive >> 20);
+                w.WriteNumber("allocatedMB", GC.GetTotalAllocatedBytes() >> 20);
                 w.WriteNumber("cpuSeconds", Math.Round(me.TotalProcessorTime.TotalSeconds, 1));
                 w.WriteNumber("threads", me.Threads.Count);
                 w.WriteNumber("handles", me.HandleCount);
