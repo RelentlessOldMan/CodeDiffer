@@ -67,6 +67,8 @@ static int Dispatch(string[] args)
             return Results(args);
         case "runs":
             return Runs(args);
+        case "statcheck":
+            return StatCheckCmd(args);
         case "help" or "--help" or "-h":
             PrintUsage();
             return 0;
@@ -327,6 +329,23 @@ static int Results(string[] args)
         Console.WriteLine($"  {c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.State,-7} {string.Join("  ", c.Roots.Select(r => r.Path))}");
         Console.WriteLine($"        {string.Join(", ", counts)}{(c.Error is { } e ? $"  error: {e}" : "")}");
     }
+    return 0;
+}
+
+/// <summary>statcheck DIR [--max N] [--threads N]: does this server's listing agree with an open handle (numbers only)?</summary>
+static int StatCheckCmd(string[] args)
+{
+    const string usage = "usage: codediffer statcheck <dir> [--max N] [--threads N]";
+    if (args.Length < 2 || !ArgsOk(args, 1, usage, [], ["--max", "--threads"])) { if (args.Length < 2) Console.Error.WriteLine(usage); return 64; }
+    int max = 100_000, threads = 8;
+    if (FlagValue(args, "--max", from: 2) is { } m && (!int.TryParse(m, out max) || max < 1)
+        || FlagValue(args, "--threads", from: 2) is { } t && (!int.TryParse(t, out threads) || threads < 1))
+    {
+        Console.Error.WriteLine("error: --max and --threads need a positive integer");
+        return 64;
+    }
+    if (!Directory.Exists(args[1])) { Console.Error.WriteLine("error: not a directory"); return 2; }
+    Console.Write(CodeDiffer.Core.Walk.StatCheck.Run(args[1], max, threads));
     return 0;
 }
 
@@ -1088,6 +1107,9 @@ static void PrintUsage()
                                        and outside the compared trees. Ctrl+C stops rendering
                                        and still writes the report (the rest without a diff).
           codediffer results [--max N]   saved compares, newest first
+          codediffer statcheck <dir> [--max N] [--threads N]
+                                         why files read as "changed while being read": compares each file's
+                                         listing with its open handle (reads 4 KB a file; numbers only)
           codediffer runs [--max N]      how recent compares ran: how each ended, peak memory, time per phase,
                                          network vs work (numbers only, safe to share)
           codediffer results --prune [--keep N] [--older-than DAYS] [--yes]

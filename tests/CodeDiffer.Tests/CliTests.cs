@@ -871,6 +871,20 @@ public sealed class CliTests : IDisposable
         Assert.Equal(started, listed);
     }
 
+    [Fact]
+    public void StatCheck_ALocalTree_AllMatch_AndNoNameIsPrinted()
+    {
+        _t.Put("T/secret-name.c", "x\n");
+        _t.Put("T/sub/other.h", "y\n");
+        var r = Cli("statcheck", "T");
+        Assert.True(r.ExitCode == 0, r.ToString());
+        Assert.Contains("2 files listed, 2 checked", r.Stdout);
+        Assert.Matches(@"MATCH: listing = handle \(cacheable\)\s+2", r.Stdout);
+        Assert.DoesNotContain("DIFFERS", r.Stdout);
+        Assert.DoesNotContain("secret", r.Stdout);
+        Assert.Equal(64, Cli("statcheck").ExitCode);
+    }
+
     // ---------------------------------------------------------------- verify
 
     [Fact]
