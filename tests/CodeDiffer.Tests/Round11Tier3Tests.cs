@@ -158,6 +158,12 @@ public sealed class Round11Tier3Tests : IDisposable
         // A pattern copied from the listing (U+FFFD) matches them.
         Assert.True(AgentViews.Glob("d/c�.txt")("d/c\uD801.txt"));
         Assert.True(AgentViews.Glob("*�.txt")("d/c\uD802.txt"));
+
+        // The HTML report tells them apart too (O8): by the same escaped names, never two rows of "c�.txt".
+        var rep = CodeDiffer.Core.Report.HtmlReport.Write(s);
+        var (_, files) = CodeDiffer.Core.Report.HtmlReport.ReadIndex(Path.Combine(Path.GetDirectoryName(rep.IndexPath)!, "data", "index.js"));
+        var shown = files.Select(f => f.GetProperty("p").GetString()).Order(StringComparer.Ordinal).ToList();
+        Assert.Equal([@"d/c\uD801.txt", @"d/c\uD802.txt"], shown);
     }
 
     [Fact]

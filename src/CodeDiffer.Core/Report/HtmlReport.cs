@@ -289,14 +289,14 @@ public static class HtmlReport
             if (c.Status == ChangeStatus.Identical && !opt.IncludeIdentical) continue;
             var row = new Row
             {
-                ["p"] = c.RelativePath,
+                ["p"] = Shown(c.RelativePath),
                 ["t"] = c.Status switch { ChangeStatus.Added => "A", ChangeStatus.Removed => "D", ChangeStatus.Modified => "M", ChangeStatus.Renamed => "R", _ => "=" },
                 ["ls"] = c.LeftSize,
                 ["rs"] = c.RightSize,
             };
             if (c.ReasonLabel is { } rr) row["r"] = rr;
             if (c.Unreadable is { } why) row["n"] = $"could not be read during the compare: {why}";
-            if (c.RenamedFrom is { } f) row["f"] = f;
+            if (c.RenamedFrom is { } f) row["f"] = Shown(f);
             if (c.SimilarityMilli is { } sim) row["sim"] = sim;
             if (c.EditedRename) row["ed"] = 1; // its bytes differ, even at "100% similar"
             if (c.Status == ChangeStatus.Identical)
@@ -328,7 +328,7 @@ public static class HtmlReport
         {
             var row = new Row
             {
-                ["p"] = e.MergedPath ?? e.Path,
+                ["p"] = Shown(e.MergedPath ?? e.Path),
                 ["t"] = e.Outcome switch
                 {
                     Merge3Outcome.V1Only => "v1", Merge3Outcome.V2Only => "v2", Merge3Outcome.Agreed => "AG",
@@ -337,7 +337,7 @@ public static class HtmlReport
                 ["s1"] = Side(e.V1),
                 ["s2"] = Side(e.V2),
             };
-            if (e.MergedPath is { } m && m != e.Path) row["f"] = e.Path;
+            if (e.MergedPath is { } m && m != e.Path) row["f"] = Shown(e.Path);
             if (e.ConflictKind is { } k) row["ck"] = k;
             if (e.ConflictRegions > 0 || e.Outcome == Merge3Outcome.Merged) { row["c"] = e.ConflictRegions; row["cl"] = e.CleanRegions; }
             if (e.Note is { } n) row["n"] = n;
@@ -428,11 +428,15 @@ public static class HtmlReport
 
     private static long Size(FileChange? c) => c is null ? 0 : Math.Max(c.LeftSize, c.RightSize);
 
+    /// <summary>A path as the page shows it: an unpaired surrogate escaped (<c>c\uD801.txt</c>), as the agent's listings
+    /// name it, so two names that would both render as U+FFFD are told apart.</summary>
+    private static string Shown(string path) => Sessions.ResultStore.Escaped(path);
+
     private static string Side(FileChange? c) => c is null ? "unchanged" : c.Status switch
     {
         ChangeStatus.Added => "added",
         ChangeStatus.Removed => "deleted",
-        ChangeStatus.Renamed => $"renamed to {c.RelativePath}",
+        ChangeStatus.Renamed => $"renamed to {Shown(c.RelativePath)}",
         _ => c.ReasonLabel ?? "modified",
     };
 

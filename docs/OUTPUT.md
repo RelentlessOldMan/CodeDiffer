@@ -353,7 +353,8 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   reason lists the modified and edited renamed files with it. `get_file_diff` given a path as a listing shows it —
   an unpaired surrogate as U+FFFD — finds that file, and a `path_glob` matches that form too. When several files
   show alike, the answer lists their escaped names (`c\uD801.txt`), and either one asked for so is found; the
-  surrogate itself can't be passed (JSON's reader refuses it, before CodeDiffer sees the call). A diff too big to
+  surrogate itself can't be passed (JSON's reader refuses it, before CodeDiffer sees the call). The HTML report
+  shows such a name by its escaped form, so two of them are never two rows alike. A diff too big to
   show inline is saved under the path mirrored, or, where the tree has a file `a` and a directory `a.patch/`, or
   files a case-sensitive tree tells apart by case (`Foo.c`, `foo.c`), under `diffs/_clash/` by the path's hash; it is
   written beside its name and moved into place, so pages asked for while it is open never collide. A name that is
