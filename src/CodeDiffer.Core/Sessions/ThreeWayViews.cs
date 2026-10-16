@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.ThreeWay;
@@ -35,7 +35,10 @@ public static class ThreeWayViews
         if (regions > 0) o.Append($"conflict regions: {regions:N0} (in content/add-add conflicts)\n");
         o.Append($"per side: v1 {SideCounts(r.V1Report)} · v2 {SideCounts(r.V2Report)}\n");
         if (r.DroppedDirectories > 0)
-            o.Append($"WARNING: incomplete walk — {r.DroppedDirectories} director(ies) could not be listed; the verdicts under them may be wrong.\n");
+            o.Append($"WARNING: incomplete walk — {r.DroppedDirectories} director(ies) could not be listed" +
+                     AgentViews.Some(new[] { ("base", r.V1Report.LeftSkipped), ("v1", r.V1Report.RightSkipped), ("v2", r.V2Report.RightSkipped) }
+                         .SelectMany(t => t.Item2.Where(x => x.Kind == Walk.SkipKind.Unlisted).Select(x => $"{t.Item1} {x.Path}"))) +
+                     "; the verdicts under them may be wrong.\n");
         if (r.UnreadableFiles > 0)
             o.Append($"WARNING: {r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown " +
                      "(shown as 'unreadable'); compare again once they can be read.\n");

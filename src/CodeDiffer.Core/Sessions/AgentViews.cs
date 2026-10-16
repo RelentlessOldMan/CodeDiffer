@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.RegularExpressions;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Ledger;
@@ -670,11 +670,6 @@ public static class AgentViews
     public static IEnumerable<string> Notes(CompareReport r, string? side = null)
     {
         var pre = side is null ? "" : side + ": ";
-        static string Some(IEnumerable<string> paths)
-        {
-            var list = paths.Take(4).ToList();
-            return list.Count == 0 ? "" : " (" + string.Join(", ", list.Take(3)) + (list.Count > 3 ? ", …" : "") + ")";
-        }
         var skipped = r.LeftSkipped.Select(x => (x, "left")).Concat(r.RightSkipped.Select(x => (x, "right"))).ToList();
         if (r.UnstableFiles > 0) yield return $"{pre}{r.UnstableFiles:N0} file(s) changed while being read (live writer) — compared as read, not cached.";
         if (r.SkippedLinks > 0)
@@ -687,11 +682,24 @@ public static class AgentViews
         if (r.CacheSaveError is { } e) yield return $"{pre}the hash cache could not be saved ({e}) — the result stands; the next compare reads those files again.";
     }
 
+    /// <summary>The directories that could not be listed, a few by name (" (left a, right b, …)"), or "" (a result saved
+    /// before 2026-10-16 kept only their count).</summary>
+    public static string Unlisted(CompareReport r)
+        => Some(r.LeftSkipped.Where(x => x.Kind == Walk.SkipKind.Unlisted).Select(x => "left " + x.Path)
+                .Concat(r.RightSkipped.Where(x => x.Kind == Walk.SkipKind.Unlisted).Select(x => "right " + x.Path)));
+
+    /// <summary>A few of <paramref name="paths"/>, as " (a, b, c, …)", or "".</summary>
+    internal static string Some(IEnumerable<string> paths)
+    {
+        var list = paths.Take(4).ToList();
+        return list.Count == 0 ? "" : " (" + string.Join(", ", list.Take(3)) + (list.Count > 3 ? ", …" : "") + ")";
+    }
+
     private static void Warnings(StringBuilder o, CompareReport r)
     {
         if (r.LeftDroppedDirectories + r.RightDroppedDirectories > 0)
             o.Append($"WARNING: incomplete walk — {r.LeftDroppedDirectories} left / {r.RightDroppedDirectories} right director(ies) " +
-                     "could not be listed; adds/removes under them may be listing failures.\n");
+                     $"could not be listed{Unlisted(r)}; what the other tree has under them is unknown, listed as [unreadable].\n");
         foreach (var n in Notes(r)) o.Append("note: ").Append(n).Append('\n');
         if (r.UnreadableFiles > 0)
             o.Append($"WARNING: {r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown, " +

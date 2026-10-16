@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Text;
@@ -699,7 +699,7 @@ public static class HtmlReport
                     .Where(t => t.n > 0).ToDictionary(t => t.k, t => t.n);
                 m["identicalListed"] = opt.IncludeIdentical;
                 if (r.LeftDroppedDirectories + r.RightDroppedDirectories > 0)
-                    notes.Add($"Incomplete walk: {r.LeftDroppedDirectories} left / {r.RightDroppedDirectories} right director(ies) could not be listed — adds/removes under them may be listing failures.");
+                    notes.Add($"Incomplete walk: {r.LeftDroppedDirectories} left / {r.RightDroppedDirectories} right director(ies) could not be listed{AgentViews.Unlisted(r)} — what the other tree has under them is unknown, listed as [unreadable].");
                 notes.AddRange(AgentViews.Notes(r));
                 if (r.UnreadableFiles > 0) notes.Add($"{r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown, shown as 'unreadable'.");
                 break;

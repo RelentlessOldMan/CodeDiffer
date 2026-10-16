@@ -208,6 +208,95 @@ public sealed class SafetyTests : IDisposable
     }
 
     [Fact]
+    public void AnUnopenableName_IsAnUnknownRow_InEveryCount_AndNeverPatchedAppliedOrMerged()
+    {
+        // "x." differs, "gone." is only left, "d." (a directory) holds a changed file: none of them can be read by path,
+        // so each is a row whose verdict is unknown — counted unreadable (exit 3), a '#' line in a patch, a conflict in
+        // apply and compare3 — never left out of everything as if the trees agreed there.
+        if (!OperatingSystem.IsWindows()) return;
+        foreach (var side in new[] { "B", "L", "R" }) { Put($"{side}/keep.c", "a\n"); Directory.CreateDirectory(@"\\?\" + P($"{side}/d.")); }
+        void Raw(string rel, string text) => File.WriteAllText(@"\\?\" + P(rel), text);
+        Raw("L/x.", "left\n"); Raw("R/x.", "right\n"); Raw("B/x.", "left\n");
+        Raw("L/gone.", "old\n"); Raw("B/gone.", "old\n");
+        Raw("L/d./f.c", "one\n"); Raw("R/d./f.c", "two\n"); Raw("B/d./f.c", "one\n");
+        Put("T/keep.c", "a\n");
+
+        var r = new DirectoryComparer(NoCache).Compare(P("L"), P("R"));
+        foreach (var (path, status) in new[] { ("d.", ChangeStatus.Modified), ("gone.", ChangeStatus.Removed), ("x.", ChangeStatus.Modified) })
+        {
+            var c = Assert.Single(r.Changes, x => x.RelativePath == path);
+            Assert.Equal(status, c.Status);
+            Assert.Contains("can't be opened by path", c.Unreadable);
+        }
+        Assert.Equal(3, r.UnreadableFiles);
+
+        var w = new StringWriter();
+        PatchWriter.Write(w, r, P("L"), P("R"), new PatchOptions());
+        Assert.DoesNotContain("diff --git", w.ToString());
+        Assert.Contains("# x.: ", w.ToString());
+
+        var port = ChangePorter.Run(r, P("L"), P("R"), P("T"), write: true);
+        Assert.All(port.Files, f => Assert.Equal(PortStatus.Conflict, f.Status));
+        Assert.False(File.Exists(@"\\?\" + P("T/x.")));
+
+        var m = TreeMerger.Run(P("B"), P("L"), P("R"), NoCache);
+        var e = Assert.Single(m.Entries, x => x.Path == "x.");
+        Assert.Equal((Merge3Outcome.Conflict, "unopenable name"), (e.Outcome, e.ConflictKind));
+        foreach (var side in new[] { "B", "L", "R" }) Directory.Delete(@"\\?\" + P(side), recursive: true);
+    }
+
+    [Fact]
+    public void AnUnlistableDirectory_IsNamed_AndTheOtherTreesFilesUnderItAreUnknown_NotRemoved()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        foreach (var side in new[] { "L", "R" }) { Put($"{side}/keep.c", "a\n"); Put($"{side}/sub/a.c", "a\n"); Put($"{side}/sub/b.c", "b\n"); }
+        static void Icacls(params string[] args)
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("icacls") { RedirectStandardOutput = true, UseShellExecute = false };
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            using var p = System.Diagnostics.Process.Start(psi)!;
+            p.StandardOutput.ReadToEnd();
+            p.WaitForExit();
+            Assert.Equal(0, p.ExitCode);
+        }
+        Icacls(P("R/sub"), "/deny", "*S-1-1-0:(RD)"); // Everyone: no listing
+        try
+        {
+            var r = new DirectoryComparer(NoCache).Compare(P("L"), P("R"));
+            Assert.Equal((0, 1), (r.LeftDroppedDirectories, r.RightDroppedDirectories));
+            Assert.Contains(r.RightSkipped, s => s.Path == "sub" && s.Kind == CodeDiffer.Core.Walk.SkipKind.Unlisted);
+            foreach (var path in new[] { "sub/a.c", "sub/b.c" })
+            {
+                var c = Assert.Single(r.Changes, x => x.RelativePath == path);
+                Assert.True(c.BehindLink);
+                Assert.Contains("could not be listed", c.Unreadable);
+            }
+            var s = new SessionStore(save: false).Adopt(P("L"), P("R"), NoCache, r, DateTime.UtcNow, TimeSpan.Zero);
+            Assert.Contains("right sub", AgentViews.Summary(s)); // the warning names it
+        }
+        finally { Icacls(P("R/sub"), "/remove:d", "*S-1-1-0"); }
+    }
+
+    [Fact]
+    public void AStaleListingSize_OnByteIdenticalFiles_IsIdentical_NeverAnEncodingChange()
+    {
+        // Rewritten through a hard link outside the tree, a file's directory entry keeps its old size: the listing says
+        // the sizes differ, the bytes are the same. That is identical — not "same text, different bytes".
+        if (!OperatingSystem.IsWindows()) return;
+        Put("L/same.c", "int same = 1;\n");
+        Put("R/same.c", "x\n");
+        Directory.CreateDirectory(P("X"));
+        var psi = new System.Diagnostics.ProcessStartInfo("cmd") { UseShellExecute = false, RedirectStandardOutput = true };
+        foreach (var a in new[] { "/c", "mklink", "/H", P("X/link.c"), P("R/same.c") }) psi.ArgumentList.Add(a);
+        using (var p = System.Diagnostics.Process.Start(psi)!) { p.StandardOutput.ReadToEnd(); p.WaitForExit(); Assert.Equal(0, p.ExitCode); }
+        File.WriteAllText(P("X/link.c"), "int same = 1;\n");
+        if (CodeDiffer.Core.Walk.DirectoryLister.List(P("R")).Single(x => x.Name == "same.c").Length != 2) return; // this volume kept it fresh
+
+        var c = new DirectoryComparer(NoCache).Compare(P("L"), P("R")).Changes.Single(x => x.RelativePath == "same.c");
+        Assert.Equal(ChangeStatus.Identical, c.Status);
+    }
+
+    [Fact]
     public void ATimestampPastYear9999_IsUnknown_NotACrash()
     {
         Assert.Equal(0, CodeDiffer.Core.Walk.DirectoryLister.FileTimeToUtcTicks(long.MaxValue));

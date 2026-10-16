@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Giant;
 using CodeDiffer.Core.Ledger;
@@ -181,7 +181,7 @@ static int Compare(string[] args)
     {
         Console.Error.WriteLine(
             $"WARNING: incomplete walk — {report.LeftDroppedDirectories} left / {report.RightDroppedDirectories} right " +
-            "director(ies) could not be listed; adds/removes under them may be listing failures.");
+            $"director(ies) could not be listed{AgentViews.Unlisted(report)}; what the other tree has under them is unknown, listed as [unreadable].");
     }
     if (report.UnreadableFiles > 0)
         Console.Error.WriteLine($"WARNING: {report.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict " +

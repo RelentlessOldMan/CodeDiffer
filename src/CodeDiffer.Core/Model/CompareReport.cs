@@ -1,4 +1,4 @@
-using CodeDiffer.Core.Walk;
+﻿using CodeDiffer.Core.Walk;
 
 namespace CodeDiffer.Core.Model;
 
@@ -13,6 +13,7 @@ namespace CodeDiffer.Core.Model;
 /// to 1000 (one line in 2,001 changed, lines reordered, line endings only). Only a rename without it is byte-identical.
 /// <see cref="BehindLink"/>: an add or remove whose path is behind a symlink / junction the OTHER tree has there (not
 /// followed), so whether it really changed is unknown — never acted on as a delete or an add (it is also Unreadable).
+/// A name Windows can't open by path (a file, or a directory as one row) is such a row too, in a side or both.
 /// </summary>
 public sealed record FileChange(
     string RelativePath,

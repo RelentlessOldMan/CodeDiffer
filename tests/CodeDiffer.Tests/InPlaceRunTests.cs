@@ -1,4 +1,4 @@
-using CodeDiffer.Core.Diff;
+﻿using CodeDiffer.Core.Diff;
 using CodeDiffer.Core.Model;
 using Xunit;
 
@@ -80,20 +80,46 @@ public sealed class InPlaceRunTests
     }
 
     [Theory]
-    [InlineData("u242", "u243", false)]      // lines unlike the run's
-    [InlineData("x // a", "x // b", true)]   // edits of the run's line, inserted outright
-    public void ReMergingACleanMerge_ChangesNothing(string i1, string i2, bool readsTwoWays)
+    [InlineData("u242", "u243")]      // lines unlike the run's
+    [InlineData("x // a", "x // b")]  // edits of the run's line, inserted outright
+    public void ReMergingACleanMerge_ChangesNothing(string i1, string i2)
     {
-        // apply run twice: v1 inserts two lines, v2 cuts a copy of the run; the merge, merged again with v1, is v1's
-        // changes already there (no conflict, the same text). Where an inserted line is an edit of the run's, the merge
-        // also reads as that copy edited in place, v1's insert not in it: a conflict then, never another text.
+        // apply run twice: v1 inserts two lines, v2 cuts a copy of the run; the merge, merged again with either side, is
+        // that side's changes already there or a conflict, never another text. (Merged again with v2, both cut a copy of
+        // the run and one also changed the run: the same cut, or two, nothing in the lines tells which.)
         var b = Enumerable.Repeat("x", 7).Concat(new[] { "u241", "x", "a", "b", "c" }).ToList();
         var v1 = Enumerable.Repeat("x", 5).Concat(new[] { i1, "x", "x", "u241", i2, "x", "a", "b", "c" }).ToList();
         var v2 = Enumerable.Repeat("x", 6).Concat(new[] { "u241", "x", "a", "b", "c" }).ToList();
         var merged = MergedText(b, v1, v2);
         Assert.NotNull(merged);
         foreach (var again in new[] { MergedText(b, v1, merged!), MergedText(b, v2, merged!) })
-            if (!readsTwoWays || again != null) Assert.Equal(merged, again);
+            if (again != null) Assert.Equal(merged, again);
+    }
+
+    [Theory]
+    // v1 cuts a }, v2 writes x; over one (Myers: x; inserted, the last } cut): both cut "the same }" reads as v2 alone
+    [InlineData("} } }", "} }", "x; } }")]
+    // v1 drops an #endif, v2 turns the first into #else
+    [InlineData("#if #if x #endif #endif #endif", "#if #if x #endif #endif", "#if #if x #else #endif #endif")]
+    // v1 drops a blank line, v2 writes a comment over one
+    [InlineData("a() _ _ b()", "a() _ b()", "a() // _ b()")]
+    public void BothCuttingACopyOfARun_WhileOneAlsoChangesIt_IsAConflict_NeverOneSideAlone(string b, string v1, string v2)
+    {
+        // Whether the two cut the same copy or one each, nothing in the lines tells: the merge must not quietly be one side
+        // (an #endif too many). Both ways round.
+        foreach (var (x, y) in new[] { (v1, v2), (v2, v1) })
+        {
+            var merged = MergedText(Words(b), Words(x), Words(y));
+            Assert.True(merged == null, string.Join(" ", merged ?? []));
+        }
+    }
+
+    [Fact]
+    public void BothCuttingTheSameCopyOfARun_AndNothingElse_IsAgreed()
+    {
+        var r = ThreeWayMerger.Merge("f.c", "}\n}\n}\n", "}\n}\n", "}\n}\n");
+        Assert.Empty(r.Conflicts);
+        Assert.Equal(HunkOp.Delete, Assert.Single(r.CleanMerges).Op);
     }
 
     [Theory]
@@ -132,7 +158,7 @@ public sealed class InPlaceRunTests
 
     private static List<string> Words(string s) => s.Split(' ').Select(w => w switch
     {
-        "_" => "", "r" => "    return;", "r2" => "    return 2;", "acc" => "acc = 0;", "acc2" => "acc = 2;", _ => w,
+        "_" => "", "//" => "// note", "r" => "    return;", "r2" => "    return 2;", "acc" => "acc = 0;", "acc2" => "acc = 2;", _ => w,
     }).ToList();
 
     /// <summary>The merged text of a conflict-free merge, or null if any region conflicts.</summary>

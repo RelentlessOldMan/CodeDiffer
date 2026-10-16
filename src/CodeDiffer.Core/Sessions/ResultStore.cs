@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Globalization;
 using System.Reflection;
 using System.Text.Encodings.Web;
@@ -592,7 +592,7 @@ public static class ResultStore
         {
             w.WriteStartObject();
             WritePath(w, "path", s.Path);
-            w.WriteString("kind", s.Kind == CodeDiffer.Core.Walk.SkipKind.Link ? "link" : "name");
+            w.WriteString("kind", s.Kind switch { CodeDiffer.Core.Walk.SkipKind.Link => "link", CodeDiffer.Core.Walk.SkipKind.Name => "name", _ => "unlisted" });
             if (s.IsDirectory) w.WriteBoolean("dir", true);
             w.WriteEndObject();
         }
@@ -602,7 +602,7 @@ public static class ResultStore
     private static List<CodeDiffer.Core.Walk.SkippedPath> ReadSkipped(JsonElement stats, string name)
         => stats.TryGetProperty(name, out var a)
             ? a.EnumerateArray().Select(x => new CodeDiffer.Core.Walk.SkippedPath(RelOf(x, "path"),
-                Str(x, "kind") == "link" ? CodeDiffer.Core.Walk.SkipKind.Link : CodeDiffer.Core.Walk.SkipKind.Name,
+                Str(x, "kind") switch { "link" => CodeDiffer.Core.Walk.SkipKind.Link, "unlisted" => CodeDiffer.Core.Walk.SkipKind.Unlisted, _ => CodeDiffer.Core.Walk.SkipKind.Name },
                 x.TryGetProperty("dir", out var d) && d.GetBoolean())).ToList()
             : [];
 

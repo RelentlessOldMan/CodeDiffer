@@ -1,4 +1,4 @@
-using CodeDiffer.Core.Ledger;
+﻿using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Walk;
 
@@ -132,11 +132,15 @@ public sealed class DirectoryComparer
             () => leftCache.Recorded + rightCache.Recorded, _options.CheckpointInterval, progress);
         try
         {
-            // A path behind a link the other tree has in its place (not followed) is not known to be added or removed.
-            var leftLinks = lw.SkippedPaths.Where(s => s.Kind == SkipKind.Link).Select(s => s.Path).ToHashSet(StringComparer.Ordinal);
-            var rightLinks = rw.SkippedPaths.Where(s => s.Kind == SkipKind.Link).Select(s => s.Path).ToHashSet(StringComparer.Ordinal);
+            // A path behind a link the other tree has in its place (not followed), or under a directory the other tree
+            // could not list, is not known to be added or removed.
+            var leftLinks = lw.SkippedPaths.Where(s => s.Kind != SkipKind.Name).ToDictionary(s => s.Path, s => s.Kind, StringComparer.Ordinal);
+            var rightLinks = rw.SkippedPaths.Where(s => s.Kind != SkipKind.Name).ToDictionary(s => s.Path, s => s.Kind, StringComparer.Ordinal);
             var linkNotes = new Dictionary<(string Link, bool Left), string>(); // one note a link, shared by every path behind it
-            string LinkNote(string link, bool left) => linkNotes.TryGetValue((link, left), out var n) ? n : linkNotes[(link, left)] = left
+            string LinkNote(string link, bool left) => linkNotes.TryGetValue((link, left), out var n) ? n : linkNotes[(link, left)] =
+                (left ? leftLinks : rightLinks)[link] == SkipKind.Unlisted
+                ? $"the {(left ? "left" : "right")} tree's directory {link} could not be listed: whether it was {(left ? "added" : "removed")} is unknown"
+                : left
                 ? $"the left tree has a symlink/junction at {link} (not followed): whether it was added is unknown"
                 : $"the right tree has a symlink/junction at {link} (not followed): whether it was removed is unknown";
             for (int li = 0, ri = 0; li < leftFiles.Count || ri < rightFiles.Count;)
@@ -168,6 +172,7 @@ public sealed class DirectoryComparer
                 else
                     sizeChanged.Add((lx, rx)); // modified for sure; only the reason needs the bytes
             }
+            behindLink.AddRange(Unopenable(lw.SkippedPaths, rw.SkippedPaths));
             if (progress is not null)
             {
                 // Partial answers: adds and removes are known now (a rename may still pair some of them up).
@@ -341,20 +346,42 @@ public sealed class DirectoryComparer
         return files;
     }
 
-    /// <summary>The link (one of <paramref name="links"/>) that <paramref name="path"/> is at or under, or null.</summary>
-    private static string? BehindLink(string path, HashSet<string> links)
+    /// <summary>
+    /// A name the walks skipped because Windows can't open it by path (ending in '.' or ' ', a device name): a row whose
+    /// verdict is unknown, in a side or both (a directory as one row: nothing in it was listed), never acted on — left out,
+    /// it read as the trees agreeing there.
+    /// </summary>
+    private static IEnumerable<FileChange> Unopenable(IReadOnlyList<SkippedPath> left, IReadOnlyList<SkippedPath> right)
+    {
+        var l = left.Where(s => s.Kind == SkipKind.Name).ToDictionary(s => s.Path, StringComparer.Ordinal);
+        var r = right.Where(s => s.Kind == SkipKind.Name).ToDictionary(s => s.Path, StringComparer.Ordinal);
+        foreach (var path in l.Keys.Union(r.Keys, StringComparer.Ordinal))
+        {
+            bool inL = l.TryGetValue(path, out var a), inR = r.TryGetValue(path, out var b);
+            var what = (inL ? a : b).IsDirectory ? "a directory (nothing in it listed)" : "a file";
+            yield return new FileChange(path, inL && inR ? ChangeStatus.Modified : inL ? ChangeStatus.Removed : ChangeStatus.Added, null, 0, 0,
+                Unreadable: $"{what} that can't be opened by path on Windows (its name ends in '.' or ' ', or is a device name): " +
+                            "not compared, whether it changed is unknown", BehindLink: true);
+        }
+    }
+
+    /// <summary>The link or unlisted directory (one of <paramref name="links"/>) that <paramref name="path"/> is at or under, or null.</summary>
+    private static string? BehindLink(string path, Dictionary<string, SkipKind> links)
     {
         if (links.Count == 0) return null;
         for (var p = path; ; p = p[..p.LastIndexOf('/')])
         {
-            if (links.Contains(p)) return p;
+            if (links.ContainsKey(p)) return p;
             if (p.LastIndexOf('/') < 0) return null;
         }
     }
 
+    /// <summary>A pair the listing says changed size: modified, with its reason — or identical, when the bytes say a
+    /// directory entry's size was stale.</summary>
     private static FileChange Modified(ReasonClassifier classifier, FileEntry le, FileEntry re, CancellationToken ct)
-        => new(le.RelativePath, ChangeStatus.Modified,
-            classifier.Classify(le.FullPath, le.Length, re.FullPath, re.Length, ct), le.Length, re.Length);
+        => classifier.ClassifyResized(le.FullPath, le.Length, re.FullPath, re.Length, out long same, ct) is { } reason
+            ? new(le.RelativePath, ChangeStatus.Modified, reason, le.Length, re.Length)
+            : new(le.RelativePath, ChangeStatus.Identical, null, same, same);
 
     /// <summary>A pair that could not be read: modified with no reason, and why.</summary>
     private static FileChange Unknown(FileEntry le, FileEntry re, Exception ex)

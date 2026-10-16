@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using CodeDiffer.Core.Model;
 
 namespace CodeDiffer.Core.Compare;
@@ -35,6 +35,40 @@ public sealed class ReasonClassifier
         var leftBytes = large ? TextInspector.ReadHead(leftPath) : TextInspector.ReadAll(leftPath);
         var rightBytes = large ? TextInspector.ReadHead(rightPath) : TextInspector.ReadAll(rightPath);
         return large ? Large(leftPath, leftLength, leftBytes, rightPath, rightLength, rightBytes, ct) : Whole(leftPath, leftBytes, rightPath, rightBytes);
+    }
+
+    /// <summary>
+    /// The reason for a pair the listing says changed size — or null when the two are byte for byte the same after all
+    /// (a directory entry can keep a stale size: a file rewritten through a hard link elsewhere), never "same text,
+    /// different bytes". A pair read whole costs nothing more; a large one an open per side for its length, and a read
+    /// only when those agree. <paramref name="sameLength"/>: their length, when null.
+    /// </summary>
+    public ChangeReason? ClassifyResized(string leftPath, long leftLength, string rightPath, long rightLength, out long sameLength, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (leftLength > _maxClassifyBytes || rightLength > _maxClassifyBytes)
+            return SameBytes(leftPath, rightPath, out sameLength, ct) ? null : Classify(leftPath, leftLength, rightPath, rightLength, ct);
+        var leftBytes = TextInspector.ReadAll(leftPath);
+        var rightBytes = TextInspector.ReadAll(rightPath);
+        sameLength = leftBytes.Length;
+        return leftBytes.AsSpan().SequenceEqual(rightBytes) ? null : Classify(leftPath, leftBytes, rightPath, rightBytes, ct);
+    }
+
+    /// <summary>Whether two files hold the same bytes, by their handles' lengths and then their bytes.</summary>
+    private static bool SameBytes(string leftPath, string rightPath, out long length, CancellationToken ct)
+    {
+        using var a = TextInspector.OpenShared(leftPath, 1);
+        using var b = TextInspector.OpenShared(rightPath, 1);
+        length = a.Length;
+        if (a.Length != b.Length) return false;
+        var x = new byte[64 * 1024];
+        var y = new byte[64 * 1024];
+        for (int n; (n = a.ReadAtLeast(x, x.Length, throwOnEndOfStream: false)) > 0;)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (b.ReadAtLeast(y, n, throwOnEndOfStream: false) != n || !x.AsSpan(0, n).SequenceEqual(y.AsSpan(0, n))) return false;
+        }
+        return b.ReadByte() < 0;
     }
 
     /// <summary>The reason, from both files' whole bytes as just read (one open fewer per side); bytes past the

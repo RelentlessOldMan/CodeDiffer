@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Diff;
 using CodeDiffer.Core.Ledger;
@@ -110,7 +110,8 @@ public sealed class Round9Tests : IDisposable
         File.WriteAllText(@"\\?\" + P("R/nul"), "right, longer\n");
         var r = new DirectoryComparer(NoCache).Compare(P("L"), P("R"));
         Assert.Equal(2, r.SkippedNames);
-        Assert.Equal("keep.c", Assert.Single(r.Changes, c => c.Status != ChangeStatus.Identical).RelativePath);
+        Assert.Equal(["keep.c", "nul"], r.Changes.Where(c => c.Status != ChangeStatus.Identical).Select(c => c.RelativePath));
+        Assert.NotNull(r.Changes.Single(c => c.RelativePath == "nul").Unreadable); // unknown, never read as the device
     }
 
     [Fact]

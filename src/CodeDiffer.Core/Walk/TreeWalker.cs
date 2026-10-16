@@ -1,12 +1,12 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Runtime.ExceptionServices;
 
 namespace CodeDiffer.Core.Walk;
 
 /// <summary>What a walk skipped on purpose: a symlink / junction (never followed: it can point outside the tree or back
 /// into it), or a name Windows can't open by path (ending in '.' or ' ', or a device name like "nul" — the path API
-/// would open another file, or the device).</summary>
-public enum SkipKind { Link, Name }
+/// would open another file, or the device), or a directory that could not be listed (nothing under it is known).</summary>
+public enum SkipKind { Link, Name, Unlisted }
 
 /// <summary>A path the walk skipped, relative to the root ('/' separated), file or directory.</summary>
 public readonly record struct SkippedPath(string Path, SkipKind Kind, bool IsDirectory);
@@ -74,6 +74,7 @@ public sealed class TreeWalker
                     if (rows is null)
                     {
                         Interlocked.Increment(ref dropped);
+                        skipped.Add(new SkippedPath(Rel(dir), SkipKind.Unlisted, true)); // named, so what's under it is unknown
                         return;
                     }
                     var sig = Signature(rows);

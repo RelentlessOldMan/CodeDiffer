@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Diff;
@@ -185,9 +185,15 @@ public static class TreeMerger
 
     private static Merge3Entry Classify(string path, FileChange? c1, FileChange? c2, string b, string v1, string v2, long maxText, CancellationToken ct)
     {
-        // Behind a link one tree has in its place (not followed): whether it changed there is unknown — never merged.
+        // Behind a link one tree has in its place (not followed), under a directory one tree could not list, or a name
+        // Windows can't open by path: whether it changed there is unknown — never merged.
         if ((c1?.BehindLink ?? false) || (c2?.BehindLink ?? false))
-            return new(path, c1, c2, Merge3Outcome.Conflict, "behind a link", 0, 0, null, (c1?.BehindLink ?? false) ? c1!.Unreadable : c2!.Unreadable);
+        {
+            var note = (c1?.BehindLink ?? false) ? c1!.Unreadable : c2!.Unreadable;
+            var unknown = !path.Split('/').All(Walk.TreeWalker.UsableName) ? "unopenable name"
+                     : note?.Contains("could not be listed", StringComparison.Ordinal) == true ? "unlisted directory" : "behind a link";
+            return new(path, c1, c2, Merge3Outcome.Conflict, unknown, 0, 0, null, note);
+        }
         if (c2 is null) return new(path, c1, null, Merge3Outcome.V1Only, null, 0, 0, Dest(c1!), null);
         if (c1 is null) return new(path, null, c2, Merge3Outcome.V2Only, null, 0, 0, Dest(c2), null);
 

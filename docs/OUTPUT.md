@@ -178,7 +178,11 @@ stat of the base; both compares judge the same snapshot of it), then every touch
 v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content, modify/delete,
 add/add, rename/rename, path collision, file/directory clash (one side has a file where the other has a
 directory: v2 turns `D/` into a file `D` while v1 adds `D/z.txt`), binary, large (a side over the text limit, or
-the base when both sides cut a large file down: no file that big is read whole to merge it). A file one side only moved
+the base when both sides cut a large file down: no file that big is read whole to merge it), behind a link and
+unopenable name (whether the path changed is unknown: never merged). Both sides cutting (or adding) copies of a run
+of identical lines while one also changes the run — v1 drops an `#endif` of three, v2 turns one into `#else` — is a
+content conflict, not v2's text alone: nothing in the lines tells whether they cut the same copy or one each (so
+merging a merged file again with a side can now conflict there rather than say "already"). A file one side only moved
 (byte-identical) and the other changed in place merges to the change at the new name — binary and large files
 too, taken whole. A side with no line break at all has no line-ending style: it never "changes the line endings"
 (a CRLF file cut to one line is not CRLF → LF). Renames are followed (renamed on one side, edited
@@ -292,10 +296,13 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   never ported or written as a delete. Other reparse points — OneDrive / cloud placeholders, deduplicated
   files — are ordinary files and directories and are compared. Paths past 260 characters are listed and
   checked like any other; a name ending in '.' or ' ' (which Windows' path API opens as another file), or a
-  device name like `nul` (which it opens as the device), is skipped and said, and a timestamp past year 9999 counts as unknown (the file just isn't cached).
+  device name like `nul` (which it opens as the device), is not read but listed as unknown — `[unreadable]` (a
+  directory so named is one such row: nothing in it was listed), exit 3, a `#` line in a patch, never ported, an
+  `unopenable name` conflict in compare3 — and a timestamp past year 9999 counts as unknown (the file just isn't cached).
 - An incomplete compare (a directory that couldn't be listed) is never acted on: `apply`, `apply_changeset`,
-  the merge overlay and a whole patch (`--patch`, `export_changeset`) refuse it, since every file under that
-  directory would look deleted.
+  the merge overlay and a whole patch (`--patch`, `export_changeset`) refuse it. The warning names the directories
+  (a few; `compare.json` keeps them all, `kind: "unlisted"` among the skipped paths), and what the other tree has
+  under one is not "removed" or "added" but unknown — `[unreadable]`, an `unlisted directory` conflict in compare3.
 - Names that differ only in case are one file on Windows: a remove and an add like that (`Foo.c` → an unrelated
   `foo.c`) are left to do by hand by `apply`, and in compare3 a v2 file landing on a name a conflict keeps in v1
   is a `path collision`, never written over v1's file.

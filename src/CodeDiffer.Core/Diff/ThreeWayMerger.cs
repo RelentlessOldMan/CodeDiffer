@@ -1,4 +1,4 @@
-using CodeDiffer.Core.Model;
+﻿using CodeDiffer.Core.Model;
 
 namespace CodeDiffer.Core.Diff;
 
@@ -77,7 +77,7 @@ public static class ThreeWayMerger
         var h1 = InPlace(d1, baseLines, v1Lines);
         var h2 = InPlace(d2, baseLines, v2Lines);
         var regions = Regions(baseLines, v1Lines, v2Lines, h1, h2);
-        if (ReferenceEquals(h1, d1) && ReferenceEquals(h2, d2)) return regions;
+        if (ReferenceEquals(h1, d1) && ReferenceEquals(h2, d2)) return RunCuts(regions, baseLines, v1Lines);
 
         // Where the lines as written show one side already holding every change of the other (merging a merge again, say)
         // and the edits in place don't merge to that side, the lines read two ways and nothing tells which: v1 `}; }` and
@@ -86,13 +86,59 @@ public static class ThreeWayMerger
         // first region the lines as written don't have to the last (each side's edits in it, not one side's alone).
         var raw = Regions(baseLines, v1Lines, v2Lines, d1, d2);
         int holds = Holder(raw);
-        if (holds == 0 || (Holder(regions) & holds) != 0) return regions;
+        if (holds == 0 || (Holder(regions) & holds) != 0) return RunCuts(regions, baseLines, v1Lines);
         var agreed = new HashSet<MergeRegion>(raw);
         int first = regions.FindIndex(r => !agreed.Contains(r)), last = regions.FindLastIndex(r => !agreed.Contains(r));
+        return RunCuts(OneConflict(regions, first, last), baseLines, v1Lines);
+    }
+
+    /// <summary>Regions <paramref name="first"/>..<paramref name="last"/> as one conflict (the lines between them are the
+    /// same in all three, so the span is exact in each).</summary>
+    private static List<MergeRegion> OneConflict(List<MergeRegion> regions, int first, int last)
+    {
         var (f, l) = (regions[first], regions[last]);
         var span = new MergeRegion(RegionKind.Conflict, f.BaseStart0, l.BaseStart0 + l.BaseLines - f.BaseStart0,
             f.V1Start0, l.V1Start0 + l.V1Lines - f.V1Start0, f.V2Start0, l.V2Start0 + l.V2Lines - f.V2Start0);
         return [.. regions.Take(first), span, .. regions.Skip(last + 1)];
+    }
+
+    /// <summary>
+    /// Both sides cutting copies of a run of identical lines (or adding copies to one) agree only if nothing else changed
+    /// the run: every copy is the same line, so where a cut stands is the differ's choice, not the side's. v1 cutting a
+    /// <c>}</c> of <c>} } }</c> and v2 writing <c>x;</c> over one reads as both cutting the last (v2 alone) or as v2
+    /// replacing the first and v1 cutting another (<c>x; }</c>); nothing tells which, and taking the first drops v1's cut
+    /// without a word (an <c>#endif</c> too many). So an agreed cut or addition of a run's copies with another change of
+    /// the run beside it (in it, or at either end) is one conflict with it.
+    /// </summary>
+    private static List<MergeRegion> RunCuts(List<MergeRegion> regions, IReadOnlyList<string> b, IReadOnlyList<string> v1)
+    {
+        for (int k = 0; k < regions.Count; k++)
+        {
+            var r = regions[k];
+            if (r.Kind != RegionKind.Agreed) continue;
+            string line;
+            if (r.BaseLines > 0 && r.V1Lines == 0) line = b[r.BaseStart0];
+            else if (r.BaseLines == 0 && r.V1Lines > 0) line = v1[r.V1Start0];
+            else continue;
+            bool Copies(IReadOnlyList<string> x, int at, int n)
+            {
+                for (int i = at; i < at + n; i++) if (!string.Equals(x[i], line, StringComparison.Ordinal)) return false;
+                return true;
+            }
+            if (!Copies(b, r.BaseStart0, r.BaseLines) || !Copies(v1, r.V1Start0, r.V1Lines)) continue;
+            int lo = r.BaseStart0, hi = r.BaseStart0 + r.BaseLines;
+            while (lo > 0 && string.Equals(b[lo - 1], line, StringComparison.Ordinal)) lo--;
+            while (hi < b.Count && string.Equals(b[hi], line, StringComparison.Ordinal)) hi++;
+            if (hi - lo == r.BaseLines) continue; // no copy of it left in base around it: where it stands is not free
+            bool Beside(MergeRegion o) => o.Kind != RegionKind.Agreed && o.BaseStart0 <= hi && o.BaseStart0 + o.BaseLines >= lo;
+            int first = k, last = k;
+            while (first > 0 && Beside(regions[first - 1])) first--;
+            while (last + 1 < regions.Count && Beside(regions[last + 1])) last++;
+            if (first == k && last == k) continue;
+            regions = OneConflict(regions, first, last);
+            k = first - 1; // the conflict may reach another run's agreed cut: look again from it
+        }
+        return regions;
     }
 
     /// <summary>Which side a conflict-free merge is: 1 if it is V1 (V2 changed nothing V1 lacks), 2 if V2, 3 both, else 0.</summary>
