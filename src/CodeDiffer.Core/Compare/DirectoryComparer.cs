@@ -54,6 +54,10 @@ public sealed class CompareOptions
 
     /// <summary>Tests: called after each content pair a session's compare checks (to cancel at a known point).</summary>
     internal Action<long>? AfterPairChecked { get; init; }
+
+    /// <summary>How often, at least, the hash ledgers are saved while contents are read (a killed run keeps what it
+    /// read up to the last save). Slower when a save is slow: never more than about 5% of the time.</summary>
+    public TimeSpan CheckpointInterval { get; init; } = TimeSpan.FromMinutes(1);
 }
 
 /// <summary>
@@ -122,6 +126,11 @@ public sealed class DirectoryComparer
         var sameSize = new List<(FileEntry L, FileEntry R)>();
         var sizeChanged = new List<(FileEntry L, FileEntry R)>();
         string? renameLimit = null;
+        var io = progress?.Io;
+        // From here on hashes are recorded: saved now and then, so a run killed outright keeps what it read.
+        using var checkpoint = _options.Cache == CacheMode.Off ? null : new LedgerCheckpoint(
+            () => { leftCache.Save(lw.Files, finished: false); rightCache.Save(rw.Files, finished: false); },
+            () => leftCache.Recorded + rightCache.Recorded, _options.CheckpointInterval, progress);
         try
         {
             // A path behind a link the other tree has in its place (not followed) is not known to be added or removed.
@@ -225,7 +234,7 @@ public sealed class DirectoryComparer
                 }
                 else if (_options.Cache == CacheMode.Off)
                 {
-                    var r = await PairComparer.CompareAsync(le, re, hashes: false, ct, onChunk).ConfigureAwait(false);
+                    var r = await PairComparer.CompareAsync(le, re, hashes: false, ct, onChunk, io).ConfigureAwait(false);
                     equal = r.Equal;
                     read = 2 * le.Length; // upper bound (early exit on a difference)
                 }
@@ -233,7 +242,7 @@ public sealed class DirectoryComparer
                 {
                     // One side cached: read only the other side, and compare hashes (SHA-256 when both have it).
                     var (e, cache, known) = hasL ? (re, rightCache, cl) : (le, leftCache, cr);
-                    var h = await PairComparer.HashAsync(e, ct, onChunk).ConfigureAwait(false);
+                    var h = await PairComparer.HashAsync(e, ct, onChunk, io).ConfigureAwait(false);
                     cache.Record(e, h);
                     equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
                     if (!hasL && h.Stable) provenL = new ContentId(h.XxHash128, h.Sha256);
@@ -242,7 +251,7 @@ public sealed class DirectoryComparer
                 else
                 {
                     // Neither usable: read both at once, compare bytes, and keep both hashes for next time.
-                    var r = await PairComparer.CompareAsync(le, re, hashes: true, ct, onChunk).ConfigureAwait(false);
+                    var r = await PairComparer.CompareAsync(le, re, hashes: true, ct, onChunk, io).ConfigureAwait(false);
                     leftCache.Record(le, r.Left!);
                     rightCache.Record(re, r.Right!);
                     equal = r.Equal;
@@ -269,11 +278,13 @@ public sealed class DirectoryComparer
         {
             // Keep what was read: every hash recorded so far goes into the ledgers, so re-running a cancelled (or
             // failed) cold compare only reads what this one didn't get to.
+            checkpoint?.Stop();
             try { leftCache.Save(lw.Files, finished: false); rightCache.Save(rw.Files, finished: false); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             throw;
         }
 
+        checkpoint?.Stop();
         changes.Sort((a, b) => string.CompareOrdinal(a.RelativePath, b.RelativePath));
         progress?.SetPhase(ComparePhase.Saving);
         // The verdicts are done: a ledger that can't be saved (disk full, a file held by antivirus, no rights) costs the

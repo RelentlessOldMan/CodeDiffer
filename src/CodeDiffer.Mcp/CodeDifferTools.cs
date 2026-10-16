@@ -208,6 +208,21 @@ public static class CodeDifferTools
         return o.ToString();
     }
 
+    [McpServerTool(Name = "get_run_telemetry")]
+    [Description("How recent compares ran, in numbers only (no paths or file names, so it can be shared as is): how each " +
+                 "ended (done, cancelled, stopped by a shutdown, or killed outright, with how far it got), peak memory, CPU, " +
+                 "time per phase, and in the content phase how much worker time went to opening files and waiting for bytes " +
+                 "(the network) versus comparing and hashing. Newest first.")]
+    public static string GetRunTelemetry([Description("How many recent compares (default 5).")] int max = 5)
+    {
+        if (Sessions.ResultsRoot is not { } root) return "compares are not being saved in this server";
+        return Safe(() =>
+        {
+            var saved = ResultStore.List(root, Math.Clamp(max, 1, 50));
+            return saved.Count == 0 ? "no saved compares" : string.Join("", saved.Select(RunSummary.Format));
+        });
+    }
+
     [McpServerTool(Name = "cancel_compare")]
     [Description("Stop a running compare (2- or 3-way). The hashes it already read are kept, so starting the same compare " +
                  "again only reads what this one didn't get to.")]

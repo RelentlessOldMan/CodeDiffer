@@ -9,6 +9,14 @@ using CodeDiffer.Core.Sessions;
 using CodeDiffer.Core.ThreeWay;
 using CodeDiffer.Core.Verify;
 
+// A crash is recorded in the running compare's run.json (numbers only), so a dead run says what killed it.
+AppDomain.CurrentDomain.UnhandledException += (_, e) => { if (e.ExceptionObject is Exception ex) Session.RecordCrash(ex); };
+// The console window closed, a logoff or shutdown: stop the compare so it keeps what it read and records why (Windows
+// allows a few seconds; the hashes saved mid-run cover a save that doesn't fit).
+using var onClose = System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGHUP,
+    _ => Session.StopAll("stopped: the console window was closed", TimeSpan.FromSeconds(4)));
+using var onTerm = System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGTERM,
+    _ => Session.StopAll("stopped: logoff or shutdown", TimeSpan.FromSeconds(4)));
 return Run(args);
 
 static int Run(string[] args)
@@ -48,6 +56,8 @@ static int Dispatch(string[] args)
             return Report(args);
         case "results":
             return Results(args);
+        case "runs":
+            return Runs(args);
         case "help" or "--help" or "-h":
             PrintUsage();
             return 0;
@@ -308,6 +318,22 @@ static int Results(string[] args)
         Console.WriteLine($"  {c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.State,-7} {string.Join("  ", c.Roots.Select(r => r.Path))}");
         Console.WriteLine($"        {string.Join(", ", counts)}{(c.Error is { } e ? $"  error: {e}" : "")}");
     }
+    return 0;
+}
+
+/// <summary>runs [--max N]: how the recent compares ran (numbers only, safe to share), newest first.</summary>
+static int Runs(string[] args)
+{
+    if (!ArgsOk(args, 0, "usage: codediffer runs [--max N]", [], ["--max"])) return 64;
+    int max = 5;
+    if (FlagValue(args, "--max", from: 1) is { } m && (!int.TryParse(m, out max) || max < 1))
+    {
+        Console.Error.WriteLine("error: --max needs a positive integer");
+        return 64;
+    }
+    var saved = ResultStore.List(ResultStore.DefaultRoot, max);
+    if (saved.Count == 0) Console.WriteLine("no saved compares");
+    foreach (var c in saved) Console.Write(RunSummary.Format(c));
     return 0;
 }
 
@@ -1053,6 +1079,8 @@ static void PrintUsage()
                                        and outside the compared trees. Ctrl+C stops rendering
                                        and still writes the report (the rest without a diff).
           codediffer results [--max N]   saved compares, newest first
+          codediffer runs [--max N]      how recent compares ran: how each ended, peak memory, time per phase,
+                                         network vs work (numbers only, safe to share)
           codediffer results --prune [--keep N] [--older-than DAYS] [--yes]
                                        delete all but the newest N (default 20) saved compares,
                                        only those older than DAYS if given. Dry run unless --yes.

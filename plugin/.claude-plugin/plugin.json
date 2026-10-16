@@ -1,0 +1,10 @@
+{
+  "name": "codediffer",
+  "displayName": "CodeDiffer",
+  "version": "0.0.0-dev",
+  "description": "2-/3-way diff for very large trees (~100 GB, files over 1 GB, local or on a network share), as MCP tools: compare in the background, page through bounded answers, open one file's diff or 3-way merge, port a change set onto a third tree, and write an HTML report.",
+  "author": { "name": "CodeDiffer" },
+  "license": "MIT",
+  "keywords": ["diff", "merge", "mcp", "large-repos"],
+  "mcpServers": "./.mcp.json"
+}

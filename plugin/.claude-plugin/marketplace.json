@@ -1,0 +1,7 @@
+{
+  "name": "codediffer",
+  "owner": { "name": "CodeDiffer" },
+  "plugins": [
+    { "name": "codediffer", "source": "./" }
+  ]
+}

@@ -58,9 +58,10 @@ h1 { font-size: 20px; margin: 0 0 6px; font-weight: 600; }
 .seg button:first-child { border-radius: 6px 0 0 6px; }
 .seg button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
 .shown { color: var(--muted); font-size: 12.5px; margin-left: auto; }
-.tree { margin-top: 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.row { display: flex; align-items: center; gap: 8px; padding: 3px 10px; border-top: 1px solid var(--border); cursor: pointer; min-width: 0; }
-.tree > .row:first-child, .tree > div:first-child > .row:first-child { border-top: 0; }
+.tree { margin-top: 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; position: relative; min-height: 60px; overflow-anchor: none; }
+/* Only the rows on screen exist: each is placed by script, and every row is exactly 27px (ROWH in the script). */
+.tree > .row, .tree > .panel { position: absolute; left: 0; right: 0; }
+.row { display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 27px; border-bottom: 1px solid var(--border); cursor: pointer; min-width: 0; }
 .row:hover { background: var(--hover); }
 .row .caret { width: 12px; flex: none; color: var(--muted); font-size: 10px; }
 .row .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 13px; }
@@ -70,7 +71,7 @@ h1 { font-size: 20px; margin: 0 0 6px; font-weight: 600; }
 .tag { flex: none; font: 600 11px/18px var(--mono); min-width: 22px; text-align: center; border-radius: 4px; color: var(--tag-fg); padding: 0 4px; }
 .badges { display: flex; gap: 4px; flex: none; }
 .badges .tag { font-weight: 500; }
-.panel { border-top: 1px solid var(--border); background: var(--bg); padding: 8px 10px 12px; }
+.panel { border-bottom: 1px solid var(--border); background: var(--bg); padding: 8px 10px 12px; }
 .panel .head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
 .panel .head a { color: var(--accent); }
 .panel .head .w { color: var(--warn-fg); background: var(--warn-bg); padding: 2px 6px; border-radius: 4px; }
@@ -82,9 +83,6 @@ table.d td.ln { color: var(--muted); text-align: right; user-select: none; width
 table.d td.sg { width: 1%; user-select: none; color: var(--muted); padding: 0 2px 0 6px; }
 table.d tr.add td.tx, table.d tr.add td.sg { background: var(--add-bg); }
 table.d tr.del td.tx, table.d tr.del td.sg { background: var(--del-bg); }
-table.d td.add { background: var(--add-bg); }
-table.d td.del { background: var(--del-bg); }
-table.d td.void { background: var(--hover); }
 table.d .hl-add { background: var(--add-hl); border-radius: 2px; }
 table.d .hl-del { background: var(--del-hl); border-radius: 2px; }
 table.d tr.hunk td { background: var(--hunk-bg); color: var(--meta-fg); }
@@ -93,7 +91,18 @@ table.d tr.v1 td.tx { background: var(--v1-bg); }
 table.d tr.base td.tx { background: var(--base-bg); }
 table.d tr.v2 td.tx { background: var(--v2-bg); }
 table.d tr.mk td { background: var(--mk-bg); font-weight: 600; }
-table.d td.half { width: 50%; }
+table.d tr.void td { background: var(--hover); }
+/* Side by side: two equal panes, each scrolling on its own axis (kept in step by script). Every row is one line
+   high, an empty one too, so the two tables stay row for row. */
+.split .meta-head { border-radius: 6px 6px 0 0; border-bottom: 0; }
+.split .meta-head + .panes .pane { border-top-left-radius: 0; border-top-right-radius: 0; }
+.panes { display: flex; }
+.panes .pane { flex: 1 1 0; min-width: 0; }
+.panes .pane + .pane { border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.panes .pane:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.panes table.d td { height: 1.5em; }
+.panes table.d td.ln { position: sticky; left: 0; z-index: 1; background: var(--panel); }
+.panes table.d tr.void td.ln { background: var(--hover); }
 .cnav button { padding: 2px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel); color: var(--fg); cursor: pointer; font: inherit; font-size: 12px; }
 .empty { padding: 24px; text-align: center; color: var(--muted); }
 footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
@@ -129,8 +138,8 @@ footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
 "use strict";
 // Every value from the data files is inserted with textContent / DOM properties — never as HTML.
 var CD = (function () {
-  var meta = null, files = [], diffs = {}, waiting = {};
-  var state = { tags: new Set(), q: "", reason: "", mode: "inline", open: new Set(), panels: new Map() };
+  var meta = null, L = null, diffs = {}, waiting = {};
+  var state = { tags: new Set(), q: "", reason: "", mode: "inline" };
   var TAGS2 = [["M", "modified", "modified"], ["A", "added", "added"], ["D", "removed", "removed"], ["R", "renamed", "renamed"], ["=", "identical", "identical"]];
   var TAGS3 = [["CF", "conflict", "conflict"], ["MG", "merged", "merged cleanly"], ["AG", "agreed", "agreed"], ["v1", "v1only", "v1 only"], ["v2", "v2only", "v2 only"]];
   var COLOR = { "M": "--t-M", "A": "--t-A", "D": "--t-D", "R": "--t-R", "=": "--t-eq", "CF": "--t-CF", "MG": "--t-MG", "AG": "--t-AG", "v1": "--t-v1", "v2": "--t-v2" };
@@ -162,13 +171,39 @@ var CD = (function () {
 
   // ---- data entry points (called by data/index.js and data/d/N.js) ----
 
-  function index(data) {
-    meta = data; files = data.files || [];
-    files.forEach(function (f, i) { f.i = i; });
+  // data/index.js: CD.index(meta, list) — the list as JSON text (HtmlReport.EncodeFiles): each path as a folder
+  // number + a file name over one folder table, every other key a column, repeated text stored once.
+  function index(data, listText) {
+    meta = data;
+    L = decode(JSON.parse(listText));
     var tags = meta.kind === "compare3" ? TAGS3 : TAGS2;
     tags.forEach(function (t) { if (t[0] !== "=") state.tags.add(t[0]); });
     var m = store("codediffer.mode"); if (m === "split" || m === "inline") state.mode = m;
-    header(); tiles(); controls(); render();
+    header(); tiles(); controls(); setupTree(); render();
+  }
+
+  function decode(j) {
+    var nd = j.dp.length, dirPath = new Array(nd), str = {}, sparse = {};
+    dirPath[0] = "";
+    for (var d = 1; d < nd; d++) dirPath[d] = j.dp[d] === 0 ? j.dn[d] : dirPath[j.dp[d]] + "/" + j.dn[d]; // parents first
+    j.str.forEach(function (k) { str[k] = true; });
+    Object.keys(j.s).forEach(function (k) {
+      var a = j.s[k], m = new Map();
+      for (var i = 0; i + 1 < a.length; i += 2) m.set(a[i], a[i + 1]);
+      sparse[k] = m;
+    });
+    return { n: j.n, fd: j.fd, fn: j.fn, dp: j.dp, dn: j.dn, dirPath: dirPath, S: j.S, str: str, c: j.c, s: sparse,
+      keys: Object.keys(j.c).concat(Object.keys(j.s)) };
+  }
+
+  function raw(k, i) { var c = L.c[k]; var v = c ? c[i] : L.s[k] ? L.s[k].get(i) : undefined; return v === null ? undefined : v; }
+  function val(k, i) { var v = raw(k, i); return v !== undefined && L.str[k] ? L.S[v] : v; }
+  function path(i) { var d = L.fd[i]; return d === 0 ? L.fn[i] : L.dirPath[d] + "/" + L.fn[i]; }
+  // One file's row as an object, made only for rows on screen and opened files.
+  function row(i) {
+    var f = { i: i, p: path(i) };
+    L.keys.forEach(function (k) { var v = val(k, i); if (v !== undefined) f[k] = v; });
+    return f;
   }
 
   function diff(i, d) {
@@ -189,12 +224,14 @@ var CD = (function () {
 
   // ---- header / tiles / controls ----
 
+  var rootLabels = {};
+
   function header() {
     var three = meta.kind === "compare3";
     document.title = "CodeDiffer · " + (three ? "3-way " : "") + "compare " + meta.id;
     $("title").textContent = (three ? "3-way compare " : "Compare ") + meta.id;
     var roots = $("roots");
-    Object.keys(meta.roots).forEach(function (k) { roots.appendChild(el("b", null, k)); roots.appendChild(el("span", null, meta.roots[k])); });
+    Object.keys(meta.roots).forEach(function (k) { var b = el("b", null, k); rootLabels[k] = b; roots.appendChild(b); roots.appendChild(el("span", null, meta.roots[k])); });
     var started = new Date(meta.started);
     $("meta").textContent = "Run " + started.toLocaleString() + " · took " + clock(meta.elapsedSeconds) + " · CodeDiffer " + meta.tool +
       (three ? " · " + fmt(meta.baseFiles) + " base files · " + fmt(meta.conflictRegions) + " conflict regions" : "");
@@ -243,14 +280,19 @@ var CD = (function () {
     }
     function setMode(m) {
       state.mode = m; store("codediffer.mode", m);
+      // 2-way: "left"/"right" only where the trees are drawn left and right; inline, they are the - and + lines.
+      if (rootLabels.left && rootLabels.right) {
+        rootLabels.left.textContent = m === "split" ? "left" : "− old";
+        rootLabels.right.textContent = m === "split" ? "right" : "+ new";
+      }
       $("m-inline").classList.toggle("on", m === "inline"); $("m-split").classList.toggle("on", m === "split");
-      state.panels.forEach(function (p, i) { drawPanel(p, files[i]); });
+      drawn.forEach(function (node, key) { if (key.charAt(0) === "2") drawPanel(node, row(+key.slice(2))); });
     }
     $("m-inline").addEventListener("click", function () { setMode("inline"); });
     $("m-split").addEventListener("click", function () { setMode("split"); });
     setMode(state.mode);
-    $("expand").addEventListener("click", function () { walkDirs(current, function (d) { state.open.add(d.path); }); render(); });
-    $("collapse").addEventListener("click", function () { state.open.clear(); render(); });
+    $("expand").addEventListener("click", function () { open.fill(1); reflow(); });
+    $("collapse").addEventListener("click", function () { open.fill(0); reflow(); });
   }
 
   // ---- filtering ----
@@ -268,117 +310,237 @@ var CD = (function () {
     return nameOnly ? function (s) { return re.test(s.slice(s.lastIndexOf("/") + 1)); } : function (s) { return re.test(s); };
   }
 
+  // A test of row i against the filter box, or null. A plain text without "/" can't span a "/", so it is looked
+  // for in the folder's path (once per folder) and the file name, never in a million joined paths.
   function matcher() {
     var q = state.q.replace(/\\/g, "/");
     if (!q) return null;
-    if (/[*?]/.test(q)) return globRe(q);
-    var low = q.toLowerCase();
-    return function (s) { return s.toLowerCase().indexOf(low) >= 0; };
+    var slash = q.indexOf("/") >= 0, test;
+    if (/[*?]/.test(q)) test = globRe(q);
+    else { var low = q.toLowerCase(); test = function (s) { return s.toLowerCase().indexOf(low) >= 0; }; }
+    var glob = /[*?]/.test(q), hit = new Int8Array(L.dp.length); // per folder: 0 not yet, 1 matches, 2 doesn't
+    return function (i) {
+      var from = val("f", i);
+      if (from !== undefined && test(from)) return true;
+      if (glob) return test(slash ? path(i) : L.fn[i]);
+      if (slash) return test(path(i));
+      var d = L.fd[i];
+      if (hit[d] === 0) hit[d] = test(L.dirPath[d]) ? 1 : 2;
+      return hit[d] === 1 || test(L.fn[i]);
+    };
   }
 
-  function filtered() {
-    var m = matcher();
-    return files.filter(function (f) {
-      if (!state.tags.has(f.t)) return false;
-      if (state.reason && f.r !== state.reason) return false;
-      return !m || m(f.p) || (f.f && m(f.f));
+  // ---- tree: the list as folders, drawn as a virtual list ----
+  //
+  // The whole tree is data (typed arrays over folder and row numbers); only the entries on screen are elements.
+  // An entry is a folder row, a file row, or an opened file's diff panel under it. Rows are ROWH high; a panel is
+  // measured once drawn (a ResizeObserver), so offsets are k*ROWH plus what the panels above add.
+
+  var ROWH = 27, MAXH = 15000000;   // past MAXH px the scrollbar is scaled (browsers cap an element's height)
+  var T = [], NT = 0, tagOf = null, kids = null, fstart = null, fidx = null;
+  var open = null, openFile = new Set(), panelH = new Map();
+  var pass = null, cnt = null, direct = null, total = null, nPass = 0;
+  var ek = [], ev = [], edp = [], pList = [], labels = new Map();
+  var tree = null, emptyEl = null, drawn = new Map(), raf = 0, ro = null;
+
+  function setupTree() {
+    T = (meta.kind === "compare3" ? TAGS3 : TAGS2).map(function (t) { return t[0]; }); NT = T.length;
+    var nd = L.dp.length, n = L.n, code = {};
+    T.forEach(function (t, j) { code[t] = j; });
+    tagOf = new Uint8Array(n);
+    for (var i = 0; i < n; i++) tagOf[i] = code[val("t", i)] || 0;
+    kids = new Array(nd);
+    for (var d = 0; d < nd; d++) kids[d] = [];
+    for (d = 1; d < nd; d++) kids[L.dp[d]].push(d);
+    kids.forEach(function (k) { if (k.length > 1) k.sort(function (a, b) { return L.dn[a] < L.dn[b] ? -1 : L.dn[a] > L.dn[b] ? 1 : 0; }); });
+    fstart = new Int32Array(nd + 1); fidx = new Int32Array(n);
+    for (i = 0; i < n; i++) fstart[L.fd[i] + 1]++;
+    for (d = 0; d < nd; d++) fstart[d + 1] += fstart[d];
+    var at = fstart.slice(0, nd);
+    for (i = 0; i < n; i++) fidx[at[L.fd[i]]++] = i;  // a folder's files in row (path) order
+    open = new Uint8Array(nd);
+    tree = $("tree"); tree.replaceChildren();
+    emptyEl = el("div", "empty"); emptyEl.hidden = true; tree.appendChild(emptyEl);
+    // Panels are measured as drawn and as their diff arrives; this catches the rest (a narrower window rewraps).
+    ro = new ResizeObserver(function (es) {
+      var changed = false;
+      es.forEach(function (e) { if (measure(e.target)) changed = true; });
+      if (changed) schedule();
     });
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
   }
 
-  // ---- tree ----
-
-  var current = null;
-
-  function build(list) {
-    var root = { name: "", path: "", dirs: new Map(), files: [], count: 0, tags: {} };
-    list.forEach(function (f) {
-      var parts = f.p.split("/"), node = root;
-      for (var k = 0; k < parts.length - 1; k++) {
-        node.count++; node.tags[f.t] = (node.tags[f.t] || 0) + 1;
-        var next = node.dirs.get(parts[k]);
-        if (!next) { next = { name: parts[k], path: (node.path ? node.path + "/" : "") + parts[k], dirs: new Map(), files: [], count: 0, tags: {} }; node.dirs.set(parts[k], next); }
-        node = next;
-      }
-      node.count++; node.tags[f.t] = (node.tags[f.t] || 0) + 1;
-      node.files.push(f);
-    });
-    (function compact(n) {
-      n.dirs.forEach(function (d) {
-        while (d.files.length === 0 && d.dirs.size === 1) {
-          var only = d.dirs.values().next().value;
-          d.name += "/" + only.name; d.path = only.path; d.dirs = only.dirs; d.files = only.files;
-        }
-        compact(d);
-      });
-    })(root);
-    return root;
+  // Which rows pass the filters, and per folder how many (by tag, for the badges; direct, for merging chains).
+  function filterRows() {
+    var n = L.n, nd = L.dp.length, m = matcher(), on = T.map(function (t) { return state.tags.has(t); });
+    var reason = -2;
+    if (state.reason) reason = L.str.r ? L.S.indexOf(state.reason) : state.reason;
+    pass = new Uint8Array(n); cnt = new Int32Array(nd * NT); direct = new Int32Array(nd); total = new Int32Array(nd); nPass = 0;
+    for (var i = 0; i < n; i++) {
+      var t = tagOf[i];
+      if (!on[t]) continue;
+      if (reason !== -2 && raw("r", i) !== reason) continue;
+      if (m && !m(i)) continue;
+      pass[i] = 1; nPass++;
+      var d = L.fd[i];
+      direct[d]++; cnt[d * NT + t]++;
+    }
+    total.set(direct);
+    for (d = nd - 1; d > 0; d--) {  // children come after their parents
+      var up = L.dp[d];
+      total[up] += total[d];
+      for (t = 0; t < NT; t++) cnt[up * NT + t] += cnt[d * NT + t];
+    }
   }
-
-  function walkDirs(node, fn) { if (!node) return; node.dirs.forEach(function (d) { fn(d); walkDirs(d, fn); }); }
 
   function render() {
-    var list = filtered();
-    current = build(list);
-    state.panels.clear();
-    $("shown").textContent = fmt(list.length) + " of " + fmt(files.length) + " listed file(s) shown";
-    var tree = $("tree");
-    tree.replaceChildren();
-    if (list.length === 0) { tree.appendChild(el("div", "empty", files.length === 0 ? "No changed files." : "Nothing matches the filters.")); return; }
-    var openAll = list.length <= 300;
-    if (openAll) walkDirs(current, function (d) { state.open.add(d.path); });
-    fill(tree, current, 0);
+    filterRows();
+    $("shown").textContent = fmt(nPass) + " of " + fmt(L.n) + " listed file(s) shown";
+    emptyEl.hidden = nPass > 0;
+    emptyEl.textContent = L.n === 0 ? "No changed files." : "Nothing matches the filters.";
+    if (nPass > 0 && nPass <= 300) open.fill(1);
+    reflow();
   }
 
-  function fill(box, node, depth) {
-    Array.from(node.dirs.values()).sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; })
-      .forEach(function (d) { box.appendChild(dirRow(d, depth)); });
-    node.files.forEach(function (f) { box.appendChild(fileRow(f, depth)); });
+  // The visible tree as entries, folders before files, a folder with no files of its own and one subfolder merged
+  // into it ("a/b/c/").
+  function flatten() {
+    ek = []; ev = []; edp = []; pList = []; labels = new Map();
+    if (nPass === 0) return;
+    (function walk(d, depth) {
+      var ks = kids[d];
+      for (var x = 0; x < ks.length; x++) {
+        var c = ks[x];
+        if (!total[c]) continue;
+        var name = L.dn[c], last = c;
+        while (!direct[last]) {
+          var only = -1, many = false, kk = kids[last];
+          for (var y = 0; y < kk.length && !many; y++) if (total[kk[y]]) { if (only < 0) only = kk[y]; else many = true; }
+          if (many || only < 0) break;
+          name += "/" + L.dn[only]; last = only;
+        }
+        labels.set(last, name);
+        ek.push(0); ev.push(last); edp.push(depth);
+        if (open[last]) walk(last, depth + 1);
+      }
+      for (var k = fstart[d]; k < fstart[d + 1]; k++) {
+        var i = fidx[k];
+        if (!pass[i]) continue;
+        ek.push(1); ev.push(i); edp.push(depth);
+        if (openFile.has(i)) { pList.push(ek.length); ek.push(2); ev.push(i); edp.push(depth); }
+      }
+    })(0, 0);
+  }
+
+  // After the entries change: rows are drawn afresh (badges, carets, merged names), open panels are kept.
+  function reflow() {
+    flatten();
+    drawn.forEach(function (node, key) { if (key.charAt(0) !== "2") { node.remove(); drawn.delete(key); } });
+    draw();
+  }
+
+  function schedule() { if (!raf) raf = requestAnimationFrame(draw); }
+
+  function ph(k) { var h = panelH.get(ev[k]); return h === undefined ? 160 : h; }
+  function entryTop(k) {
+    var y = k * ROWH;
+    for (var j = 0; j < pList.length && pList[j] < k; j++) y += ph(pList[j]) - ROWH;
+    return y;
+  }
+  function entryAt(y) {
+    var extra = 0;
+    for (var j = 0; j < pList.length; j++) {
+      var e = pList[j], top = e * ROWH + extra;
+      if (y < top) break;
+      var h = ph(e);
+      if (y < top + h) return e;
+      extra += h - ROWH;
+    }
+    return Math.max(0, Math.min(ek.length - 1, Math.floor((y - extra) / ROWH)));
+  }
+
+  function measure(panel) {
+    var h = panel.offsetHeight, i = +panel.dataset.i;
+    if (!(h > 0) || panelH.get(i) === h) return false;
+    panelH.set(i, h);
+    return true;
+  }
+
+  // Place the entries on screen; again (a few times at most) while a panel just drawn turns out another height.
+  function draw() {
+    raf = 0;
+    for (var pass = 0; pass < 4; pass++) {
+      place();
+      var changed = false;
+      drawn.forEach(function (node, key) { if (key.charAt(0) === "2" && measure(node)) changed = true; });
+      if (!changed) break;
+    }
+  }
+
+  function place() {
+    var vt = entryTop(ek.length), h = Math.min(vt, MAXH), vh = window.innerHeight;
+    tree.style.height = h + "px";
+    var realTop = Math.max(0, Math.min(h, -tree.getBoundingClientRect().top));
+    var scale = vt > h && h > vh ? (vt - vh) / (h - vh) : 1, virtTop = realTop * scale;
+    var keep = new Map();
+    if (ek.length) {
+      var k = entryAt(Math.max(0, virtTop - 400)), y = entryTop(k), end = virtTop + vh + 400;
+      for (; k < ek.length && y < end; k++) {
+        var key = ek[k] + ":" + ev[k], node = drawn.get(key);
+        if (node) drawn.delete(key); else node = make(k);
+        node.style.top = (realTop + y - virtTop) + "px";
+        keep.set(key, node);
+        y += ek[k] === 2 ? ph(k) : ROWH;
+      }
+    }
+    drawn.forEach(function (node) { if (ro) ro.unobserve(node); node.remove(); });
+    drawn = keep;
+  }
+
+  function make(k) {
+    var kind = ek[k], id = ev[k], node;
+    if (kind === 2) {
+      node = el("div", "panel"); node.dataset.i = id;
+      tree.appendChild(node); ro.observe(node);
+      drawPanel(node, row(id));
+      return node;
+    }
+    node = kind === 0 ? dirRow(id, edp[k]) : fileRow(id, edp[k]);
+    tree.appendChild(node);
+    return node;
   }
 
   function dirRow(d, depth) {
-    var wrap = el("div");
     var row = el("div", "row dir");
     row.style.paddingLeft = (10 + depth * 16) + "px";
-    var caret = el("span", "caret", state.open.has(d.path) ? "▼" : "▶");
-    row.appendChild(caret);
-    row.appendChild(el("span", "name", d.name + "/"));
+    row.appendChild(el("span", "caret", open[d] ? "▼" : "▶"));
+    row.appendChild(el("span", "name", labels.get(d) + "/"));
     var badges = el("span", "badges");
-    Object.keys(d.tags).forEach(function (t) { badges.appendChild(tagEl(t, t + " " + fmt(d.tags[t]))); });
+    for (var t = 0; t < NT; t++) { var c = cnt[d * NT + t]; if (c) badges.appendChild(tagEl(T[t], T[t] + " " + fmt(c))); }
     row.appendChild(badges);
-    var kids = null;
-    function sync() {
-      var open = state.open.has(d.path);
-      caret.textContent = open ? "▼" : "▶";
-      if (open && !kids) { kids = el("div"); fill(kids, d, depth + 1); wrap.appendChild(kids); }
-      if (kids) kids.hidden = !open;
-    }
-    row.addEventListener("click", function () { if (state.open.has(d.path)) state.open.delete(d.path); else state.open.add(d.path); sync(); });
-    wrap.appendChild(row);
-    sync();
-    return wrap;
+    row.addEventListener("click", function () { open[d] = open[d] ? 0 : 1; reflow(); });
+    return row;
   }
 
-  function fileRow(f, depth) {
-    var wrap = el("div");
-    var row = el("div", "row file");
-    row.style.paddingLeft = (10 + depth * 16 + 12) + "px";
-    row.appendChild(tagEl(f.t));
+  function fileRow(i, depth) {
+    var f = row(i);
+    var r = el("div", "row file");
+    r.style.paddingLeft = (10 + depth * 16 + 12) + "px";
+    r.appendChild(tagEl(f.t));
     var base = f.p.slice(f.p.lastIndexOf("/") + 1);
     var name = el("span", "name", f.f ? f.f + " → " + base : base);
     name.title = f.f ? f.f + " → " + f.p : f.p;
-    row.appendChild(name);
-    if (f.w) { var w = el("span", "warn", "changed since"); w.title = f.w; row.appendChild(w); }
-    row.appendChild(el("span", "extra", extra(f)));
-    var panel = null;
-    row.addEventListener("click", function () {
-      if (panel) { panel.remove(); panel = null; state.panels.delete(f.i); return; }
-      panel = el("div", "panel");
-      wrap.appendChild(panel);
-      state.panels.set(f.i, panel);
-      drawPanel(panel, f);
+    r.appendChild(name);
+    if (f.w) { var w = el("span", "warn", "changed since"); w.title = f.w; r.appendChild(w); }
+    r.appendChild(el("span", "extra", extra(f)));
+    r.addEventListener("click", function () {
+      if (openFile.has(i)) openFile.delete(i); else openFile.add(i);
+      var key = "2:" + i, p = drawn.get(key);
+      if (p && !openFile.has(i)) { ro.unobserve(p); p.remove(); drawn.delete(key); }
+      reflow();
     });
-    wrap.appendChild(row);
-    return wrap;
+    return r;
   }
 
   function extra(f) {
@@ -412,7 +574,7 @@ var CD = (function () {
     var body = el("div", "msg", "Loading diff…");
     panel.appendChild(body);
     load(f.i, function (d) {
-      if (!panel.isConnected && !state.panels.has(f.i)) return;
+      if (!panel.isConnected) return; // scrolled away or closed: drawn again from the cache when back
       if (!d) { body.textContent = "This file's diff could not be loaded (data/d/" + f.i + ".js is missing)."; return; }
       if (d.mode === "merge" && d.blocks) {
         head.appendChild(el("span", null, d.full
@@ -428,6 +590,8 @@ var CD = (function () {
       }
       var view = d.mode === "merge" ? mergeView(d, head) : (state.mode === "split" ? splitView(parse(d.text)) : inlineView(parse(d.text)));
       body.replaceWith(view);
+      if (view.fit) view.fit();
+      if (panel.dataset.i !== undefined && measure(panel)) draw();
     });
   }
 
@@ -495,26 +659,49 @@ var CD = (function () {
     return box;
   }
 
+  // Two panes of equal width, one per side, each with its own horizontal scrollbar; scrolling one scrolls the
+  // other, so a long line on one side never widens or shifts the other. The patch header (diff --git, ---, +++)
+  // goes full width above them; every later row goes into both panes, so they stay row for row.
   function splitView(rows) {
-    var box = el("div", "diff"), t = el("table", "d");
+    var box = el("div", "split"), head = el("div", "diff meta-head"), ht = el("table", "d");
+    var panes = el("div", "panes"), L = el("div", "diff pane"), R = el("div", "diff pane");
+    var lt = el("table", "d"), rt = el("table", "d"), started = false;
+    function pair(lcls, lcells, rcls, rcells) {
+      var a = el("tr", lcls), b = el("tr", rcls); a.append.apply(a, lcells); b.append.apply(b, rcells);
+      if (lcells.length === 1) lcells[0].colSpan = 2;
+      if (rcells.length === 1) rcells[0].colSpan = 2;
+      lt.appendChild(a); rt.appendChild(b);
+    }
     blocks(rows).forEach(function (b) {
       if (b.dels) {
         for (var j = 0; j < Math.max(b.dels.length, b.adds.length); j++) {
-          var d = b.dels[j], a = b.adds[j], tr = el("tr");
-          if (d) { tr.appendChild(td("ln", d.o)); var x = td("tx half del"); spans(x, d.t, a && a.t, "hl-del"); tr.appendChild(x); }
-          else tr.append(td("ln void"), td("tx half void"));
-          if (a) { tr.appendChild(td("ln", a.n)); var y = td("tx half add"); spans(y, a.t, d && d.t, "hl-add"); tr.appendChild(y); }
-          else tr.append(td("ln void"), td("tx half void"));
-          t.appendChild(tr);
+          var d = b.dels[j], a = b.adds[j], x = td("tx"), y = td("tx");
+          if (d) spans(x, d.t, a && a.t, "hl-del");
+          if (a) spans(y, a.t, d && d.t, "hl-add");
+          pair(d ? "del" : "void", [td("ln", d ? d.o : null), x], a ? "add" : "void", [td("ln", a ? a.n : null), y]);
         }
         return;
       }
-      var tr = el("tr", b.k === "hunk" || b.k === "meta" ? b.k : "");
-      if (b.k === "hunk" || b.k === "meta" || b.k === "nonl") { var c = td("tx", b.t); c.colSpan = 4; tr.appendChild(c); }
-      else tr.append(td("ln", b.o), td("tx half", b.t), td("ln", b.n), td("tx half", b.t));
-      t.appendChild(tr);
+      if (b.k === "hunk") started = true;
+      if (b.k === "meta" && !started) { var tr = el("tr", "meta"), c = td("tx", b.t); tr.appendChild(c); ht.appendChild(tr); return; }
+      if (b.k === "hunk") {   // each side shows its own range: @@ -13,7 on the left, +13,9 @@ on the right
+        var m = /^@@ (-\S+) (\+\S+) @@(.*)$/.exec(b.t);
+        pair("hunk", [td("tx", m ? "@@ " + m[1] + " @@" + m[3] : b.t)], "hunk", [td("tx", m ? "@@ " + m[2] + " @@" + m[3] : b.t)]);
+        return;
+      }
+      if (b.k === "meta" || b.k === "nonl") { pair(b.k, [td("tx", b.t)], b.k, [td("tx", "")]); return; }
+      pair("", [td("ln", b.o), td("tx", b.t)], "", [td("ln", b.n), td("tx", b.t)]);
     });
-    box.appendChild(t);
+    if (ht.rows.length) { head.appendChild(ht); box.appendChild(head); }
+    L.appendChild(lt); R.appendChild(rt); panes.append(L, R); box.appendChild(panes);
+    // Scrolling either pane moves the other; the follower's own scroll event then finds them equal and stops.
+    function follow(from, to) { from.addEventListener("scroll", function () { if (to.scrollLeft !== from.scrollLeft) to.scrollLeft = from.scrollLeft; }); }
+    follow(L, R); follow(R, L);
+    // Once on the page: both tables as wide as the wider one, so the panes scroll the same distance.
+    box.fit = function () {
+      var w = Math.max(lt.scrollWidth, rt.scrollWidth);
+      if (w) lt.style.minWidth = rt.style.minWidth = w + "px";
+    };
     return box;
   }
 

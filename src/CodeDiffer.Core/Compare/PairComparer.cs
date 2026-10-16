@@ -35,14 +35,17 @@ public static class PairComparer
 {
     public const int ChunkBytes = 1 << 20;
 
-    public static async Task<PairResult> CompareAsync(FileEntry left, FileEntry right, bool hashes, CancellationToken ct = default, Action<int, int>? onChunk = null)
+    public static async Task<PairResult> CompareAsync(FileEntry left, FileEntry right, bool hashes, CancellationToken ct = default, Action<int, int>? onChunk = null,
+        IoMeter? meter = null)
     {
+        long t0 = IoMeter.Now();
         using var lh = Open(left.FullPath);
         using var rh = Open(right.FullPath);
         long hashedAt = DateTime.UtcNow.Ticks;
         var beforeL = hashes ? FileStat.Of(lh, left.FullPath) : default;
         var beforeR = hashes ? FileStat.Of(rh, right.FullPath) : default;
         long lenL = RandomAccess.GetLength(lh), lenR = RandomAccess.GetLength(rh);
+        meter?.Opened(t0);
         if (lenL != lenR && !hashes) return new PairResult(false, null, null);
 
         var hl = hashes ? new Hasher() : null;
@@ -56,12 +59,15 @@ public static class PairComparer
             while (offL < lenL || offR < lenR)
             {
                 // Each side's chunk read in full (a read may return less, over SMB too): chunks of two equal files line up.
+                long tRead = IoMeter.Now();
                 var tl = offL < lenL ? Fill(lh, bufL.AsMemory(0, (int)Math.Min(ChunkBytes, lenL - offL)), offL, ct) : ValueTask.FromResult(0);
                 var tr = offR < lenR ? Fill(rh, bufR.AsMemory(0, (int)Math.Min(ChunkBytes, lenR - offR)), offR, ct) : ValueTask.FromResult(0);
                 int nl = await tl.ConfigureAwait(false);
                 int nr = await tr.ConfigureAwait(false);
+                meter?.Read(tRead, nl + nr);
                 if (nl == 0 && nr == 0) break; // file shrank under us — the after-stat marks it unstable
                 onChunk?.Invoke(nl, nl + nr); // progress: one side's advance, bytes read
+                long tWork = IoMeter.Now();
 
                 if (equal && (nl != nr || !bufL.AsSpan(0, nl).SequenceEqual(bufR.AsSpan(0, nr))))
                 {
@@ -70,6 +76,7 @@ public static class PairComparer
                 }
                 hl?.Append(bufL.AsSpan(0, nl));
                 hr?.Append(bufR.AsSpan(0, nr));
+                meter?.Worked(tWork);
                 offL += nl;
                 offR += nr;
             }
@@ -94,22 +101,30 @@ public static class PairComparer
     }
 
     /// <summary>Whole-file XxHash128 + SHA-256 of one file (streamed, 1 MB chunks), stat-bracketed.</summary>
-    public static async Task<FileHashes> HashAsync(FileEntry file, CancellationToken ct = default, Action<int, int>? onChunk = null)
+    public static async Task<FileHashes> HashAsync(FileEntry file, CancellationToken ct = default, Action<int, int>? onChunk = null,
+        IoMeter? meter = null)
     {
+        long t0 = IoMeter.Now();
         using var h = Open(file.FullPath);
         long hashedAt = DateTime.UtcNow.Ticks;
         var before = FileStat.Of(h, file.FullPath);
+        meter?.Opened(t0);
         var hasher = new Hasher();
         var buf = ArrayPool<byte>.Shared.Rent(ChunkBytes);
         try
         {
             long off = 0;
             int n;
+            long tRead = IoMeter.Now();
             while ((n = await RandomAccess.ReadAsync(h, buf.AsMemory(0, ChunkBytes), off, ct).ConfigureAwait(false)) > 0)
             {
+                meter?.Read(tRead, n);
                 onChunk?.Invoke(n, n);
+                long tWork = IoMeter.Now();
                 hasher.Append(buf.AsSpan(0, n));
+                meter?.Worked(tWork);
                 off += n;
+                tRead = IoMeter.Now();
             }
             return hasher.Finish(Stable(before, FileStat.Of(h, file.FullPath), file), hashedAt);
         }

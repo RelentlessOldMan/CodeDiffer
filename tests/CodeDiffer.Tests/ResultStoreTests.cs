@@ -219,8 +219,7 @@ public class ResultStoreTests : IDisposable
         Assert.Equal(6, r.Rendered);
         Assert.Equal(1, r.Capped);     // big.txt: 1,600 changed lines > 500
 
-        var index = Data(Path.Combine(root, "data", "index.js"), "CD.index(");
-        var files = index.GetProperty("files").EnumerateArray().ToList();
+        var (_, files) = HtmlReport.ReadIndex(Path.Combine(root, "data", "index.js"));
         Assert.Equal(["big.txt", "gone.h", "new.h", "src/f3.c", "src/f4.c", "src/f5.c"], files.Select(f => f.GetProperty("p").GetString()));
         var big = files[0];
         Assert.Equal(800, big.GetProperty("a").GetInt32());
@@ -284,6 +283,39 @@ public class ResultStoreTests : IDisposable
     }
 
     [Fact]
+    public void HtmlReport_FileList_RoundTrips()
+    {
+        // Root files, nested folders, non-ASCII and HTML-ish names, a key on a few rows (sparse) and on most (dense),
+        // sizes past 2^31, and one note on every row (stored once).
+        var rows = new List<Dictionary<string, object?>>();
+        for (int i = 0; i < 40; i++)
+        {
+            var row = new Dictionary<string, object?>
+            {
+                ["p"] = i % 5 == 0 ? $"root{i}.txt" : $"src/日本/d{i % 3}/</script>{i}.c",
+                ["t"] = i % 2 == 0 ? "M" : "A",
+                ["ls"] = 5_000_000_000L + i,
+                ["rs"] = i,
+                ["n"] = "diff not included (report limit 5,000 files)",
+            };
+            if (i % 2 == 0) row["r"] = "content";
+            if (i == 7) { row["f"] = "old/name.c"; row["sim"] = 870; row["ed"] = 1; }
+            rows.Add(row);
+        }
+        var encoded = HtmlReport.EncodeFiles(rows);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(encoded, "report limit"));
+        var path = Path.Combine(_dir, "index.js");
+        File.WriteAllText(path, "CD.index({\"id\":\"x\"}," + JsonSerializer.Serialize(encoded) + ");\n");
+        var (meta, files) = HtmlReport.ReadIndex(path);
+        Assert.Equal("x", meta.GetProperty("id").GetString());
+        Assert.DoesNotContain("</script>", File.ReadAllText(path));
+        static SortedDictionary<string, string> Norm(JsonElement e) => new(e.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetRawText()));
+        Assert.Equal(rows.Count, files.Count);
+        for (int i = 0; i < rows.Count; i++)
+            Assert.Equal(Norm(JsonSerializer.SerializeToElement(rows[i])), Norm(files[i]));
+    }
+
+    [Fact]
     public void HtmlReport_DisclosesLimits()
     {
         var s = Done(new SessionStore(resultsRoot: Results).Start(L, R, NoCache));
@@ -291,7 +323,7 @@ public class ResultStoreTests : IDisposable
         Assert.Equal(9, r.Files);  // + 3 identical
         Assert.Equal(2, r.Rendered);
         Assert.Equal(4, r.NotRendered);
-        var files = Data(Path.Combine(Path.GetDirectoryName(r.IndexPath)!, "data", "index.js"), "CD.index(").GetProperty("files").EnumerateArray().ToList();
+        var (_, files) = HtmlReport.ReadIndex(Path.Combine(Path.GetDirectoryName(r.IndexPath)!, "data", "index.js"));
         Assert.Contains(files, f => f.TryGetProperty("n", out var n) && n.GetString()!.Contains("report limit 2"));
         Assert.Equal(3, files.Count(f => f.GetProperty("t").GetString() == "="));
     }
@@ -303,9 +335,8 @@ public class ResultStoreTests : IDisposable
         var s = Done(new SessionStore(resultsRoot: Results).Start3(L, R, Path.Combine(_dir, "V2"), NoCache));
         var r = HtmlReport.Write(s);
         var root = Path.GetDirectoryName(r.IndexPath)!;
-        var index = Data(Path.Combine(root, "data", "index.js"), "CD.index(");
+        var (index, files) = HtmlReport.ReadIndex(Path.Combine(root, "data", "index.js"));
         Assert.Equal("compare3", index.GetProperty("kind").GetString());
-        var files = index.GetProperty("files").EnumerateArray().ToList();
         int cf = files.FindIndex(f => f.GetProperty("t").GetString() == "CF");
         Assert.Equal("src/f3.c", files[cf].GetProperty("p").GetString());
         var chunk = Data(Path.Combine(root, "data", "d", $"{cf}.js"), $"CD.diff({cf},");
@@ -324,7 +355,7 @@ public class ResultStoreTests : IDisposable
         var s = Done(new SessionStore(resultsRoot: Results).Start3(L, R, Path.Combine(_dir, "V2"), NoCache));
         var r = HtmlReport.Write(s);
         var root = Path.GetDirectoryName(r.IndexPath)!;
-        var files = Data(Path.Combine(root, "data", "index.js"), "CD.index(").GetProperty("files").EnumerateArray().ToList();
+        var (_, files) = HtmlReport.ReadIndex(Path.Combine(root, "data", "index.js"));
         int mg = files.FindIndex(f => f.GetProperty("t").GetString() == "MG");
         var text = Data(Path.Combine(root, "data", "d", $"{mg}.js"), $"CD.diff({mg},").GetProperty("text").GetString()!;
         Assert.Contains("-f4 10\n+changed\n", text);

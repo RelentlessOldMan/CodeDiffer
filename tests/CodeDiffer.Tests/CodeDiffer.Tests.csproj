@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
@@ -22,6 +22,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CodeDiffer.Core\CodeDiffer.Core.csproj" />
+    <!-- The MCP server and the CLI are tested too, so the tests target net10.0 like both exes (the CodeCompass
+         model: CodeCompass.Core.Tests references CodeCompass.Mcp). Core itself stays net8.0. -->
+    <ProjectReference Include="..\..\src\CodeDiffer.Mcp\CodeDiffer.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\CodeDiffer.Cli\CodeDiffer.Cli.csproj" />
   </ItemGroup>
 
 </Project>

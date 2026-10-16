@@ -65,7 +65,9 @@ Locked decisions
 
 - Stack: .NET / C#. Reasons mirror the family - first-party MCP SDK, self-contained native Windows
   binaries ("grab it and go"), excellent memory-mapped-file / span / parallel-IO story, and it is the
-  stack the author maintains. Libraries target net8.0 (fleet floor); CLI + MCP target net10.0.
+  stack the author maintains. Libraries target net8.0 (fleet floor); CLI + MCP target net10.0. Shipped
+  like CodeCompass: a Claude Code / Codex plugin folder whose bin\ holds both exes on one shared
+  self-contained runtime (so both must be net10.0, which the MCP SDK needs).
 - The output is a SESSION, not a document. A compare writes one on-disk RESULT STORE (outside the
   compared trees, timestamped); the agent pages queries against it and the HTML lazily loads from it.
   Nothing materializes the full diff up front. (Review recommendation (b), made load-bearing.)

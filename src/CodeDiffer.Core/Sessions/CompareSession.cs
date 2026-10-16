@@ -62,14 +62,45 @@ public abstract class Session
     /// <summary>The token the running compare watches.</summary>
     protected CancellationToken Token => _cts.Token;
     private readonly CancellationTokenSource _cts = new();
+    private volatile string? _stopReason;
+    private RunRecord? _record;
+
+    /// <summary>The live progress of each compare this runs (one, or base→v1 and base→v2), for telemetry.</summary>
+    internal abstract IEnumerable<(string Name, CompareProgress Progress)> Progresses();
 
     /// <summary>Ask a running compare to stop; false when it had already finished. It stops within moments (a
     /// chunk per file in flight), keeping the hashes it read so a re-run picks up from there.</summary>
-    public bool Cancel()
+    /// <param name="reason">Why, when it is not a user's cancel (the server shutting down): said in the result and its run record.</param>
+    public bool Cancel(string? reason = null)
     {
         if (IsDone) return false;
+        _stopReason ??= reason;
         _cts.Cancel();
         return true;
+    }
+
+    // Compares running in this process: stopped cleanly when it is being shut down, recorded when it crashes.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Session, byte> Running = new();
+
+    /// <summary>Stop every compare running in this process (it is shutting down) and wait up to <paramref name="wait"/>
+    /// for them to save the hashes they read and record why they stopped.</summary>
+    public static void StopAll(string reason, TimeSpan wait)
+    {
+        var all = Running.Keys.ToList();
+        foreach (var s in all) s.Cancel(reason);
+        var until = DateTime.UtcNow + wait;
+        foreach (var s in all)
+        {
+            var left = until - DateTime.UtcNow;
+            if (left <= TimeSpan.Zero) break;
+            s.Wait(left);
+        }
+    }
+
+    /// <summary>The process is going down on an unhandled exception: record it in every running compare's run record.</summary>
+    public static void RecordCrash(Exception ex)
+    {
+        foreach (var s in Running.Keys) s._record?.End("crashed", ex.GetType().Name);
     }
 
     /// <summary>Wait up to <paramref name="timeout"/> for the compare to finish; true when it has.</summary>
@@ -83,8 +114,10 @@ public abstract class Session
     /// <summary>Run the compare in the background; on success save it (a save failure is recorded, not thrown).</summary>
     protected Task<T> Run<T>(Func<T> work)
     {
+        Running[this] = 0;
         var task = System.Threading.Tasks.Task.Run(() =>
         {
+            if (ResultDir is not null) _record = new RunRecord(this);
             T result;
             try { result = work(); }
             catch (OperationCanceledException) when (_cts.IsCancellationRequested)
@@ -94,19 +127,25 @@ public abstract class Session
             catch (Exception ex)
             {
                 _finished = _clock.Elapsed;
-                if (ResultDir is not null) ResultStore.TryMarkFailed(this, "failed", (ex.InnerException ?? ex).Message);
+                var inner = ex.InnerException ?? ex;
+                _record?.End("failed", inner.GetType().Name);
+                if (ResultDir is not null) ResultStore.TryMarkFailed(this, "failed", inner.Message);
                 throw;
             }
             _finished = _clock.Elapsed;
             Persist(result!);
+            _record?.End(SaveError is null ? "done" : "done (result not saved)", null);
             return result;
         }, _cts.Token);
         // Also covers a cancel that lands before the work even started (Task.Run then never runs it).
         task.ContinueWith(_ =>
         {
             _finished = _clock.Elapsed;
-            if (ResultDir is not null) ResultStore.TryMarkFailed(this, "cancelled", null);
+            _record?.End(_stopReason ?? "cancelled", null);
+            if (ResultDir is not null) ResultStore.TryMarkFailed(this, "cancelled", _stopReason);
         }, CancellationToken.None, TaskContinuationOptions.OnlyOnCanceled | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        task.ContinueWith(_ => { Running.TryRemove(this, out byte _); _record?.Dispose(); },
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         return task;
     }
 
@@ -168,6 +207,9 @@ public sealed class CompareSession : Session
 
     /// <summary>The report when finished successfully, else null.</summary>
     public CompareReport? Report => _task.IsCompletedSuccessfully ? _task.Result : null;
+
+    internal override IEnumerable<(string Name, CompareProgress Progress)> Progresses()
+        => Progress is null ? [] : [("compare", Progress)];
 }
 
 /// <summary>A 3-way compare (base, v1, v2): what each side changed, and whether the two merge.</summary>
@@ -220,6 +262,9 @@ public sealed class Compare3Session : Session
     }
 
     public ThreeWayReport? Report => _task.IsCompletedSuccessfully ? _task.Result : null;
+
+    internal override IEnumerable<(string Name, CompareProgress Progress)> Progresses()
+        => Progress1 is null || Progress2 is null ? [] : [("base->v1", Progress1), ("base->v2", Progress2)];
 }
 
 /// <summary>

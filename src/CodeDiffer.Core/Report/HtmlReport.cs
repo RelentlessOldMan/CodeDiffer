@@ -209,13 +209,21 @@ public static class HtmlReport
         var meta = Meta(s, opt);
         if (stopped > 0)
             ((List<string>)meta["notes"]!).Add($"This report was stopped before it was finished: {stopped:N0} file(s) have no diff. Write it again for the rest.");
-        meta["files"] = rows;
         meta["report"] = new Dictionary<string, object?>
         {
             ["rendered"] = rendered, ["capped"] = capped, ["large"] = large, ["notRendered"] = skipped,
             ["unreadable"] = unreadable, ["stopped"] = stopped, ["maxLines"] = opt.MaxLines, ["maxDiffs"] = opt.MaxDiffs,
         };
-        File.WriteAllText(Path.Combine(outDir, "data", "index.js"), $"CD.index({JsonSerializer.Serialize(meta, Json)});\n", new UTF8Encoding(false));
+        using (var data = new StreamWriter(Path.Combine(outDir, "data", "index.js"), false, new UTF8Encoding(false)))
+        {
+            // The list as one JSON string the page JSON.parse's: a JS object literal of a million rows costs the
+            // browser several times the time and memory to compile.
+            data.Write("CD.index(");
+            data.Write(JsonSerializer.Serialize(meta, Json));
+            data.Write(",");
+            data.Write(JsonSerializer.Serialize(EncodeFiles(rows), Json));
+            data.Write(");\n");
+        }
         var index = Path.Combine(outDir, "index.html");
         File.WriteAllText(index, Template(), new UTF8Encoding(false));
         return new HtmlReportResult(index, items.Count, rendered, capped, large, skipped, unreadable, stopped);
@@ -383,6 +391,170 @@ public static class HtmlReport
 
     private static string Join(Dictionary<string, object?> row, string note)
         => row.TryGetValue("n", out var old) && old is string s && s.Length > 0 ? s + " · " + note : note;
+
+    // ---- the file list ----
+
+    /// <summary>
+    /// The rows (one dictionary per listed file, keys as the page reads them) as compact JSON: each path as a folder
+    /// number and a file name over one table of folders (parents before children), every other key as a column, and
+    /// text that repeats (statuses, reasons, the same note on a million rows) stored once. A key on most rows is a
+    /// dense column (null where a row lacks it); a rare one is sparse, <c>[row, value, row, value, …]</c>.
+    /// <code>{"v":1,"n":rows,"fd":[folder…],"fn":[name…],"c":{key:[value…]},"s":{key:[row,value…]},
+    ///  "dp":[parent folder…],"dn":[folder name…],"S":[text…],"str":[keys whose values index S]}</code>
+    /// </summary>
+    internal static string EncodeFiles(IReadOnlyList<Dictionary<string, object?>> rows)
+    {
+        var dirs = new Dictionary<string, int>(StringComparer.Ordinal) { [""] = 0 };
+        var parent = new List<int> { -1 };
+        var dirName = new List<string> { "" };
+        int Dir(string path)
+        {
+            if (dirs.TryGetValue(path, out var i)) return i;
+            int cut = path.LastIndexOf('/');
+            int up = Dir(cut < 0 ? "" : path[..cut]);
+            i = parent.Count;
+            parent.Add(up);
+            dirName.Add(cut < 0 ? path : path[(cut + 1)..]);
+            dirs[path] = i;
+            return i;
+        }
+
+        var text = new Dictionary<string, int>(StringComparer.Ordinal);
+        var texts = new List<string>();
+        int Text(string t)
+        {
+            if (!text.TryGetValue(t, out var i)) { i = texts.Count; texts.Add(t); text[t] = i; }
+            return i;
+        }
+
+        var folder = new int[rows.Count];
+        var name = new string[rows.Count];
+        var columns = new Dictionary<string, List<(int Row, object Value)>>(StringComparer.Ordinal);
+        var stringKeys = new HashSet<string>(StringComparer.Ordinal);
+        for (int r = 0; r < rows.Count; r++)
+        {
+            foreach (var (key, value) in rows[r])
+            {
+                if (key == "p")
+                {
+                    var p = (string)value!;
+                    int cut = p.LastIndexOf('/');
+                    folder[r] = Dir(cut < 0 ? "" : p[..cut]);
+                    name[r] = cut < 0 ? p : p[(cut + 1)..];
+                    continue;
+                }
+                if (value is null) continue;
+                if (!columns.TryGetValue(key, out var col)) columns[key] = col = new();
+                if (value is string) stringKeys.Add(key);
+                col.Add((r, value));
+            }
+        }
+
+        var buffer = new MemoryStream();
+        using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            void Value(string key, object v)
+            {
+                switch (v)
+                {
+                    case string sv: w.WriteNumberValue(Text(sv)); break; // a text key holds only texts
+                    case int iv: w.WriteNumberValue(iv); break;
+                    case long lv: w.WriteNumberValue(lv); break;
+                    case bool bv: w.WriteNumberValue(bv ? 1 : 0); break;
+                    default: JsonSerializer.Serialize(w, v); break;
+                }
+            }
+            w.WriteStartObject();
+            w.WriteNumber("v", 1);
+            w.WriteNumber("n", rows.Count);
+            w.WriteStartArray("fd"); foreach (var f in folder) w.WriteNumberValue(f); w.WriteEndArray();
+            w.WriteStartArray("fn"); foreach (var n in name) w.WriteStringValue(n ?? ""); w.WriteEndArray();
+            var sparse = new List<string>();
+            w.WriteStartObject("c");
+            foreach (var (key, col) in columns)
+            {
+                if (col.Count * 4 < rows.Count) { sparse.Add(key); continue; }
+                w.WriteStartArray(key);
+                int next = 0;
+                foreach (var (row, v) in col)
+                {
+                    for (; next < row; next++) w.WriteNullValue();
+                    Value(key, v);
+                    next = row + 1;
+                }
+                for (; next < rows.Count; next++) w.WriteNullValue();
+                w.WriteEndArray();
+            }
+            w.WriteEndObject();
+            w.WriteStartObject("s");
+            foreach (var key in sparse)
+            {
+                w.WriteStartArray(key);
+                foreach (var (row, v) in columns[key]) { w.WriteNumberValue(row); Value(key, v); }
+                w.WriteEndArray();
+            }
+            w.WriteEndObject();
+            // Last: the folders and texts are all known only once every row is written.
+            w.WriteStartArray("dp"); foreach (var up in parent) w.WriteNumberValue(up); w.WriteEndArray();
+            w.WriteStartArray("dn"); foreach (var d in dirName) w.WriteStringValue(d); w.WriteEndArray();
+            w.WriteStartArray("S"); foreach (var t in texts) w.WriteStringValue(t); w.WriteEndArray();
+            w.WriteStartArray("str"); foreach (var k in stringKeys) w.WriteStringValue(k); w.WriteEndArray();
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+    }
+
+    /// <summary>A report's <c>data/index.js</c> read back: its meta, and its rows as the page sees them (for tests;
+    /// the page has its own reader of the same format).</summary>
+    internal static (JsonElement Meta, List<JsonElement> Files) ReadIndex(string indexJs)
+    {
+        var all = File.ReadAllText(indexJs);
+        const string head = "CD.index(";
+        if (!all.StartsWith(head, StringComparison.Ordinal)) throw new FormatException("not a CodeDiffer report index");
+        using var doc = JsonDocument.Parse("[" + all[head.Length..all.LastIndexOf(')')] + "]");
+        var meta = doc.RootElement[0].Clone();
+        using var list = JsonDocument.Parse(doc.RootElement[1].GetString()!);
+        var l = list.RootElement;
+        int n = l.GetProperty("n").GetInt32();
+        var dp = l.GetProperty("dp").EnumerateArray().Select(e => e.GetInt32()).ToArray();
+        var dn = l.GetProperty("dn").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        var dirPath = new string[dp.Length];
+        for (int d = 0; d < dp.Length; d++) // parents come before their children
+            dirPath[d] = d == 0 ? "" : dp[d] == 0 ? dn[d] : dirPath[dp[d]] + "/" + dn[d];
+        var texts = l.GetProperty("S").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        var stringKeys = l.GetProperty("str").EnumerateArray().Select(e => e.GetString()!).ToHashSet();
+        var fd = l.GetProperty("fd");
+        var fn = l.GetProperty("fn");
+        var rows = new List<Dictionary<string, object?>>(n);
+        for (int r = 0; r < n; r++)
+        {
+            int d = fd[r].GetInt32();
+            rows.Add(new Dictionary<string, object?> { ["p"] = d == 0 ? fn[r].GetString() : dirPath[d] + "/" + fn[r].GetString() });
+        }
+        object? Decode(string key, JsonElement v) => v.ValueKind switch
+        {
+            JsonValueKind.Null => null,
+            JsonValueKind.Number when stringKeys.Contains(key) => texts[v.GetInt32()],
+            JsonValueKind.Number => v.GetInt64(),
+            _ => v.Clone(),
+        };
+        foreach (var col in l.GetProperty("c").EnumerateObject())
+        {
+            int r = 0;
+            foreach (var v in col.Value.EnumerateArray())
+            {
+                if (Decode(col.Name, v) is { } x) rows[r][col.Name] = x;
+                r++;
+            }
+        }
+        foreach (var col in l.GetProperty("s").EnumerateObject())
+        {
+            var a = col.Value;
+            for (int k = 0; k + 1 < a.GetArrayLength(); k += 2)
+                if (Decode(col.Name, a[k + 1]) is { } x) rows[a[k].GetInt32()][col.Name] = x;
+        }
+        return (meta, rows.Select(r => JsonSerializer.SerializeToElement(r)).ToList());
+    }
 
     // ---- meta ----
 

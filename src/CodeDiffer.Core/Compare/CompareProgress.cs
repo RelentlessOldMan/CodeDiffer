@@ -23,6 +23,35 @@ public sealed class CompareProgress
     private readonly Stopwatch _contentClock = new();
     private long _listedLeft, _listedRight, _pairsDone, _bytesDone, _bytesRead, _cacheSides;
     private volatile ComparePhase _phase = ComparePhase.Starting;
+    private readonly Stopwatch _phaseClock = Stopwatch.StartNew();
+    private readonly TimeSpan[] _phaseTimes = new TimeSpan[Enum.GetValues<ComparePhase>().Length];
+    private long _checkpoints, _checkpointTicks, _lastCheckpointUtc;
+
+    /// <summary>Where the content phase's worker time goes (opening, waiting for bytes, comparing/hashing).</summary>
+    public IoMeter Io { get; } = new();
+
+    /// <summary>Wall time spent in each phase so far, the current one included (for a run that never finishes too).</summary>
+    public IReadOnlyList<(ComparePhase Phase, TimeSpan Elapsed)> PhaseTimes()
+    {
+        lock (_gate)
+        {
+            var now = _phaseClock.Elapsed;
+            return [.. _phaseTimes.Select((t, i) => ((ComparePhase)i, (ComparePhase)i == _phase ? t + now : t)).Where(x => x.Item2 > TimeSpan.Zero)];
+        }
+    }
+
+    /// <summary>Hash ledgers saved mid-compare (so a killed run keeps what it read), the time they took, and when the last
+    /// one was (UTC; null before the first).</summary>
+    public long Checkpoints => Interlocked.Read(ref _checkpoints);
+    public TimeSpan CheckpointTime => TimeSpan.FromTicks(Interlocked.Read(ref _checkpointTicks));
+    public DateTime? LastCheckpointUtc => Interlocked.Read(ref _lastCheckpointUtc) is > 0 and var t ? new DateTime(t, DateTimeKind.Utc) : null;
+
+    internal void Checkpointed(TimeSpan took)
+    {
+        Interlocked.Increment(ref _checkpoints);
+        Interlocked.Add(ref _checkpointTicks, took.Ticks);
+        Interlocked.Exchange(ref _lastCheckpointUtc, DateTime.UtcNow.Ticks);
+    }
 
     public ComparePhase Phase => _phase;
     public long ListedLeft => Interlocked.Read(ref _listedLeft);
@@ -100,7 +129,12 @@ public sealed class CompareProgress
     {
         if (phase == ComparePhase.Contents) _contentClock.Start();
         else _contentClock.Stop();
-        _phase = phase;
+        lock (_gate)
+        {
+            _phaseTimes[(int)_phase] += _phaseClock.Elapsed;
+            _phaseClock.Restart();
+            _phase = phase;
+        }
     }
 
     internal void Listed(bool left, int files)

@@ -68,6 +68,46 @@ public sealed class CancelTests : IDisposable
     }
 
     [Fact]
+    public void KilledOutright_KeepsTheHashesSavedMidRun()
+    {
+        // A kill runs no catch: all a killed run leaves is what was on disk at that moment. Copy the cache folder mid-run
+        // (once a checkpoint has saved the first 30 pairs), as a kill would leave it, and re-run from the copy.
+        var cache = Path.Combine(_dir, "cache");
+        var killed = Path.Combine(_dir, "cache-at-kill");
+        var p = new CompareProgress();
+        p.AfterPairChecked = done =>
+        {
+            if (done != 30) return;
+            for (var until = DateTime.UtcNow.AddSeconds(10); DateTime.UtcNow < until && p.Checkpoints == 0;) Thread.Sleep(20);
+            if (p.Checkpoints > 0) CopyDir(cache, killed);
+        };
+        var opts = new CompareOptions
+        {
+            Cache = CacheMode.On, Parallelism = 1, CacheBaseDir = cache, CodeCompassBaseDir = Path.Combine(_dir, "no-compass"),
+            Timing = new TrustTiming(0, 0), CheckpointInterval = TimeSpan.FromMilliseconds(50),
+        };
+        new DirectoryComparer(opts).Compare(_left, _right, p);
+        Assert.True(Directory.Exists(killed), "no checkpoint came before the 30th pair");
+
+        var r = new DirectoryComparer(new CompareOptions
+        {
+            Cache = CacheMode.On, Parallelism = 1, CacheBaseDir = killed, CodeCompassBaseDir = Path.Combine(_dir, "no-compass"),
+            Timing = new TrustTiming(0, 0),
+        }).Compare(_left, _right);
+        Assert.InRange(r.CacheHits, 2, 60); // what the checkpoint saved by pair 30, never more
+        Assert.Equal(Files - 1, r.Count(ChangeStatus.Identical));
+    }
+
+    private static void CopyDir(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (var d in Directory.GetDirectories(from, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, d)));
+        foreach (var f in Directory.GetFiles(from, "*", SearchOption.AllDirectories))
+            if (!f.EndsWith("ledger.lock", StringComparison.Ordinal)) File.Copy(f, Path.Combine(to, Path.GetRelativePath(from, f)));
+    }
+
+    [Fact]
     public void CancelledBeforeItStarts_Throws()
     {
         using var stop = new CancellationTokenSource();

@@ -46,9 +46,19 @@ CodeDiffer is one of a family of local, large-repo tools (shared author, stack, 
 
 ## Use it
 
-Two exes over one engine (the CodeCompass model). The
-[Releases](https://github.com/RelentlessOldMan/CodeDiffer/releases) page has both as a self-contained
-Windows x64 zip (no .NET needed; `INSTALL.txt` inside); `release.ps1` builds it from source.
+Two exes over one engine, shipped as a Claude Code (and Codex) plugin, the CodeCompass model. The
+[Releases](https://github.com/RelentlessOldMan/CodeDiffer/releases) page has it as a self-contained
+Windows x64 zip, `codediffer-plugin-<version>-win-x64.zip` (no .NET needed; `INSTALL.txt` inside). Unzip it
+somewhere stable (the unzipped folder IS the plugin), then in Claude Code:
+
+```
+/plugin marketplace add "C:\path\to\codediffer-plugin-<version>-win-x64"
+/plugin install codediffer@codediffer
+```
+
+(or `claude --plugin-dir "<folder>"` for one session; Codex: `./install-codediffer.ps1 -TargetHost Codex`).
+From source: `./build-plugin.ps1` builds `plugin\bin`, then point at `<repo>\plugin` the same way;
+`./make-release.ps1` builds the zip. [`plugin/README.md`](plugin/README.md) has the details.
 
 - **`CodeDiffer.Cli.exe`** — `compare <left> <right>` (status + reason per file; `--patch` for a
   `git apply`-able patch), `compare3 <base> <v1> <v2>` (3-way: v1 only · v2 only · agreed · merged ·
@@ -56,22 +66,15 @@ Windows x64 zip (no .NET needed; `INSTALL.txt` inside); `release.ps1` builds it 
   (apply that overlay), `apply <left> <right> <target> [--write]` (port a change set onto a third tree), `diff <a> <b>`,
   `blockdiff`, `verify`, `report <id>` (HTML report of a saved compare; or `--html` on `compare`/`compare3`),
   `results` (saved compares; `--prune` deletes all but the newest N, a dry run unless `--yes`). `help` lists the flags.
-- **`CodeDiffer.Mcp.exe`** — the stdio MCP server for agents. Publish it outside the build tree (a running
-  server locks its exe) and register it:
-
-  ```powershell
-  dotnet publish src\CodeDiffer.Mcp -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $env:LOCALAPPDATA\CodeDiffer\bin
-  claude mcp add --scope user codediffer -- $env:LOCALAPPDATA\CodeDiffer\bin\CodeDiffer.Mcp.exe
-  ```
-
-  Tools: `start_compare` / `start_compare3`
+- **`CodeDiffer.Mcp.exe`** — the stdio MCP server for agents, registered by the plugin. Tools: `start_compare` / `start_compare3`
   (background, return an id), `get_summary` (constant size; while running: progress, time left and the
   differences found so far, which `list_files` / `get_file_diff` can already open), `list_files` (paged/filtered), `get_file_diff`
   (one file, capped — a 2-way patch, or a 3-way merge with diff3 conflict markers; the overflow goes to a
   file), `get_stats`, `export_changeset` (whole patch to a file), `apply_changeset` (port the changes onto a
   third tree by 3-way merge; dry run unless `write=true`), `write_report` (the HTML report, for a human), `write_merge` (a compare3's merge as an overlay on v1:
   the changed files, text conflicts with diff3 markers, a deletes list; CLI `compare3 --merge-out DIR`),
-  `list_compares` (saved compares; any id reopens without re-comparing), `cancel_compare` (stop a running
+  `list_compares` (saved compares; any id reopens without re-comparing), `get_run_telemetry` (how recent
+  compares ran, numbers only: how each ended, memory, time per phase, network vs work), `cancel_compare` (stop a running
   compare; the hashes it read are kept, so starting it again only reads the rest; Ctrl+C in the CLI).
 
 Every finished compare is saved to a fresh `yyyyMMdd-HHmmss-<id>` directory under
@@ -104,8 +107,8 @@ dotnet build CodeDiffer.slnx -c Release
 dotnet test  CodeDiffer.slnx -c Release
 ```
 
-Libraries target **net8.0** (fleet floor); the CLI + MCP server target **net10.0** (requires the .NET 10
-SDK to build). See [`DESIGN.txt`](DESIGN.txt) for architecture and the regression suite seeded from a
+Libraries target **net8.0** (fleet floor); the CLI, the MCP server and the tests (which cover all three)
+target **net10.0** (requires the .NET 10 SDK to build). See [`DESIGN.txt`](DESIGN.txt) for architecture and the regression suite seeded from a
 prototype-diff-tool review.
 
 ## Contributing

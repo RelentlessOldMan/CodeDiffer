@@ -120,6 +120,25 @@ Stopping a report (Ctrl+C) stops a giant file's block diff mid-read too, and a c
 In the MCP server a cancelled request stops the same way: `write_report` (written whole, the rest listed
 without a diff), `apply_changeset` (between files, as Ctrl+C does `apply`), `write_merge` and `get_file_diff`.
 
+**Killed outright, resumed (built):** a process ended with no cancel (taskkill, a crash, a host killing the
+server) runs no catch, so the hashes are also saved *while* contents are read: at least a minute apart, only when
+new ones came in, and backing off to stay under ~5% of the run when a save is slow (written as a new snapshot and
+a manifest swap, so a kill mid-save leaves the old ledger or the new one). Re-running the same compare is the
+resume: it reads only what wasn't saved (the walk is done again; a giant file being read at the kill is read
+again). Files are read biggest first, so the first save comes once the first giants finish. A clean shutdown
+stops a running compare as a cancel does and records why: the MCP host stopping the server, the CLI's console
+window closed, a logoff or shutdown (`stopped: …` in its run record and `compare.json`).
+
+**Run record (built):** `run.json` in the result directory, in numbers only (no path, file name or error text,
+so it can be shared as is): rewritten every 15 s while the compare runs and once at its end with how it ended
+(done, failed + the exception's type, cancelled, `stopped: …`, `crashed` + type). A run killed outright leaves
+its last heartbeat, so it says when it died (within 15 s), in which phase, how far it got and what it was using.
+It holds process memory (working set and its peak, private, .NET heap and its peak, full GCs), CPU time, threads,
+handles, the machine's cores and memory load, and per compare: files listed, same-size pairs and bytes checked,
+bytes read, cache hits, differences found, wall time per phase, mid-run hash saves, and the content phase's worker
+time split into opening files, waiting for bytes (the network, over a share) and comparing+hashing.
+`codediffer runs [--max N]` and the MCP tool `get_run_telemetry` print it, newest first.
+
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
 `<results>\yyyyMMdd-HHmmss-<id>\` (default `%LOCALAPPDATA%\CodeDiffer\results`, `CODEDIFFER_RESULTS_DIR`
 overrides; refused if it would land inside a compared tree). `compare.json` (format/version, kind, state

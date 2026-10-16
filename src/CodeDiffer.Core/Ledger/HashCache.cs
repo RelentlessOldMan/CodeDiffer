@@ -117,6 +117,10 @@ public sealed class HashCache
     private readonly TrustTiming _timing;
     private readonly ConcurrentDictionary<string, LedgerEntry> _fresh = new(StringComparer.Ordinal);
     private int _hits, _ccHits, _unstable, _pending;
+    private long _recorded;
+
+    /// <summary>Entries added to this run's ledger so far (rises as files are hashed, or carried over from CodeCompass).</summary>
+    public long Recorded => Interlocked.Read(ref _recorded);
 
     public int Hits => _hits;
     public int CodeCompassHits => _ccHits;
@@ -177,6 +181,7 @@ public sealed class HashCache
         if (fromCc)
         {
             _fresh[e.RelativePath] = c; // carry into our own ledger
+            Interlocked.Increment(ref _recorded);
             Interlocked.Increment(ref _ccHits);
         }
         Interlocked.Increment(ref _hits);
@@ -207,6 +212,7 @@ public sealed class HashCache
             Interlocked.Increment(ref _pending);
         }
         _fresh[e.RelativePath] = entry;
+        Interlocked.Increment(ref _recorded);
     }
 
     /// <summary>
