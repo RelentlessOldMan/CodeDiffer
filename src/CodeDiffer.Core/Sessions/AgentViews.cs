@@ -205,15 +205,18 @@ public static class AgentViews
 
         pageSize = Math.Clamp(pageSize, 1, MaxPageSize);
         int pages = Math.Max(1, (match.Count + pageSize - 1) / pageSize);
-        page = Math.Clamp(page, 1, pages);
-        var slice = match.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+        // A page past the last is empty and says so: shown the last page again, a caller paging on never saw the end.
+        bool past = page > pages;
+        page = Math.Max(1, page);
+        var slice = past ? [] : match.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 
         // A file that may still become part of a rename isn't rendered yet: its final diff may differ.
         if (lines) Render(s, maybeRename is null ? slice : slice.Where(c => !maybeRename.Contains(c.RelativePath)).ToList());
 
         if (progress is not null)
             o.Append($"compare {s.Id} · RUNNING, partial: {found!.Length:N0} difference(s) found so far, in the order found · {ProgressView.Line(progress, found: false)}\n");
-        o.Append($"compare {s.Id} · {match.Count:N0} file(s) match{(progress is null ? "" : " so far")} · page {page}/{pages}\n");
+        o.Append($"compare {s.Id} · {match.Count:N0} file(s) match{(progress is null ? "" : " so far")} · page {page}/{pages}" +
+                 (past ? $" — past the last page{(progress is null ? "" : " so far")} (page={pages} is the last)" : "") + "\n");
         foreach (var c in slice)
         {
             o.Append($"{Tag(c)} {Name(c)}");
@@ -713,7 +716,7 @@ public static class AgentViews
 
     private static string Reasons(CompareReport r) =>
         string.Join(" · ", Enum.GetValues<ChangeReason>().Select(x => (k: CanonicalTokens.Token(x), n: r.ReasonCount(x)))
-            .Append((k: "unreadable", n: r.UnreadableFiles)).Where(t => t.n > 0)
+            .Append((k: "unreadable", n: r.UnreadableModified)).Where(t => t.n > 0)
             .Select(t => $"{t.k} {t.n:N0}"));
 
     private static bool TryStatuses(string? status, out HashSet<ChangeStatus> set, out string error)

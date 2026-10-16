@@ -93,9 +93,12 @@ public static class ThreeWayViews
 
         pageSize = Math.Clamp(pageSize, 1, AgentViews.MaxPageSize);
         int pages = Math.Max(1, (match.Count + pageSize - 1) / pageSize);
-        page = Math.Clamp(page, 1, pages);
-        var o = new StringBuilder($"compare3 {s.Id} · {match.Count:N0} path(s) match · page {page}/{pages}\n");
-        foreach (var e in match.Skip((page - 1) * pageSize).Take(pageSize)) o.Append(Line(e)).Append('\n');
+        bool past = page > pages; // empty and says so, as list_files does
+        page = Math.Max(1, page);
+        var o = new StringBuilder($"compare3 {s.Id} · {match.Count:N0} path(s) match · page {page}/{pages}" +
+                                  (past ? $" — past the last page (page={pages} is the last)" : "") + "\n");
+        if (!past)
+            foreach (var e in match.Skip((page - 1) * pageSize).Take(pageSize)) o.Append(Line(e)).Append('\n');
         if (page < pages) o.Append($"next page: page={page + 1}\n");
         return o.ToString();
     }

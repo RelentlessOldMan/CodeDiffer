@@ -329,7 +329,9 @@ public sealed class McpToolsTests : IDisposable
         var last = CodeDifferTools.ListFiles(id, page: 89, page_size: 7);
         Assert.Equal(620 - 88 * 7, Rows(last).Count);
         Assert.DoesNotContain("next page", last);
-        Assert.Contains("page 89/89", CodeDifferTools.ListFiles(id, page: 1000, page_size: 7)); // past the end: the last page
+        var past = CodeDifferTools.ListFiles(id, page: 1000, page_size: 7); // past the end: empty, and says where the end is
+        Assert.Contains("page 1000/89 — past the last page (page=89 is the last)", past);
+        Assert.Empty(Rows(past));
         Assert.Contains("page 1/89", CodeDifferTools.ListFiles(id, page: -5, page_size: 7));
 
         // The page size is capped at 500, however large the ask.

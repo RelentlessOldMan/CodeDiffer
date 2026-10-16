@@ -776,7 +776,9 @@ static void PrintSummary(TextWriter o, string left, string right, CompareReport 
         $"  modified   {r.Count(ChangeStatus.Modified)}   " +
         $"content {r.ReasonCount(ChangeReason.Content)} · eol {r.ReasonCount(ChangeReason.Eol)} · " +
         $"whitespace {r.ReasonCount(ChangeReason.Whitespace)} · encoding {r.ReasonCount(ChangeReason.Encoding)} · " +
-        $"binary {r.ReasonCount(ChangeReason.Binary)}");
+        $"binary {r.ReasonCount(ChangeReason.Binary)}" +
+        (r.ReasonCount(ChangeReason.Metadata) > 0 ? $" · metadata {r.ReasonCount(ChangeReason.Metadata)}" : "") +
+        (r.UnreadableModified > 0 ? $" · unreadable {r.UnreadableModified}" : ""));
 }
 
 /// <summary>The per-file change list (non-patch mode): one line per non-identical path.</summary>

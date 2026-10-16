@@ -225,6 +225,62 @@ public sealed class DifferReviewTests : IDisposable
         Assert.Equal(("done", false, "done"), (clean.State, clean.Incomplete, clean.Shown));
     }
 
+    // ---- O4: the modified line's reasons add up to the modified count ----
+
+    [Fact]
+    public void TheReasonsOnTheModifiedLine_SumToTheModifiedCount()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string l = Path.Combine(_dir, "L"), r = Path.Combine(_dir, "R");
+        Directory.CreateDirectory(l);
+        Directory.CreateDirectory(r);
+        File.WriteAllText(Path.Combine(l, "a.c"), "one\n");
+        File.WriteAllText(Path.Combine(r, "a.c"), "two\n");
+        File.WriteAllText(@"\\?\" + Path.Combine(l, "x."), "left\n");   // a modified pair, unreadable
+        File.WriteAllText(@"\\?\" + Path.Combine(r, "x."), "right\n");
+        File.WriteAllText(@"\\?\" + Path.Combine(l, "gone."), "old\n");  // a remove, unreadable: not on the modified line
+        try
+        {
+            var report = new DirectoryComparer(new CompareOptions { Cache = CodeDiffer.Core.Ledger.CacheMode.Off }).Compare(l, r);
+            Assert.Equal(2, report.Count(ChangeStatus.Modified));
+            Assert.Equal(1, report.UnreadableModified);
+            var s = new CodeDiffer.Core.Sessions.SessionStore(save: false).Adopt(l, r, new CompareOptions(), report, DateTime.UtcNow, TimeSpan.Zero);
+            var line = CodeDiffer.Core.Sessions.AgentViews.Summary(s).Split('\n').Single(x => x.TrimStart().StartsWith("modified"));
+            Assert.Contains("content 1 · unreadable 1", line);
+        }
+        finally
+        {
+            foreach (var p in new[] { Path.Combine(l, "x."), Path.Combine(r, "x."), Path.Combine(l, "gone.") }) File.Delete(@"\\?\" + p);
+        }
+    }
+
+    // ---- O5: a page past the last is empty and says so ----
+
+    [Fact]
+    public void APagePastTheLast_IsEmptyAndSaysSo_NotTheLastPageAgain()
+    {
+        foreach (var side in new[] { "B", "L", "R" }) Directory.CreateDirectory(Path.Combine(_dir, side));
+        for (int i = 0; i < 3; i++)
+        {
+            File.WriteAllText(Path.Combine(_dir, "B", $"f{i}.c"), "base\n");
+            File.WriteAllText(Path.Combine(_dir, "L", $"f{i}.c"), "base\n");
+            File.WriteAllText(Path.Combine(_dir, "R", $"f{i}.c"), $"changed {i}\n");
+        }
+        var store = new CodeDiffer.Core.Sessions.SessionStore(save: false);
+        var noCache = new CompareOptions { Cache = CodeDiffer.Core.Ledger.CacheMode.Off };
+        var s = store.Start(Path.Combine(_dir, "L"), Path.Combine(_dir, "R"), noCache);
+        var s3 = store.Start3(Path.Combine(_dir, "B"), Path.Combine(_dir, "L"), Path.Combine(_dir, "R"), noCache);
+        Assert.True(s.Wait(TimeSpan.FromMinutes(1)) && s3.Wait(TimeSpan.FromMinutes(1)));
+
+        foreach (var text in new[] { CodeDiffer.Core.Sessions.AgentViews.ListFiles(s, page: 5, pageSize: 2),
+                                     CodeDiffer.Core.Sessions.ThreeWayViews.ListFiles(s3, page: 5, pageSize: 2) })
+        {
+            Assert.Contains("past the last page (page=2 is the last)", text);
+            Assert.DoesNotContain("f2.c", text);
+        }
+        Assert.Contains("f2.c", CodeDiffer.Core.Sessions.AgentViews.ListFiles(s, page: 2, pageSize: 2));
+    }
+
     // ---- K4: a legacy file's bytes 0x80–0x9F are cp1252 punctuation, not Latin-1 controls ----
 
     [Theory]

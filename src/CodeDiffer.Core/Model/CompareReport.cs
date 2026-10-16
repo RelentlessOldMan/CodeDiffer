@@ -108,6 +108,10 @@ public sealed class CompareReport
     /// <summary>Paths a side of which could not be read: their verdict is unknown (see <see cref="FileChange.Unreadable"/>).</summary>
     public int UnreadableFiles => Tally()[Statuses + Reasons];
 
+    /// <summary>Of the modified: the pairs with no reason, since a side couldn't be read. With the reasons they make up
+    /// the modified count (an unreadable add or remove is not one).</summary>
+    public int UnreadableModified => Tally()[Statuses + Reasons + 1];
+
     private static readonly int Statuses = Enum.GetValues<ChangeStatus>().Length, Reasons = Enum.GetValues<ChangeReason>().Length;
     private int[]? _tally;
 
@@ -116,13 +120,14 @@ public sealed class CompareReport
     private int[] Tally()
     {
         if (_tally is { } done) return done;
-        var t = new int[Statuses + Reasons + 1];
+        var t = new int[Statuses + Reasons + 2];
         t[(int)ChangeStatus.Identical] = UnlistedIdentical;
         foreach (var c in Changes)
         {
             if ((uint)c.Status < Statuses) t[(int)c.Status]++;
             if (c.Reason is { } why && (uint)why < Reasons) t[Statuses + (int)why]++;
             if (c.Unreadable is not null) t[Statuses + Reasons]++;
+            if (c.Status == ChangeStatus.Modified && c.Reason is null) t[Statuses + Reasons + 1]++;
         }
         return _tally = t;
     }
