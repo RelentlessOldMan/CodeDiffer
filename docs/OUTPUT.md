@@ -150,7 +150,7 @@ checked, is kept a day). A compare still running in another process (another MCP
 server, a CLI run) is listed, but only that process can answer about it; it opens here once it is done.
 A malformed `compare.json` is reported as a corrupt result, never an error that ends the server; a path with an
 unpaired UTF-16 surrogate (legal on NTFS) is saved losslessly, so it reopens as the same file; `changes.jsonl` (2-way, every path) or `v1.jsonl`/`v2.jsonl`/
-`entries.jsonl` (3-way) hold the verdicts. Only verdicts are stored, not file contents: any compare_id (or
+`entries.jsonl` (3-way: each side's changes, its unchanged files a count in `compare.json`) hold the verdicts. Only verdicts are stored, not file contents: any compare_id (or
 the directory) reopens without re-comparing (`list_compares`, CLI `results`), and a diff rendered later
 from the live trees warns when a file's size no longer matches what was compared. Capped patches, apply
 reports and the HTML report go into the same directory; one pruned by another process while this one still holds
@@ -177,7 +177,8 @@ the first's base listing and the base hashes it proved (no re-listing, no re-rea
 stat of the base; both compares judge the same snapshot of it), then every touched path is
 v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content, modify/delete,
 add/add, rename/rename, path collision, file/directory clash (one side has a file where the other has a
-directory: v2 turns `D/` into a file `D` while v1 adds `D/z.txt`), binary, large. A file one side only moved
+directory: v2 turns `D/` into a file `D` while v1 adds `D/z.txt`), binary, large (a side over the text limit, or
+the base when both sides cut a large file down: no file that big is read whole to merge it). A file one side only moved
 (byte-identical) and the other changed in place merges to the change at the new name — binary and large files
 too, taken whole. A side with no line break at all has no line-ending style: it never "changes the line endings"
 (a CRLF file cut to one line is not CRLF → LF). Renames are followed (renamed on one side, edited

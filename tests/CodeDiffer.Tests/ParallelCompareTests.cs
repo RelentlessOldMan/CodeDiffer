@@ -122,6 +122,20 @@ public class ParallelCompareTests : IDisposable
     }
 
     [Fact]
+    public void WalkedEntries_GiveTheFullPathTheWalkListed_WithOrWithoutATrailingSeparator()
+    {
+        Put("tree/top.txt", [1]);
+        Put("tree/a/b/ü 日本.txt", [2]);
+        var root = Path.Combine(_dir, "tree");
+        foreach (var r in new[] { root, root + Path.DirectorySeparatorChar })
+        {
+            var files = new TreeWalker().WalkAll(r).Files;
+            Assert.Equal([Path.Combine(root, "a", "b", "ü 日本.txt"), Path.Combine(root, "top.txt")], files.Select(f => f.FullPath));
+            Assert.All(files, f => Assert.True(File.Exists(f.FullPath)));
+        }
+    }
+
+    [Fact]
     public void Compare_AtHighParallelism_ClassifiesEveryPairCorrectly()
     {
         for (int i = 0; i < 40; i++)

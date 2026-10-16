@@ -18,5 +18,19 @@ public static class LineText
         return parts;
     }
 
+    /// <summary>The lines of <c>SplitLines(NormalizeEol(text))</c>, a line at a time: neither the normalized copy nor
+    /// every line at once is held. A line ends at CRLF, CR or LF (CRLF first, left to right, as the normalizing does),
+    /// and a line ending at the very end starts no line.</summary>
+    public static IEnumerable<string> NormalizedLines(string text)
+    {
+        for (int start = 0; start < text.Length;)
+        {
+            int end = text.AsSpan(start).IndexOfAny('\r', '\n');
+            end = end < 0 ? text.Length : start + end;
+            yield return text.Substring(start, end - start);
+            start = end + (end + 1 < text.Length && text[end] == '\r' && text[end + 1] == '\n' ? 2 : 1);
+        }
+    }
+
     public static string Join(IEnumerable<string> lines) => string.Join('\n', lines);
 }

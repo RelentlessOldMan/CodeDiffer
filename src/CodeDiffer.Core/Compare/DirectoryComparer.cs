@@ -121,8 +121,9 @@ public sealed class DirectoryComparer
         var removed = new List<FileEntry>();
         var added = new List<FileEntry>();
         var behindLink = new List<FileChange>();
-        var sameSize = new List<(FileEntry L, FileEntry R)>();
-        var sizeChanged = new List<(FileEntry L, FileEntry R)>();
+        // Pairs as indices into the two walks: a pair of entries held twice over cost 96 B each, for the whole compare.
+        var sameSize = new List<(int L, int R)>();
+        var sizeChanged = new List<(int L, int R)>();
         string? renameLimit = null;
         var io = progress?.Io;
         // From here on hashes are recorded: saved now and then, so a run killed outright keeps what it read.
@@ -134,11 +135,16 @@ public sealed class DirectoryComparer
             // A path behind a link the other tree has in its place (not followed) is not known to be added or removed.
             var leftLinks = lw.SkippedPaths.Where(s => s.Kind == SkipKind.Link).Select(s => s.Path).ToHashSet(StringComparer.Ordinal);
             var rightLinks = rw.SkippedPaths.Where(s => s.Kind == SkipKind.Link).Select(s => s.Path).ToHashSet(StringComparer.Ordinal);
+            var linkNotes = new Dictionary<(string Link, bool Left), string>(); // one note a link, shared by every path behind it
+            string LinkNote(string link, bool left) => linkNotes.TryGetValue((link, left), out var n) ? n : linkNotes[(link, left)] = left
+                ? $"the left tree has a symlink/junction at {link} (not followed): whether it was added is unknown"
+                : $"the right tree has a symlink/junction at {link} (not followed): whether it was removed is unknown";
             for (int li = 0, ri = 0; li < leftFiles.Count || ri < rightFiles.Count;)
             {
                 int c = li == leftFiles.Count ? 1 : ri == rightFiles.Count ? -1
                       : string.CompareOrdinal(leftFiles[li].RelativePath, rightFiles[ri].RelativePath);
                 bool inLeft = c <= 0, inRight = c >= 0;
+                int lx = li, rx = ri;
                 var le = inLeft ? leftFiles[li++] : default;
                 var re = inRight ? rightFiles[ri++] : default;
                 var path = inLeft ? le.RelativePath : re.RelativePath;
@@ -146,28 +152,26 @@ public sealed class DirectoryComparer
 
                 if (inLeft && !inRight && BehindLink(path, rightLinks) is { } rl)
                 {
-                    behindLink.Add(new FileChange(path, ChangeStatus.Removed, null, le.Length, 0, BehindLink: true,
-                        Unreadable: $"the right tree has a symlink/junction at {rl} (not followed): whether it was removed is unknown"));
+                    behindLink.Add(new FileChange(path, ChangeStatus.Removed, null, le.Length, 0, BehindLink: true, Unreadable: LinkNote(rl, left: false)));
                     continue;
                 }
                 if (!inLeft && inRight && BehindLink(path, leftLinks) is { } ll)
                 {
-                    behindLink.Add(new FileChange(path, ChangeStatus.Added, null, 0, re.Length, BehindLink: true,
-                        Unreadable: $"the left tree has a symlink/junction at {ll} (not followed): whether it was added is unknown"));
+                    behindLink.Add(new FileChange(path, ChangeStatus.Added, null, 0, re.Length, BehindLink: true, Unreadable: LinkNote(ll, left: true)));
                     continue;
                 }
                 if (inLeft && !inRight) { removed.Add(le); continue; } // held back — may resolve into a rename
                 if (!inLeft && inRight) { added.Add(re); continue; }
 
                 if (le.Length == re.Length)
-                    sameSize.Add((le, re)); // size is the cheap filter; same size still needs the bytes
+                    sameSize.Add((lx, rx)); // size is the cheap filter; same size still needs the bytes
                 else
-                    sizeChanged.Add((le, re)); // modified for sure; only the reason needs the bytes
+                    sizeChanged.Add((lx, rx)); // modified for sure; only the reason needs the bytes
             }
             if (progress is not null)
             {
                 // Partial answers: adds and removes are known now (a rename may still pair some of them up).
-                progress.Paired(pathCount, sameSize.Count, sameSize.Sum(p => p.L.Length));
+                progress.Paired(pathCount, sameSize.Count, sameSize.Sum(p => leftFiles[p.L].Length));
                 foreach (var e in removed) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Removed, null, e.Length, 0), _options.DetectRenames);
                 foreach (var e in added) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Added, null, 0, e.Length), _options.DetectRenames);
                 foreach (var c in behindLink) progress.Add(c);
@@ -179,10 +183,11 @@ public sealed class DirectoryComparer
             var classified = new FileChange[sizeChanged.Count];
             Parallel.For(0, sizeChanged.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism, CancellationToken = ct }, i =>
             {
-                try { classified[i] = Modified(classifier, sizeChanged[i].L, sizeChanged[i].R, ct); }
+                var (le, re) = (leftFiles[sizeChanged[i].L], rightFiles[sizeChanged[i].R]);
+                try { classified[i] = Modified(classifier, le, re, ct); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    classified[i] = Unknown(sizeChanged[i].L, sizeChanged[i].R, ex); // modified for sure; why is unknown
+                    classified[i] = Unknown(le, re, ex); // modified for sure; why is unknown
                 }
                 progress?.Add(classified[i]);
             });
@@ -192,14 +197,14 @@ public sealed class DirectoryComparer
             // early instead of becoming the lone straggler at the end (top 2% of files ≈ 80% of the bytes).
             Phase("pair+classify size-changed");
             progress?.SetPhase(ComparePhase.Contents);
-            sameSize.Sort((a, b) => b.L.Length.CompareTo(a.L.Length));
+            sameSize.Sort((a, b) => leftFiles[b.L].Length.CompareTo(leftFiles[a.L].Length));
             var verdicts = new FileChange[sameSize.Count];
             Parallel.ForEachAsync(
                 Enumerable.Range(0, sameSize.Count),
                 new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism, CancellationToken = ct },
                 async (i, ct) =>
                 {
-                    var (le, re) = sameSize[i];
+                    var (le, re) = (leftFiles[sameSize[i].L], rightFiles[sameSize[i].R]);
                     long streamed = 0; // this pair's bytes already shown by progress as they were read
                     Action<int, int>? onChunk = progress is null ? null : (advance, bytes) => { streamed += advance; progress.Streamed(advance, bytes); };
                     bool hasL = false, hasR = false;

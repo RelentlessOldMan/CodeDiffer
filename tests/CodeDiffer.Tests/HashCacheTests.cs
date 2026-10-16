@@ -89,6 +89,73 @@ public class HashCacheTests : IDisposable
                      File.ReadAllBytes(Directory.GetFiles(Path.Combine(_dir, "shuffled"), "*.base").Single()));
     }
 
+    private static LedgerEntry E(int i) => new(i, 1000 + i, $"{i + 1:X32}", 2000 + i, i, 3000 + i, i % 2 == 0 ? "" : $"{i + 1:X64}");
+
+    private static void AssertSameAs(Dictionary<string, LedgerEntry> want, IReadOnlyDictionary<string, LedgerEntry> got)
+    {
+        Assert.Equal(want.Count, got.Count);
+        foreach (var (k, v) in want)
+        {
+            Assert.True(got.TryGetValue(k, out var g), k);
+            Assert.Equal(v, g);
+        }
+        Assert.Equal(want.OrderBy(e => e.Key, StringComparer.Ordinal), got.OrderBy(e => e.Key, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void LedgerRead_LooksUpLikeADictionary_LastDuplicateWins_JournalOnTop()
+    {
+        var dir = Path.Combine(_dir, "table");
+        var rows = new List<KeyValuePair<string, LedgerEntry>>();
+        for (int i = 0; i < 300; i++) rows.Add(new($"d{i % 9}/ü日本 {i}.cs", E(i)));
+        rows.Add(new("�.txt", E(400)));
+        rows.Add(new("dup", E(401)));
+        rows.Add(new("dup", E(402))); // a list can hold a path twice: the later one is what a dictionary kept
+        LedgerFormat.Write(dir, rows.OrderBy(r => r.Key, StringComparer.Ordinal));
+        var want = new Dictionary<string, LedgerEntry>(StringComparer.Ordinal);
+        foreach (var r in rows.OrderBy(r => r.Key, StringComparer.Ordinal)) want[r.Key] = r.Value;
+
+        var got = LedgerFormat.TryRead(dir)!.Entries;
+        AssertSameAs(want, got);
+        Assert.Equal(E(402), got["dup"]);
+        Assert.False(got.ContainsKey("\uD800.txt")); // a lone surrogate never matches what a path decodes to
+        Assert.False(got.ContainsKey("nope"));
+        Assert.False(got.ContainsKey(new string('x', 5000)));
+
+        // A v2 journal: two upserts (one new), then removals (one never there).
+        using (var w = new BinaryWriter(File.Create(Path.Combine(dir, "snapshot.journal")), Encoding.UTF8))
+        {
+            w.Write(LedgerFormat.JournalMagicV2);
+            w.Write(2);
+            foreach (var (p, e) in new[] { ("dup", E(500)), ("new/日本.h", E(501)) })
+            {
+                w.Write(p); w.Write(e.Size); w.Write(e.MTimeTicks); w.Write(e.XxHash);
+                w.Write(e.ChangeTicks); w.Write(e.FileId); w.Write(e.HashedAtTicks); w.Write(e.Sha256);
+            }
+            w.Write(3);
+            w.Write("d0/ü日本 0.cs"); w.Write("never"); w.Write("new/日本.h");
+        }
+        want["dup"] = E(500);
+        want.Remove("d0/ü日本 0.cs");
+        AssertSameAs(want, LedgerFormat.TryRead(dir)!.Entries);
+    }
+
+    [Fact]
+    public void LedgerRead_APathThatIsNotUtf8_StillReads_AsItAlwaysDid()
+    {
+        var dir = Path.Combine(_dir, "badutf8");
+        LedgerFormat.Write(dir, [new("a.txt", E(1)), new("zq", E(2))]);
+        var basePath = Directory.GetFiles(dir, "*.base").Single();
+        var bytes = File.ReadAllBytes(basePath);
+        int at = bytes.AsSpan().IndexOf("zq"u8);
+        bytes[at] = 0xFF; bytes[at + 1] = 0xFE;
+        File.WriteAllBytes(basePath, bytes);
+        var got = LedgerFormat.TryRead(dir)!.Entries;
+        Assert.Equal(2, got.Count);
+        Assert.Equal(E(2), got["��"]);
+        Assert.Equal(E(1), got["a.txt"]);
+    }
+
     [Fact]
     public void AWarmCompare_LeavesAnUnchangedLedgerAlone_AndARemovedFileStillPrunesIt()
     {

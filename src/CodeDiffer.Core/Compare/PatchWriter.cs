@@ -100,51 +100,107 @@ public static class PatchWriter
         var changed = report.Changes.Where(c => c.Status != ChangeStatus.Identical).ToList();
         var caseOnly = CaseOnly(changed);
 
-        // Render sections concurrently (each is a few opens + reads — over SMB they must overlap), but in
-        // bounded batches written in report order: at most Batch file sections are held in memory at once.
-        int batch = Math.Max(1, opt.Parallelism * 4);
-        for (int start = 0; start < changed.Count; start += batch)
+        // Render sections concurrently (each is a few opens + reads — over SMB they must overlap), written in report
+        // order as soon as every one before is: a section waits to start while too many, or too much text, is ahead of
+        // what is written (32 sections of 16 MB files were a GB held). The next one to write never waits.
+        int window = Math.Max(1, opt.Parallelism * 4);
+        const long budgetChars = 64L << 20;
+        var sections = new StringBuilder?[changed.Count]; // written as built: no second copy of each section
+        var local = new PatchStats[changed.Count];
+        var gate = new object();
+        int claimed = -1, written = 0;
+        long held = 0;
+        Exception? failed = null;
+        StringBuilder Render(int i)
         {
-            int n = Math.Min(batch, changed.Count - start);
-            var sections = new StringBuilder[n]; // written as built: no second copy of each section
-            var local = new PatchStats[n];
-            Parallel.For(0, n, new ParallelOptions { MaxDegreeOfParallelism = opt.Parallelism }, i =>
+            var sw = new StringWriter { NewLine = "\n" };
+            local[i] = new PatchStats();
+            var c = changed[i];
+            try
             {
-                var sw = new StringWriter { NewLine = "\n" };
-                local[i] = new PatchStats();
-                var c = changed[start + i];
-                try
+                if (Sessions.ResultStore.HasLoneSurrogate(c.RelativePath) || (c.RenamedFrom is { } r && Sessions.ResultStore.HasLoneSurrogate(r)))
                 {
-                    if (Sessions.ResultStore.HasLoneSurrogate(c.RelativePath) || (c.RenamedFrom is { } r && Sessions.ResultStore.HasLoneSurrogate(r)))
-                    {
-                        // The patch is UTF-8: the name would come out with U+FFFD in it, git would look for that file and
-                        // refuse the whole patch.
-                        local[i].NameFiles = 1;
-                        sw.Write($"# {Name(c)}: the path has a character UTF-8 can't spell (an unpaired surrogate; shown as \uFFFD) — " +
-                                 "not in this patch; do it by hand\n");
-                    }
-                    else if (caseOnly.Contains(c.RelativePath) || (c.RenamedFrom is { } f && caseOnly.Contains(f)))
-                    {
-                        local[i].CaseFiles = 1;
-                        sw.Write($"# {Name(c)}: another path in this patch differs from it only in case (one file on Windows, " +
-                                 "where git apply would refuse the whole patch) — not in this patch; do it by hand\n");
-                    }
-                    else Section(sw, c, leftRoot, rightRoot, opt, local[i], forGit: true);
-                    sections[i] = sw.GetStringBuilder();
+                    // The patch is UTF-8: the name would come out with U+FFFD in it, git would look for that file and
+                    // refuse the whole patch.
+                    local[i].NameFiles = 1;
+                    sw.Write($"# {Name(c)}: the path has a character UTF-8 can't spell (an unpaired surrogate; shown as \uFFFD) — " +
+                             "not in this patch; do it by hand\n");
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                else if (caseOnly.Contains(c.RelativePath) || (c.RenamedFrom is { } f && caseOnly.Contains(f)))
                 {
-                    // Locked, or gone since the compare: say so and keep going — one file must not cost the patch.
-                    local[i] = new PatchStats { UnreadableFiles = 1 };
-                    sections[i] = new StringBuilder($"# {Name(c)}: could not be read ({OneLine(ex.Message)}) — not in this patch\n");
+                    local[i].CaseFiles = 1;
+                    sw.Write($"# {Name(c)}: another path in this patch differs from it only in case (one file on Windows, " +
+                             "where git apply would refuse the whole patch) — not in this patch; do it by hand\n");
                 }
-            });
-            for (int i = 0; i < n; i++)
+                else Section(sw, c, leftRoot, rightRoot, opt, local[i], forGit: true);
+                return sw.GetStringBuilder();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                w.Write(sections[i]);
-                stats.Add(local[i]);
+                // Locked, or gone since the compare: say so and keep going — one file must not cost the patch.
+                local[i] = new PatchStats { UnreadableFiles = 1 };
+                return new StringBuilder($"# {Name(c)}: could not be read ({OneLine(ex.Message)}) — not in this patch\n");
             }
         }
+        var workers = Enumerable.Range(0, Math.Min(Math.Max(1, opt.Parallelism), changed.Count)).Select(_ => Task.Run(() =>
+        {
+            try
+            {
+                for (int i; (i = Interlocked.Increment(ref claimed)) < changed.Count;)
+                {
+                    lock (gate)
+                        while (failed is null && i > written && (i - written >= window || held > budgetChars)) Monitor.Wait(gate);
+                    if (failed is not null) return;
+                    var section = Render(i);
+                    lock (gate) // published with its size at once: the writer may take it the moment it is there
+                    {
+                        sections[i] = section;
+                        held += section.Length;
+                        Monitor.PulseAll(gate);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                lock (gate)
+                {
+                    failed ??= ex;
+                    Monitor.PulseAll(gate);
+                }
+            }
+        })).ToArray();
+        try
+        {
+            for (int i = 0; i < changed.Count; i++)
+            {
+                StringBuilder section;
+                lock (gate)
+                {
+                    while (sections[i] is null && failed is null) Monitor.Wait(gate);
+                    if (failed is not null) break;
+                    section = sections[i]!;
+                }
+                w.Write(section);
+                stats.Add(local[i]);
+                lock (gate)
+                {
+                    sections[i] = null;
+                    held -= section.Length;
+                    written = i + 1;
+                    Monitor.PulseAll(gate);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            lock (gate)
+            {
+                failed ??= ex; // the writer failed (a full disk): the renderers stop
+                Monitor.PulseAll(gate);
+            }
+        }
+        Task.WaitAll(workers);
+        if (failed is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failed).Throw();
         return stats;
     }
 
@@ -154,10 +210,25 @@ public static class PatchWriter
     /// new path as already there and rejects the whole patch.
     /// </summary>
     private static HashSet<string> CaseOnly(List<FileChange> changed)
-        => changed.SelectMany(c => c.RenamedFrom is { } f ? new[] { c.RelativePath, f } : [c.RelativePath])
-            .GroupBy(p => p, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Distinct(StringComparer.Ordinal).Skip(1).Any())
-            .SelectMany(g => g).ToHashSet(StringComparer.Ordinal);
+    {
+        // Each path's first spelling, ignoring case: one seen again spelled otherwise puts both spellings in.
+        var first = new Dictionary<string, string>(changed.Count, StringComparer.OrdinalIgnoreCase);
+        var both = new HashSet<string>(StringComparer.Ordinal);
+        void See(string p)
+        {
+            if (!first.TryAdd(p, p) && first[p] is var f && !string.Equals(f, p, StringComparison.Ordinal))
+            {
+                both.Add(f);
+                both.Add(p);
+            }
+        }
+        foreach (var c in changed)
+        {
+            See(c.RelativePath);
+            if (c.RenamedFrom is { } r) See(r);
+        }
+        return both;
+    }
 
     /// <summary>One change's section, for a reader (an agent's or the report's view of one file). A side that can't
     /// be read (gone or locked since the compare) is said in one line, never thrown.</summary>

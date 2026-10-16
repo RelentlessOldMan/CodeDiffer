@@ -102,6 +102,46 @@ public class ResultStoreTests : IDisposable
         Assert.Equal(s.Report.V1Report.Changes, back.Report.V1Report.Changes);
         Assert.Equal(s.Report.Timings.Count, back.Report.Timings.Count);
         Assert.Contains(back.Report.Entries, e => e.Outcome == Merge3Outcome.V2Only && e.Path == "src/f0.c");
+
+        // Each side keeps only its changes; its unchanged files are a count, saved with the result.
+        var direct = new DirectoryComparer(NoCache).Compare(L, Path.Combine(_dir, "V2"));
+        foreach (var side in new[] { s.Report.V2Report, back.Report.V2Report })
+        {
+            Assert.DoesNotContain(side.Changes, c => c.Status == ChangeStatus.Identical);
+            Assert.True(side.UnlistedIdentical > 0);
+            Assert.Equal(direct.Total, side.Total);
+            foreach (var st in Enum.GetValues<ChangeStatus>()) Assert.Equal(direct.Count(st), side.Count(st));
+        }
+        // Reopened, an entry's side is the report's own change, as it was in the run: not a second copy.
+        var f0 = back.Report.Entries.Single(e => e.Path == "src/f0.c");
+        Assert.Same(back.Report.V2Report.Changes.Single(c => c.RelativePath == "src/f0.c"), f0.V2);
+    }
+
+    [Fact]
+    public void AFinishedCompare_LetsGoOfWhatItFoundWhileRunning_ButKeepsTheCount()
+    {
+        var s = Done(new SessionStore(resultsRoot: Results).Start(L, R, NoCache));
+        Assert.True(SpinWait.SpinUntil(() => s.Progress!.Found().Length == 0, 5000)); // released just after the task ends
+        Assert.True(s.Progress!.FoundCount >= s.Report!.Changes.Count(c => c.Status != ChangeStatus.Identical));
+    }
+
+    [Fact]
+    public void FinishedCompares_PastThePathBudget_LeaveMemory_AndReopenFromDisk()
+    {
+        var store = new SessionStore(resultsRoot: Results, pathBudget: 1);
+        var first = Done(store.Start(L, R, NoCache));
+        var second = Done(store.Start(L, R, NoCache));
+        Assert.Equal([second], store.All()); // the newest is kept, however big
+        var back = Assert.IsType<CompareSession>(store.Get(first.Id));
+        Assert.NotSame(first, back);
+        Assert.Equal(first.Report!.Changes, back.Report!.Changes);
+        Assert.Same(second, store.Get(null)); // still the default
+
+        // In memory only: nothing to reopen it from, so only the count evicts.
+        var mem = new SessionStore(save: false, pathBudget: 1);
+        var a = Done(mem.Start(L, R, NoCache));
+        var b = Done(mem.Start(L, R, NoCache));
+        Assert.Equal([a, b], mem.All());
     }
 
     [Fact]
@@ -313,6 +353,42 @@ public class ResultStoreTests : IDisposable
         Assert.Equal(rows.Count, files.Count);
         for (int i = 0; i < rows.Count; i++)
             Assert.Equal(Norm(JsonSerializer.SerializeToElement(rows[i])), Norm(files[i]));
+    }
+
+    [Fact]
+    public void HtmlReport_FileList_EscapedAPieceAtATime_IsWhatTheWholeStringSerializesTo()
+    {
+        var sb = new StringBuilder();
+        for (int c = 0; c < 0x10000; c++)
+            if (c is < 0xD800 or > 0xDFFF) sb.Append((char)c);
+        sb.Append("😀𝄞 \"quoted\" </script> \\ + & ' \u2028\u2029 \u007f");
+        for (int i = 0; i < 3000; i++) sb.Append(i % 7 == 0 ? "日本" : "ab");
+        var text = sb.ToString();
+        var want = JsonSerializer.Serialize(text);
+        foreach (int piece in new[] { 1, 2, 3, 7, 64, 1 << 20 })
+        {
+            var ms = new MemoryStream();
+            HtmlReport.WriteJsonString(ms, Encoding.UTF8.GetBytes(text), piece);
+            Assert.Equal(want, Encoding.UTF8.GetString(ms.ToArray()));
+        }
+    }
+
+    [Fact]
+    public void HtmlReport_AFileOverTheTextLimit_IsListedAsLarge_NotAsAFailure()
+    {
+        var l = Path.Combine(_dir, "bigL"); var r = Path.Combine(_dir, "bigR");
+        Directory.CreateDirectory(l); Directory.CreateDirectory(r);
+        var data = new byte[TextInspector.WholeSniffBytes + 10];
+        File.WriteAllBytes(Path.Combine(l, "big.txt"), data);
+        data[3] = 1;
+        File.WriteAllBytes(Path.Combine(r, "big.txt"), data);
+        var s = Done(new SessionStore(resultsRoot: Results).Start(l, r, NoCache));
+        var rep = HtmlReport.Write(s, new HtmlReportOptions());
+        Assert.Equal((1, 0, 0), (rep.Large, rep.Unreadable, rep.Rendered));
+        var (_, files) = HtmlReport.ReadIndex(Path.Combine(Path.GetDirectoryName(rep.IndexPath)!, "data", "index.js"));
+        var f = Assert.Single(files);
+        Assert.Equal("large", f.GetProperty("k").GetString());
+        Assert.StartsWith("large file: block diff not rendered", f.GetProperty("n").GetString());
     }
 
     [Fact]

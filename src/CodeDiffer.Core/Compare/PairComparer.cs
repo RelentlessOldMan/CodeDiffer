@@ -45,11 +45,12 @@ public static class PairComparer
         IoMeter? meter = null, bool keepSmall = false)
     {
         long t0 = IoMeter.Now();
-        using var lh = Open(left.FullPath);
-        using var rh = Open(right.FullPath);
+        string pathL = left.FullPath, pathR = right.FullPath;
+        using var lh = Open(pathL);
+        using var rh = Open(pathR);
         long hashedAt = DateTime.UtcNow.Ticks;
-        var beforeL = hashes ? FileStat.Of(lh, left.FullPath) : default;
-        var beforeR = hashes ? FileStat.Of(rh, right.FullPath) : default;
+        var beforeL = hashes ? FileStat.Of(lh, pathL) : default;
+        var beforeR = hashes ? FileStat.Of(rh, pathR) : default;
         long lenL = RandomAccess.GetLength(lh), lenR = RandomAccess.GetLength(rh);
         meter?.Opened(t0);
         if (lenL != lenR && !hashes) return new PairResult(false, null, null);
@@ -91,8 +92,8 @@ public static class PairComparer
             }
             if (!hashes) return new PairResult(equal, null, null);
             return new PairResult(equal,
-                hl!.Finish(Stable(beforeL, FileStat.Of(lh, left.FullPath), left), hashedAt),
-                hr!.Finish(Stable(beforeR, FileStat.Of(rh, right.FullPath), right), hashedAt))
+                hl!.Finish(Stable(beforeL, FileStat.Of(lh, pathL), left), hashedAt),
+                hr!.Finish(Stable(beforeR, FileStat.Of(rh, pathR), right), hashedAt))
             { LeftBytes = keptL, RightBytes = keptR };
         }
         finally
@@ -115,9 +116,10 @@ public static class PairComparer
         IoMeter? meter = null)
     {
         long t0 = IoMeter.Now();
-        using var h = Open(file.FullPath);
+        string path = file.FullPath;
+        using var h = Open(path);
         long hashedAt = DateTime.UtcNow.Ticks;
-        var before = FileStat.Of(h, file.FullPath);
+        var before = FileStat.Of(h, path);
         meter?.Opened(t0);
         var hasher = new Hasher();
         var buf = ArrayPool<byte>.Shared.Rent(ChunkBytes);
@@ -136,7 +138,7 @@ public static class PairComparer
                 off += n;
                 tRead = IoMeter.Now();
             }
-            return hasher.Finish(Stable(before, FileStat.Of(h, file.FullPath), file), hashedAt);
+            return hasher.Finish(Stable(before, FileStat.Of(h, path), file), hashedAt);
         }
         finally
         {

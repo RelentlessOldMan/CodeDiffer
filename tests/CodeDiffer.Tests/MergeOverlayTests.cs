@@ -242,6 +242,20 @@ public sealed class MergeOverlayTests : IDisposable
         Assert.Equal("large", both.ConflictKind);
     }
 
+    [Fact]
+    public void ALargeBase_BothSidesSmallAndChangedDifferently_IsALargeConflict_NotReadWhole()
+    {
+        var big = string.Concat(Enumerable.Range(0, 200).Select(i => $"base line {i}\n"));
+        Put("B/shrunk.c", big);
+        Put("V1/shrunk.c", "v1 kept a line\n");
+        Put("V2/shrunk.c", "v2 kept another\n");
+        var opt = new CompareOptions { Cache = CacheMode.Off, MaxClassifyBytes = 100 }; // the sides fit, the base does not
+        var e = TreeMerger.Run(_b, _v1, _v2, opt).Entries.Single(x => x.Path == "shrunk.c");
+        Assert.Equal((Merge3Outcome.Conflict, "large"), (e.Outcome, e.ConflictKind));
+        Assert.Contains("base file is large", e.Note);
+        Assert.Null(TreeMerger.MergedText(e, _b, _v1, _v2));
+    }
+
     // ---- apply-overlay ----
 
     private string Overlay()

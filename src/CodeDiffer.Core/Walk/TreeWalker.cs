@@ -58,6 +58,9 @@ public sealed class TreeWalker
         var skipped = new ConcurrentBag<SkippedPath>();
         int dropped = 0;
         string Rel(string full) => full[(rootFull.Length + (rootFull.EndsWith(Path.DirectorySeparatorChar) ? 0 : 1))..].Replace('\\', '/');
+        var walkRoot = new WalkRoot(rootFull.EndsWith(Path.DirectorySeparatorChar) ? rootFull : rootFull + Path.DirectorySeparatorChar);
+        // Where a name holds a backslash (not on Windows), Rel's slashes don't give the full path back: keep it whole.
+        bool exact = Path.DirectorySeparatorChar == '\\';
         var frontier = new List<(string Dir, Above? Above)> { (rootFull, null) };
         while (frontier.Count > 0)
         {
@@ -92,8 +95,10 @@ public sealed class TreeWalker
                             if (!_ignoredDirs.Contains(row.Name)) next.Add((full, mine));
                             continue;
                         }
-                        files.Add(new FileEntry(Rel(full), full, row.Length, new DateTime(row.LastWriteUtcTicks, DateTimeKind.Utc),
-                            row.ChangeUtcTicks, row.FileId));
+                        var when = new DateTime(row.LastWriteUtcTicks, DateTimeKind.Utc);
+                        files.Add(exact || !full.Contains('\\')
+                            ? new FileEntry(Rel(full), walkRoot, row.Length, when, row.ChangeUtcTicks, row.FileId)
+                            : new FileEntry(Rel(full), full, row.Length, when, row.ChangeUtcTicks, row.FileId));
                         found++;
                     }
                     listed?.Invoke(found);

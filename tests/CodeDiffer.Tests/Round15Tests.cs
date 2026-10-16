@@ -200,4 +200,32 @@ public sealed class Round15Tests : IDisposable
             });
         Assert.Empty(errors);
     }
+
+    [Fact]
+    public void NormalizedLines_AreTheLinesOfTheNormalizedText()
+    {
+        var rnd = new Random(11);
+        foreach (var fixedCase in new[] { "", "\n", "\r", "\r\n", "a\r\r\nb", "a\n\rb\r", "\r\n\r\n", "x" })
+            Assert.Equal(LineText.SplitLines(TextInspector.NormalizeEol(fixedCase)), LineText.NormalizedLines(fixedCase));
+        for (int n = 0; n < 100_000; n++)
+        {
+            var s = new string([.. Enumerable.Range(0, rnd.Next(16)).Select(_ => "ab\r\n"[rnd.Next(4)])]);
+            Assert.Equal(LineText.SplitLines(TextInspector.NormalizeEol(s)), LineText.NormalizedLines(s));
+        }
+    }
+
+    [Fact]
+    public void SameButWhitespace_ComparedAPieceAtATime_IsTheTwoKeysCompared()
+    {
+        var rnd = new Random(7);
+        var alpha = "ab_1 \t\u000b\u000c\n\r\"'`\\@$#-+*/=<>.;(){}\u00e9";
+        for (int n = 0; n < 100_000; n++)
+        {
+            var rules = (StringRules)rnd.Next(5);
+            string R() => new([.. Enumerable.Range(0, rnd.Next(24)).Select(_ => alpha[rnd.Next(alpha.Length)])]);
+            var a = R();
+            var b = rnd.Next(3) == 0 ? a.Replace(" ", rnd.Next(2) == 0 ? "  " : "").Replace("\t", " ") : R();
+            Assert.Equal(TextInspector.WhitespaceKey(a, rules) == TextInspector.WhitespaceKey(b, rules), TextInspector.SameButWhitespace(a, b, rules));
+        }
+    }
 }

@@ -190,4 +190,27 @@ public class PatchTests : IDisposable
         p.WaitForExit();
         return (p.ExitCode, output);
     }
+
+    [Fact]
+    public void ManySections_RenderedInParallel_AreWrittenInOrder_AsOneThreadWritesThem()
+    {
+        // The sections are written as soon as all before them are: a renderer that publishes its section must never
+        // find the writer already past it.
+        for (int i = 0; i < 400; i++)
+        {
+            Put($"L/f{i:D3}.txt", i % 3 == 0 ? "" : Lines(1, i % 17 + 1));
+            Put($"R/f{i:D3}.txt", i % 3 == 0 ? "x\n" : Lines(1, i % 17 + 1).Replace("line 1\n", $"edit {i}\n"));
+        }
+        var left = Path.Combine(_dir, "L");
+        var right = Path.Combine(_dir, "R");
+        var report = new DirectoryComparer(new CompareOptions { Cache = CacheMode.Off }).Compare(left, right);
+        string Patch(int threads)
+        {
+            var w = new StringWriter { NewLine = "\n" };
+            PatchWriter.Write(w, report, left, right, new PatchOptions { Parallelism = threads });
+            return w.ToString();
+        }
+        var one = Patch(1);
+        for (int run = 0; run < 20; run++) Assert.Equal(one, Patch(8));
+    }
 }

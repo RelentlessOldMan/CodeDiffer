@@ -418,13 +418,8 @@ public static class ResultStore
             {
                 "compare" => new CompareSession(id, PathOf(roots, "left"), PathOf(roots, "right"), options,
                     ReadReport(Path.Combine(dir, "changes.jsonl"), m.GetProperty("report")), dir, Started(m), Elapsed(m), reopened: true),
-                "compare3" => new Compare3Session(id, PathOf(roots, "base"), PathOf(roots, "v1"), PathOf(roots, "v2"), options, new ThreeWayReport
-                {
-                    V1Report = ReadReport(Path.Combine(dir, "v1.jsonl"), m.GetProperty("v1Report")),
-                    V2Report = ReadReport(Path.Combine(dir, "v2.jsonl"), m.GetProperty("v2Report")),
-                    Entries = ReadLines(Path.Combine(dir, "entries.jsonl"), ReadEntry),
-                    Timings = ReadTimings(m),
-                }, dir, Started(m), Elapsed(m)),
+                "compare3" => new Compare3Session(id, PathOf(roots, "base"), PathOf(roots, "v1"), PathOf(roots, "v2"), options,
+                    ReadThreeWay(dir, m), dir, Started(m), Elapsed(m)),
                 var k => throw new InvalidDataException($"unknown compare kind '{k}' in {dir}"),
             };
         }
@@ -567,6 +562,7 @@ public static class ResultStore
         w.WriteNumber("leftDroppedDirectories", r.LeftDroppedDirectories);
         w.WriteNumber("rightDroppedDirectories", r.RightDroppedDirectories);
         w.WriteNumber("skippedLinks", r.SkippedLinks);
+        if (r.UnlistedIdentical > 0) w.WriteNumber("unlistedIdentical", r.UnlistedIdentical);
         Skipped(w, "leftSkipped", r.LeftSkipped);
         Skipped(w, "rightSkipped", r.RightSkipped);
         if (r.CacheSaveError is { } se) w.WriteString("cacheSaveError", se);
@@ -627,6 +623,7 @@ public static class ResultStore
             PendingFiles = stats.GetProperty("pendingFiles").GetInt32(),
             BytesRead = stats.GetProperty("bytesRead").GetInt64(),
             SkippedLinks = stats.TryGetProperty("skippedLinks", out var links) ? links.GetInt32() : 0, // absent before 2026-10-07
+            UnlistedIdentical = stats.TryGetProperty("unlistedIdentical", out var ui) ? ui.GetInt32() : 0, // a compare3 side from 2026-10-16 on
             LeftSkipped = ReadSkipped(stats, "leftSkipped"), // absent before 2026-10-08
             RightSkipped = ReadSkipped(stats, "rightSkipped"),
             CacheSaveError = stats.TryGetProperty("cacheSaveError", out var cse) ? cse.GetString() : null,
@@ -728,10 +725,23 @@ public static class ResultStore
         w.WriteEndObject();
     }
 
-    private static Merge3Entry ReadEntry(JsonElement e) => new(
+    private static ThreeWayReport ReadThreeWay(string dir, JsonElement m)
+    {
+        var v1 = ReadReport(Path.Combine(dir, "v1.jsonl"), m.GetProperty("v1Report"));
+        var v2 = ReadReport(Path.Combine(dir, "v2.jsonl"), m.GetProperty("v2Report"));
+        // An entry's sides are the reports' own changes, as in the run that saved them: one object each, not two.
+        var known = new Dictionary<FileChange, FileChange>(v1.Changes.Count + v2.Changes.Count);
+        foreach (var c in v1.Changes) known.TryAdd(c, c);
+        foreach (var c in v2.Changes) known.TryAdd(c, c);
+        FileChange Shared(FileChange c) => known.TryGetValue(c, out var k) ? k : c;
+        var entries = ReadLines(Path.Combine(dir, "entries.jsonl"), e => ReadEntry(e, Shared));
+        return new ThreeWayReport { V1Report = v1, V2Report = v2, Entries = entries, Timings = ReadTimings(m) };
+    }
+
+    private static Merge3Entry ReadEntry(JsonElement e, Func<FileChange, FileChange> shared) => new(
         RelOf(e, "path"),
-        e.TryGetProperty("v1", out var v1) ? ReadChange(v1) : null,
-        e.TryGetProperty("v2", out var v2) ? ReadChange(v2) : null,
+        e.TryGetProperty("v1", out var v1) ? shared(ReadChange(v1)) : null,
+        e.TryGetProperty("v2", out var v2) ? shared(ReadChange(v2)) : null,
         Outcome(Str(e, "outcome")),
         e.TryGetProperty("kind", out var k) ? k.GetString() : null,
         e.GetProperty("conflicts").GetInt32(),

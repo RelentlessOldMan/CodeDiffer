@@ -239,7 +239,7 @@ public sealed class HashCache
 
             var old = _own ?? _prior;
             long now = DateTime.UtcNow.Ticks; // an entry "hashed" after now (a clock that was ahead) is not this run's
-            var keep = new List<KeyValuePair<string, LedgerEntry>>();
+            var keep = new List<KeyValuePair<string, LedgerEntry>>(walked is IReadOnlyCollection<FileEntry> all ? all.Count : 0);
             foreach (var e in walked)
             {
                 if (_fresh.TryGetValue(e.RelativePath, out var f) && Identity(e, f))

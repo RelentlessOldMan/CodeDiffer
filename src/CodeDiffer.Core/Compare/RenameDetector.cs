@@ -386,9 +386,10 @@ public sealed class RenameDetector
             if (bytes.Length == 0) return;
             if (TextInspector.LooksBinary(bytes)) return;
 
-            var normalized = TextInspector.NormalizeEol(TextInspector.Decode(bytes));
-            if (normalized.Length == 0) return; // only a BOM: empty text pairs with nothing, as an empty file
-            result[i] = LineCounts.Of(LineText.SplitLines(normalized), intern);
+            var text = TextInspector.Decode(bytes);
+            bytes = null!;
+            if (text.Length == 0) return; // only a BOM: empty text pairs with nothing, as an empty file
+            result[i] = LineCounts.Of(LineText.NormalizedLines(text), intern);
         });
         bytesRead += read;
         return result;
@@ -401,17 +402,19 @@ public sealed class RenameDetector
         private int[] _counts = [];
         public int Count { get; private init; }
 
-        public static LineCounts Of(string[] lines, LineIds intern)
+        public static LineCounts Of(IEnumerable<string> lines, LineIds intern)
         {
             var counts = new Dictionary<int, int>();
+            int count = 0;
             foreach (var line in lines)
             {
                 int id = intern.Of(line);
                 counts[id] = counts.TryGetValue(id, out var n) ? n + 1 : 1;
+                count++;
             }
             var ids = counts.Keys.ToArray();
             Array.Sort(ids);
-            return new LineCounts { _ids = ids, _counts = ids.Select(id => counts[id]).ToArray(), Count = lines.Length };
+            return new LineCounts { _ids = ids, _counts = ids.Select(id => counts[id]).ToArray(), Count = count };
         }
 
         /// <summary>Σ over shared lines of min(count in a, count in b) — the contract's multiset intersection. Once

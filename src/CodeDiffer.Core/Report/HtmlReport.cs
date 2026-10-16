@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
@@ -107,7 +109,7 @@ public static class HtmlReport
             _ => throw new ArgumentException("unknown compare kind"),
         };
 
-        var rows = new Dictionary<string, object?>[items.Count];
+        var rows = new Row[items.Count];
         int rendered = 0, capped = 0, large = 0, skipped = 0, unreadable = 0, stopped = 0, done = 0;
         int budget = opt.MaxDiffs;
         var renderable = new bool[items.Count];
@@ -208,6 +210,7 @@ public static class HtmlReport
             }
         });
 
+        int files = items.Count;
         var meta = Meta(s, opt);
         if (stopped > 0)
             ((List<string>)meta["notes"]!).Add($"This report was stopped before it was finished: {stopped:N0} file(s) have no diff. Write it again for the rest.");
@@ -216,19 +219,22 @@ public static class HtmlReport
             ["rendered"] = rendered, ["capped"] = capped, ["large"] = large, ["notRendered"] = skipped,
             ["unreadable"] = unreadable, ["stopped"] = stopped, ["maxLines"] = opt.MaxLines, ["maxDiffs"] = opt.MaxDiffs,
         };
-        using (var data = new StreamWriter(Path.Combine(outDir, "data", "index.js"), false, new UTF8Encoding(false)))
+        using (var data = new FileStream(Path.Combine(outDir, "data", "index.js"), FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
         {
             // The list as one JSON string the page JSON.parse's: a JS object literal of a million rows costs the
             // browser several times the time and memory to compile.
-            data.Write("CD.index(");
-            data.Write(JsonSerializer.Serialize(meta, Json));
-            data.Write(",");
-            data.Write(JsonSerializer.Serialize(EncodeFiles(rows), Json));
-            data.Write(");\n");
+            data.Write("CD.index("u8);
+            data.Write(JsonSerializer.SerializeToUtf8Bytes(meta, Json));
+            data.Write(","u8);
+            var list = EncodeFilesUtf8(rows);
+            rows = null!; // the encoded list is all that is left of them
+            items = null!;
+            WriteJsonString(data, list.GetBuffer().AsSpan(0, (int)list.Length));
+            data.Write(");\n"u8);
         }
         var index = Path.Combine(outDir, "index.html");
         File.WriteAllText(index, Template(), new UTF8Encoding(false));
-        return new HtmlReportResult(index, items.Count, rendered, capped, large, skipped, unreadable, stopped);
+        return new HtmlReportResult(index, files, rendered, capped, large, skipped, unreadable, stopped);
     }
 
     // ---- items ----
@@ -271,7 +277,7 @@ public static class HtmlReport
         return head;
     }
 
-    private sealed record Item(Dictionary<string, object?> Row, bool Wants, bool Large, Func<(string Text, string Mode, string? Warn)>? Render);
+    private sealed record Item(Row Row, bool Wants, bool Large, Func<(string Text, string Mode, string? Warn)>? Render);
 
     private static List<Item> Items2(CompareSession s, HtmlReportOptions opt, CancellationToken ct)
     {
@@ -281,7 +287,7 @@ public static class HtmlReport
         foreach (var c in r.Changes)
         {
             if (c.Status == ChangeStatus.Identical && !opt.IncludeIdentical) continue;
-            var row = new Dictionary<string, object?>
+            var row = new Row
             {
                 ["p"] = c.RelativePath,
                 ["t"] = c.Status switch { ChangeStatus.Added => "A", ChangeStatus.Removed => "D", ChangeStatus.Modified => "M", ChangeStatus.Renamed => "R", _ => "=" },
@@ -319,7 +325,7 @@ public static class HtmlReport
         var list = new List<Item>();
         foreach (var e in s.Report!.Entries)
         {
-            var row = new Dictionary<string, object?>
+            var row = new Row
             {
                 ["p"] = e.MergedPath ?? e.Path,
                 ["t"] = e.Outcome switch
@@ -429,8 +435,7 @@ public static class HtmlReport
         _ => c.ReasonLabel ?? "modified",
     };
 
-    private static string Join(Dictionary<string, object?> row, string note)
-        => row.TryGetValue("n", out var old) && old is string s && s.Length > 0 ? s + " · " + note : note;
+    private static string Join(Row row, string note) => row["n"] is string s && s.Length > 0 ? s + " · " + note : note;
 
     // ---- the file list ----
 
@@ -443,6 +448,18 @@ public static class HtmlReport
     ///  "dp":[parent folder…],"dn":[folder name…],"S":[text…],"str":[keys whose values index S]}</code>
     /// </summary>
     internal static string EncodeFiles(IReadOnlyList<Dictionary<string, object?>> rows)
+    {
+        var typed = rows.Select(d =>
+        {
+            var r = new Row();
+            foreach (var (k, v) in d) r[k] = v;
+            return r;
+        }).ToArray();
+        var b = EncodeFilesUtf8(typed);
+        return Encoding.UTF8.GetString(b.GetBuffer(), 0, (int)b.Length);
+    }
+
+    private static MemoryStream EncodeFilesUtf8(IReadOnlyList<Row> rows)
     {
         var dirs = new Dictionary<string, int>(StringComparer.Ordinal) { [""] = 0 };
         var parent = new List<int> { -1 };
@@ -541,7 +558,32 @@ public static class HtmlReport
             w.WriteStartArray("str"); foreach (var k in stringKeys) w.WriteStringValue(k); w.WriteEndArray();
             w.WriteEndObject();
         }
-        return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+        return buffer;
+    }
+
+    /// <summary>
+    /// <paramref name="utf8"/> as a JSON string, escaped as <see cref="JsonSerializer"/> escapes a string with the
+    /// default encoder, a piece at a time: the whole list escaped at once (then as a .NET string) cost several
+    /// copies of it. Pieces are cut before an ASCII byte, never inside a character, and escaping is per character,
+    /// so the pieces join to what the whole would give.
+    /// </summary>
+    internal static void WriteJsonString(Stream to, ReadOnlySpan<byte> utf8, int piece = 1 << 20)
+    {
+        var buf = new ArrayBufferWriter<byte>(piece + 16);
+        using var w = new Utf8JsonWriter(buf, new JsonWriterOptions { Encoder = Json.Encoder });
+        to.Write("\""u8);
+        for (int at = 0; at < utf8.Length;)
+        {
+            int end = Math.Min(utf8.Length, at + piece);
+            while (end < utf8.Length && utf8[end] >= 0x80) end++;
+            buf.ResetWrittenCount();
+            w.Reset();
+            w.WriteStringValue(utf8[at..end]);
+            w.Flush();
+            to.Write(buf.WrittenSpan[1..^1]);
+            at = end;
+        }
+        to.Write("\""u8);
     }
 
     /// <summary>A report's <c>data/index.js</c> read back: its meta, and its rows as the page sees them (for tests;
@@ -596,6 +638,42 @@ public static class HtmlReport
         return (meta, rows.Select(r => JsonSerializer.SerializeToElement(r)).ToList());
     }
 
+    /// <summary>One listed file's fields, keys as the page reads them, in the order they were first set (which
+    /// orders the list's columns, as a dictionary's insertion order did). A missing key reads as null. A dictionary
+    /// a row cost about twice this for the handful of keys a row has.</summary>
+    private sealed class Row : IEnumerable<KeyValuePair<string, object?>>
+    {
+        private object?[] _kv = new object?[24]; // key, value, key, value, … (a 2-way row has up to ~12 keys)
+        private int _n;
+        private static readonly object[] SmallInts = Enumerable.Range(0, 1024).Select(i => (object)i).ToArray();
+
+        public object? this[string key]
+        {
+            get
+            {
+                for (int i = 0; i < _n; i += 2)
+                    if ((string)_kv[i]! == key) return _kv[i + 1];
+                return null;
+            }
+            set
+            {
+                if (value is int v && (uint)v < (uint)SmallInts.Length) value = SmallInts[v]; // counts, flags: one box each
+                for (int i = 0; i < _n; i += 2)
+                    if ((string)_kv[i]! == key) { _kv[i + 1] = value; return; }
+                if (_n == _kv.Length) Array.Resize(ref _kv, _n * 2);
+                _kv[_n++] = key;
+                _kv[_n++] = value;
+            }
+        }
+
+        public IEnumerator<KeyValuePair<string, object?>> GetEnumerator()
+        {
+            for (int i = 0; i < _n; i += 2) yield return new((string)_kv[i]!, _kv[i + 1]);
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     // ---- meta ----
 
     private static Dictionary<string, object?> Meta(Session s, HtmlReportOptions opt)
@@ -633,7 +711,7 @@ public static class HtmlReport
                 m["roots"] = new Dictionary<string, string> { ["base"] = t.Base, ["v1"] = t.V1, ["v2"] = t.V2 };
                 m["counts"] = Enum.GetValues<Merge3Outcome>().ToDictionary(ResultStore.Token, o => r.Count(o));
                 m["conflictRegions"] = r.Entries.Sum(e => e.ConflictRegions);
-                m["baseFiles"] = r.V1Report.Changes.Count(c => c.Status != ChangeStatus.Added);
+                m["baseFiles"] = r.V1Report.Total - r.V1Report.Count(ChangeStatus.Added);
                 if (r.DroppedDirectories > 0)
                     notes.Add($"Incomplete walk: {r.DroppedDirectories} director(ies) could not be listed — the verdicts under them may be wrong.");
                 if (r.UnreadableFiles > 0)

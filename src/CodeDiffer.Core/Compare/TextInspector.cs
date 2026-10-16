@@ -186,7 +186,17 @@ internal static class TextInspector
     /// round: a change inside a string read as spacing between tokens, or a reformat of code read as a change in a string.
     /// </summary>
     public static bool SameButWhitespace(string a, string b, StringRules rules = StringRules.Both)
-        => string.Equals(WhitespaceKey(a, rules), WhitespaceKey(b, rules), StringComparison.Ordinal);
+    {
+        // The two keys a character at a time: never built whole (two 8 MB files' keys were 32 MB more).
+        var ka = new WhitespaceKeyReader(a, rules);
+        var kb = new WhitespaceKeyReader(b, rules);
+        while (true)
+        {
+            int ca = ka.Next(), cb = kb.Next();
+            if (ca != cb) return false;
+            if (ca < 0) return true;
+        }
+    }
 
     /// <summary>Whether a text's last line has no line ending and is only whitespace (<c>"b.\n␠"</c>): a line of its own,
     /// which <see cref="WhitespaceKey"/>, dropping trailing whitespace, can't tell from no line (<c>"b.\n"</c>). One added
@@ -234,30 +244,49 @@ internal static class TextInspector
     public static string WhitespaceKey(string s, StringRules rules = StringRules.Both)
     {
         var sb = new StringBuilder(s.Length);
-        bool lineStart = true;
-        var scan = new StringScan(rules);
-        for (int i = 0; i < s.Length; i++)
+        var key = new WhitespaceKeyReader(s, rules);
+        for (int c; (c = key.Next()) >= 0;) sb.Append((char)c);
+        return sb.ToString();
+    }
+
+    /// <summary><see cref="WhitespaceKey"/> a character at a time: what it appends, in order (-1 at the end).</summary>
+    private struct WhitespaceKeyReader(string s, StringRules rules)
+    {
+        private readonly string _s = s;
+        private StringScan _scan = new(rules);
+        private int _i;
+        private bool _lineStart = true;
+        private int _last = -1; // the last character of the key so far
+
+        public int Next() => _last = Read();
+
+        private int Read()
         {
-            char c = s[i];
-            bool escaped = scan.Step(c);
-            if (IsHorizontalSpace(c))
+            var s = _s;
+            for (; _i < s.Length; _i++)
             {
-                while (i + 1 < s.Length && IsHorizontalSpace(s[i + 1])) scan.Step(s[++i]);
-                bool lineEnd = i + 1 >= s.Length || s[i + 1] is '\n' or '\r';
-                if (escaped)
+                char c = s[_i];
+                bool escaped = _scan.Step(c);
+                if (IsHorizontalSpace(c))
                 {
-                    // An escaped space is a character (taken out, the backslash escapes what follows): kept as it is, the
-                    // rest of its run not (a run's width never is), and trailing whitespace still.
-                    if (!lineEnd) sb.Append(c);
+                    while (_i + 1 < s.Length && IsHorizontalSpace(s[_i + 1])) _scan.Step(s[++_i]);
+                    bool lineEnd = _i + 1 >= s.Length || s[_i + 1] is '\n' or '\r';
+                    if (escaped)
+                    {
+                        // An escaped space is a character (taken out, the backslash escapes what follows): kept as it is, the
+                        // rest of its run not (a run's width never is), and trailing whitespace still.
+                        if (!lineEnd) { _i++; return c; }
+                        continue;
+                    }
+                    if (!_lineStart && !lineEnd && (_scan.InString || Separates((char)_last, s[_i + 1]))) { _i++; return ' '; }
                     continue;
                 }
-                if (!lineStart && !lineEnd && (scan.InString || Separates(sb[^1], s[i + 1]))) sb.Append(' ');
-                continue;
+                _lineStart = c == '\n';
+                _i++;
+                return c;
             }
-            lineStart = c == '\n';
-            sb.Append(c);
+            return -1;
         }
-        return sb.ToString();
     }
 }
 

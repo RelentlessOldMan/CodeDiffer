@@ -76,7 +76,22 @@ public sealed class CompareProgress
 
     public int FoundCount
     {
-        get { lock (_gate) return _found.Count; }
+        get { lock (_gate) return _released >= 0 ? _released : _found.Count; }
+    }
+
+    private int _released = -1;
+
+    /// <summary>The compare has ended: its views read the report now, so the differences found while it ran are let
+    /// go (an add or remove held its own copy, for as long as the session was kept). The count stays.</summary>
+    internal void Release()
+    {
+        lock (_gate)
+        {
+            if (_released >= 0) return;
+            _released = _found.Count;
+            _found.Clear();
+            _found.TrimExcess();
+        }
     }
 
     /// <summary>Rough time left for the content phase; null until there is enough to go on.</summary>
@@ -176,6 +191,7 @@ public sealed class CompareProgress
 
     internal void Add(FileChange c, bool mayBeRename = false)
     {
-        lock (_gate) _found.Add(new PartialChange(c, mayBeRename));
+        lock (_gate)
+            if (_released < 0) _found.Add(new PartialChange(c, mayBeRename));
     }
 }

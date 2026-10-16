@@ -60,7 +60,7 @@ public static class LedgerFormat
 
     /// <summary>"" for an absent hash (all-zero = unknown, all-FF = CodeCompass binary sentinel).</summary>
     public static string HashOrAbsent(string hex)
-        => hex.Length == 0 || hex.All(c => c == '0') || hex.All(c => c is 'F' or 'f') ? "" : hex.ToUpperInvariant();
+        => hex.Length == 0 || hex.AsSpan().IndexOfAnyExcept('0') < 0 || hex.AsSpan().IndexOfAnyExcept('F', 'f') < 0 ? "" : hex.ToUpperInvariant();
 
     /// <summary>Read a ledger directory; null if absent, unrecognized (magic/version), or corrupt.</summary>
     public static LedgerSnapshot? TryRead(string dir)
@@ -80,7 +80,11 @@ public static class LedgerFormat
 
                 var (entries, version) = ReadBase(basePath);
                 if (entries is null) return null;
-                if (!ApplyJournal(Path.Combine(dir, JournalName), entries)) return null;
+                bool applied = entries is LedgerTable t
+                    ? ApplyJournal(Path.Combine(dir, JournalName), t.Set, t.Remove)
+                    : ApplyJournal(Path.Combine(dir, JournalName), (p, e) => ((Dictionary<string, LedgerEntry>)entries)[p] = e,
+                        p => ((Dictionary<string, LedgerEntry>)entries).Remove(p));
+                if (!applied) return null;
                 return new LedgerSnapshot(entries, version);
             }
             return null;
@@ -120,7 +124,7 @@ public static class LedgerFormat
     public static void Write(string dir, IEnumerable<KeyValuePair<string, LedgerEntry>> entries)
     {
         Directory.CreateDirectory(dir);
-        var sorted = entries.ToList();
+        var sorted = entries as List<KeyValuePair<string, LedgerEntry>> ?? entries.ToList(); // only read: no copy of a list
         if (!SortedOrdinal(sorted)) sorted = sorted.OrderBy(e => e.Key, StringComparer.Ordinal).ToList(); // walked lists already are
         int next = NextBaseNumber(dir);
         var baseName = $"snapshot-{next:D8}.base";
@@ -147,8 +151,9 @@ public static class LedgerFormat
     private static void WriteBase(string path, List<KeyValuePair<string, LedgerEntry>> sorted)
     {
         int count = sorted.Count;
-        var pathBytes = sorted.Select(e => Encoding.UTF8.GetBytes(e.Key)).ToArray();
-        long blobLen = pathBytes.Sum(b => (long)b.Length);
+        // Each path's UTF-8 is counted here and encoded as it is written: never all of them at once (~50 B a path).
+        long blobLen = 0;
+        foreach (var e in sorted) blobLen += Encoding.UTF8.GetByteCount(e.Key);
 
         const int headerSize = 12 + 8 * 9;
         long offsOff = headerSize;
@@ -170,9 +175,15 @@ public static class LedgerFormat
             w.Write(off);
 
         long acc = 0;
-        foreach (var b in pathBytes) { w.Write(acc); acc += b.Length; }
+        foreach (var e in sorted) { w.Write(acc); acc += Encoding.UTF8.GetByteCount(e.Key); }
         w.Write(acc);
-        foreach (var b in pathBytes) w.Write(b);
+        var buf = new byte[256];
+        foreach (var e in sorted)
+        {
+            int n = Encoding.UTF8.GetMaxByteCount(e.Key.Length);
+            if (n > buf.Length) buf = new byte[n];
+            w.Write(buf, 0, Encoding.UTF8.GetBytes(e.Key, buf));
+        }
         foreach (var e in sorted) w.Write(e.Value.Size);
         foreach (var e in sorted) w.Write(e.Value.MTimeTicks);
         foreach (var e in sorted) w.Write(HexToBytes(e.Value.XxHash, XxBytes));
@@ -184,7 +195,7 @@ public static class LedgerFormat
         fs.Flush(flushToDisk: true); // durable before the manifest names it
     }
 
-    private static (Dictionary<string, LedgerEntry>?, int) ReadBase(string path)
+    private static (IReadOnlyDictionary<string, LedgerEntry>?, int) ReadBase(string path)
     {
         byte[] data;
         using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
@@ -211,6 +222,10 @@ public static class LedgerFormat
             if (off[i] < 12 + 8 * sections || off[i] > end || end - off[i] < need || end > s.Length) return (null, 0);
         }
 
+        if (LedgerTable.Build(data, version, off, count, out bool exact) is { } table) return (table, version);
+        if (exact) return (null, 0); // a path's offsets are out of range
+
+        // A path that is not valid UTF-8: as a dictionary, the way it always was.
         long blobOff = off[1], blobEnd = off[2];
         var map = new Dictionary<string, LedgerEntry>(count, StringComparer.Ordinal);
         for (int i = 0; i < count; i++)
@@ -229,14 +244,14 @@ public static class LedgerFormat
     }
 
     /// <summary><see cref="HashOrAbsent"/> of the bytes' hex, without making the hex of an absent one.</summary>
-    private static string HexOrAbsent(ReadOnlySpan<byte> b)
+    internal static string HexOrAbsent(ReadOnlySpan<byte> b)
         => b.IndexOfAnyExcept((byte)0) < 0 || b.IndexOfAnyExcept((byte)0xFF) < 0 ? "" : Convert.ToHexString(b);
 
     private static long I64(ReadOnlySpan<byte> s, long at) => BinaryPrimitives.ReadInt64LittleEndian(s[(int)at..]);
 
     /// <summary>Fold a journal (v1 or v2) over the base. A torn journal is dropped whole — those files are just
     /// re-hashed, which is always safe. An UNKNOWN journal magic fails the whole ledger (never guess).</summary>
-    private static bool ApplyJournal(string journal, Dictionary<string, LedgerEntry> entries)
+    private static bool ApplyJournal(string journal, Action<string, LedgerEntry> set, Action<string> remove)
     {
         if (!File.Exists(journal)) return true;
         var upserts = new List<(string, LedgerEntry)>();
@@ -264,8 +279,8 @@ public static class LedgerFormat
         {
             return true; // torn journal: keep the base, lose only recent entries
         }
-        foreach (var (p, e) in upserts) entries[p] = e;
-        foreach (var p in removes) entries.Remove(p);
+        foreach (var (p, e) in upserts) set(p, e);
+        foreach (var p in removes) remove(p);
         return true;
     }
 

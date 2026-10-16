@@ -19,7 +19,7 @@ public static class ThreeWayViews
         if (!s.IsDone && s.Progress1 is { } p1 && s.Progress2 is { } p2) return Running(o, s, p1, p2);
         if (Pending(s) is { } pending) return o.Append(pending).ToString();
         var r = s.Report!;
-        int baseFiles = r.V1Report.Changes.Count(c => c.Status != ChangeStatus.Added);
+        int baseFiles = r.V1Report.Total - r.V1Report.Count(ChangeStatus.Added);
         o.Append($"{baseFiles:N0} base files · {r.Entries.Count:N0} touched by either side   (finished in {Clock(s.Elapsed)})\n");
         o.Append(AgentViews.ReopenedNote(s));
         o.Append($"  v1 only   {r.Count(Merge3Outcome.V1Only),8:N0}    take v1\n");

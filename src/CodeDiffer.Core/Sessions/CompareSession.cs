@@ -68,6 +68,9 @@ public abstract class Session
     /// <summary>The live progress of each compare this runs (one, or base→v1 and base→v2), for telemetry.</summary>
     internal abstract IEnumerable<(string Name, CompareProgress Progress)> Progresses();
 
+    /// <summary>Rows the finished result holds in memory (0 while running): what keeping it costs.</summary>
+    internal abstract int HeldPaths { get; }
+
     /// <summary>Ask a running compare to stop; false when it had already finished. It stops within moments (a
     /// chunk per file in flight), keeping the hashes it read so a re-run picks up from there.</summary>
     /// <param name="reason">Why, when it is not a user's cancel (the server shutting down): said in the result and its run record.</param>
@@ -144,7 +147,12 @@ public abstract class Session
             _record?.End(_stopReason ?? "cancelled", null);
             if (ResultDir is not null) ResultStore.TryMarkFailed(this, "cancelled", _stopReason);
         }, CancellationToken.None, TaskContinuationOptions.OnlyOnCanceled | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        task.ContinueWith(_ => { Running.TryRemove(this, out byte _); _record?.Dispose(); },
+        task.ContinueWith(_ =>
+            {
+                Running.TryRemove(this, out byte _);
+                _record?.Dispose();
+                foreach (var (_, p) in Progresses()) p.Release();
+            },
             CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         return task;
     }
@@ -210,6 +218,8 @@ public sealed class CompareSession : Session
 
     internal override IEnumerable<(string Name, CompareProgress Progress)> Progresses()
         => Progress is null ? [] : [("compare", Progress)];
+
+    internal override int HeldPaths => Report?.Changes.Count ?? 0;
 }
 
 /// <summary>A 3-way compare (base, v1, v2): what each side changed, and whether the two merge.</summary>
@@ -265,6 +275,8 @@ public sealed class Compare3Session : Session
 
     internal override IEnumerable<(string Name, CompareProgress Progress)> Progresses()
         => Progress1 is null || Progress2 is null ? [] : [("base->v1", Progress1), ("base->v2", Progress2)];
+
+    internal override int HeldPaths => Report is { } r ? r.V1Report.Changes.Count + r.V2Report.Changes.Count + r.Entries.Count : 0;
 }
 
 /// <summary>
@@ -276,20 +288,26 @@ public sealed class SessionStore
 {
     public const int DefaultCapacity = 8;
 
+    /// <summary>Most result rows kept in memory across finished compares (~200 B each): eight compares of a
+    /// million-file tree held ~1.7 GB. Past it the oldest saved ones are let go, and reopened from disk when asked for.</summary>
+    public const long DefaultPathBudget = 2_000_000;
+
     private readonly object _gate = new();
     private readonly List<Session> _sessions = [];
     // The compare most recently started here (what an omitted id means) — not one merely reopened by id since.
     private Session? _lastStarted;
     private readonly int _capacity;
+    private readonly long _pathBudget;
 
     /// <summary>Where compares are saved; null = in memory only.</summary>
     public string? ResultsRoot { get; }
 
     /// <param name="resultsRoot">Where to save compares (default <see cref="ResultStore.DefaultRoot"/>).</param>
     /// <param name="save">false = keep compares in memory only.</param>
-    public SessionStore(int capacity = DefaultCapacity, string? resultsRoot = null, bool save = true)
+    public SessionStore(int capacity = DefaultCapacity, string? resultsRoot = null, bool save = true, long pathBudget = DefaultPathBudget)
     {
         _capacity = Math.Max(1, capacity);
+        _pathBudget = pathBudget;
         ResultsRoot = save ? Path.GetFullPath(resultsRoot ?? ResultStore.DefaultRoot) : null;
     }
 
@@ -338,9 +356,7 @@ public sealed class SessionStore
             var session = make(id, dir);
             _sessions.Add(session);
             _lastStarted = session;
-            // Evict the oldest FINISHED compares past capacity; a running one is never dropped (it stays on disk).
-            while (_sessions.Count > _capacity && _sessions.FirstOrDefault(s => s.IsDone && s != session) is { } old)
-                _sessions.Remove(old);
+            Trim(session);
             return session;
         }
     }
@@ -365,9 +381,24 @@ public sealed class SessionStore
             if (dir is null) return null;
             var loaded = ResultStore.Load(dir); // throws InvalidDataException on an unfinished/corrupt result
             _sessions.Add(loaded);
-            while (_sessions.Count > _capacity && _sessions.FirstOrDefault(s => s.IsDone && s != loaded) is { } old)
-                _sessions.Remove(old);
+            Trim(loaded);
             return loaded;
+        }
+    }
+
+    /// <summary>Evict the oldest FINISHED compares past capacity, then the oldest saved ones while the rows held are
+    /// over the path budget. A running one is never dropped (it stays on disk), nor is <paramref name="keep"/>; an
+    /// unsaved one goes only for capacity, as it cannot be reopened.</summary>
+    private void Trim(Session keep)
+    {
+        while (_sessions.Count > _capacity && _sessions.FirstOrDefault(s => s.IsDone && s != keep) is { } old)
+            _sessions.Remove(old);
+        long held = _sessions.Sum(s => (long)s.HeldPaths);
+        while (held > _pathBudget
+            && _sessions.FirstOrDefault(s => s.IsDone && s != keep && s.ResultDir is not null && s.SaveError is null && s.HeldPaths > 0) is { } big)
+        {
+            held -= big.HeldPaths;
+            _sessions.Remove(big);
         }
     }
 

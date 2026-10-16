@@ -33,13 +33,14 @@ public static class StatCheck
             FileStat attr, before, after;
             try
             {
-                attr = FileStat.OfPath(e.FullPath);
-                using var h = File.OpenHandle(e.FullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+                var path = e.FullPath;
+                attr = FileStat.OfPath(path);
+                using var h = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
                     FileOptions.SequentialScan);
-                before = FileStat.Of(h, e.FullPath);
+                before = FileStat.Of(h, path);
                 var buf = new byte[4096];
                 RandomAccess.Read(h, buf, 0);
-                after = FileStat.Of(h, e.FullPath);
+                after = FileStat.Of(h, path);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

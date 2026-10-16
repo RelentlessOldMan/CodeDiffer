@@ -40,7 +40,12 @@ public sealed record FileChange(
 /// </summary>
 public sealed class CompareReport
 {
-    public IReadOnlyList<FileChange> Changes { get; }
+    public IReadOnlyList<FileChange> Changes { get; private set; }
+
+    /// <summary>Identical paths counted but not in <see cref="Changes"/>: a compare3 side keeps only its changes
+    /// (the merge never looks at an unchanged file), not a row for every file of the tree.</summary>
+    public int UnlistedIdentical { get => _unlisted; init => _unlisted = value; }
+    private int _unlisted;
 
     /// <summary>Directories that could not be listed on each side — a non-zero count means the report is
     /// INCOMPLETE there (missing files may be listing failures, not real removals). Never hidden.</summary>
@@ -84,7 +89,7 @@ public sealed class CompareReport
         RightDroppedDirectories = rightDroppedDirectories;
     }
 
-    public int Total => Changes.Count;
+    public int Total => Changes.Count + UnlistedIdentical;
 
     public int Count(ChangeStatus status) => (uint)status < Statuses ? Tally()[(int)status] : 0;
 
@@ -102,6 +107,7 @@ public sealed class CompareReport
     {
         if (_tally is { } done) return done;
         var t = new int[Statuses + Reasons + 1];
+        t[(int)ChangeStatus.Identical] = UnlistedIdentical;
         foreach (var c in Changes)
         {
             if ((uint)c.Status < Statuses) t[(int)c.Status]++;
@@ -109,5 +115,17 @@ public sealed class CompareReport
             if (c.Unreadable is not null) t[Statuses + Reasons]++;
         }
         return _tally = t;
+    }
+
+    /// <summary>This report with its identical rows dropped and counted in <see cref="UnlistedIdentical"/>: every
+    /// count and <see cref="Total"/> stay the same.</summary>
+    public CompareReport WithoutIdentical()
+    {
+        var changed = Changes.Where(c => c.Status != ChangeStatus.Identical).ToArray();
+        var r = (CompareReport)MemberwiseClone();
+        r.Changes = changed;
+        r._unlisted = UnlistedIdentical + (Changes.Count - changed.Length);
+        r._tally = null;
+        return r;
     }
 }

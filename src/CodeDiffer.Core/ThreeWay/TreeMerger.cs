@@ -79,6 +79,7 @@ public static class TreeMerger
         timings.Add(("compare base->v1", sw.Elapsed));
         sw.Restart();
         var r2 = new DirectoryComparer(opt).Compare(baseDir, v2Dir, progress2, sharedBase, ct);
+        sharedBase = null!; // the base listing and its hashes: done with, not held through the classify
         timings.Add(("compare base->v2", sw.Elapsed));
         sw.Restart();
 
@@ -86,6 +87,9 @@ public static class TreeMerger
         // by its own path in a separate namespace (an added path can't also be a base path, or it'd be modified).
         var side1 = Index(r1);
         var side2 = Index(r2);
+        // Only the changes are kept: a row per unchanged file (twice) is only ever counted.
+        r1 = r1.WithoutIdentical();
+        r2 = r2.WithoutIdentical();
         var keys = side1.Keys.Union(side2.Keys).OrderBy(k => k.Path, StringComparer.Ordinal).ThenBy(k => k.Added).ToList();
 
         var entries = new Merge3Entry[keys.Count];
@@ -228,7 +232,11 @@ public static class TreeMerger
 
         if (Math.Max(bytes1.Length, bytes2.Length) > maxText)
             return Whole() ?? Conflict("large", "both changed a large file differently — not merged line by line");
+        // Both sides small, the base not (both cut it down): never read it whole either.
+        const string largeBase = "both changed it differently and the base file is large — not merged line by line";
+        if (!added && Math.Max(c1.LeftSize, c2.LeftSize) > maxText) return Whole() ?? Conflict("large", largeBase);
         var baseBytes = added ? [] : File.ReadAllBytes(Full(b, path));
+        if (baseBytes.Length > maxText) return Whole() ?? Conflict("large", largeBase); // grown since it was listed
         if (!ChangePorter.Text.TryRead(baseBytes, out var tb) || !ChangePorter.Text.TryRead(bytes1, out var t1) || !ChangePorter.Text.TryRead(bytes2, out var t2)
             || LooksBinary(bytes1) || LooksBinary(bytes2) || LooksBinary(baseBytes))
             return Whole() ?? Conflict(added ? "add/add (binary)" : "binary", "both changed a binary (or non-text) file differently");
@@ -285,11 +293,12 @@ public static class TreeMerger
     {
         if (Compose(e, b, v1, v2, ct) is not { } m) return null;
         var w = new StringWriter { NewLine = "\n" };
-        UnifiedDiff.Write(w, e.Path, e.MergedPath ?? e.Path, m.Base, m.Merged, context, null, ct);
+        UnifiedDiff.Write(w, e.Path, e.MergedPath ?? e.Path, string.Concat(m.Base), m.Merged, context, null, ct);
         return w.ToString();
     }
 
-    private static (string Base, string Merged, Form Form, int Conflicts)? Compose(Merge3Entry e, string b, string v1, string v2,
+    /// <summary>The merge of one entry; its base as lines, joined only by the one caller that diffs against it.</summary>
+    private static (List<string> Base, string Merged, Form Form, int Conflicts)? Compose(Merge3Entry e, string b, string v1, string v2,
         CancellationToken ct)
     {
         if (e.V1 is null || e.V2 is null || e.ConflictKind is not (null or "content" or "add/add") || e.Outcome == Merge3Outcome.Agreed) return null;
@@ -349,7 +358,7 @@ public static class TreeMerger
         }
         int tail = form.GapSide switch { 1 when raw => o1.Count - ob.Count, 2 when raw => o2.Count - ob.Count, _ => 0 };
         EmitGap(cursor, lb.Count, tail);
-        return (string.Concat(ob), o.ToString(), form, conflicts);
+        return (ob, o.ToString(), form, conflicts);
     }
 
     /// <summary>

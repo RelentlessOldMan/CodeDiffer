@@ -892,6 +892,7 @@ static int Apply(string[] args)
         // Ctrl+C here stops between files (each is written whole); a second one still quits at once, and even then
         // no file is torn and running the apply again finishes it.
         bool write = args.Contains("--write");
+        report = report.WithoutIdentical(); // a row per unchanged file is not held through the port
         var port = new PortProgress();
         result = WithProgress(() => ChangePorter.Run(report, args[1], args[2], args[3], write, parallelism: threads, ct: stop.Token, progress: port),
             () => $"{(write ? "applying" : "checking")}: {port.Done:N0} / {port.Total:N0} changed files", stop.Cancel);
