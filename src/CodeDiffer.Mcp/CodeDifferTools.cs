@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Report;
@@ -198,7 +198,7 @@ public static class CodeDifferTools
         var o = new System.Text.StringBuilder($"{saved.Count} saved compare(s) in {root} (newest first):\n");
         foreach (var c in saved)
         {
-            o.Append($"{c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.State,-7} ");
+            o.Append($"{c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.Shown,-7} ");
             o.Append(string.Join("  ", c.Roots.Select(r => $"{r.Name}={r.Path}")));
             var counts = c.Counts.Where(x => x.Count > 0 && x.Name != "identical").Select(x => $"{x.Name} {x.Count:N0}").ToList();
             if (counts.Count > 0) o.Append("  · ").Append(string.Join(", ", counts));

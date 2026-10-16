@@ -16,7 +16,15 @@ namespace CodeDiffer.Core.Sessions;
 public sealed record SavedCompare(
     string Dir, string Id, string Kind, string State, DateTime StartedUtc, TimeSpan Elapsed,
     IReadOnlyList<(string Name, string Path)> Roots, IReadOnlyList<(string Name, long Count)> Counts, string? Error,
-    bool Alive = false);
+    bool Alive = false, int DroppedDirectories = 0, int UnreadableFiles = 0)
+{
+    /// <summary>Finished, but with directories that couldn't be listed or files that couldn't be read: what the CLI
+    /// exits 3 for. Its verdicts there are unknown, so a listing must not show it as a plain "done".</summary>
+    public bool Incomplete => State == "done" && DroppedDirectories + UnreadableFiles > 0;
+
+    /// <summary>The state as a listing shows it: <c>INCOMPLETE</c> for an <see cref="Incomplete"/> one.</summary>
+    public string Shown => Incomplete ? "INCOMPLETE" : State;
+}
 
 /// <summary>
 /// The on-disk result store (docs/OUTPUT.md §1). Each compare gets a fresh directory
@@ -201,6 +209,7 @@ public static class ResultStore
                     Head(w, "compare", s.Id, "done", s.StartedUtc, s.Elapsed);
                     Roots(w, "compare", [c.Left, c.Right]);
                     Options(w, s.Options);
+                    Unknowns(w, r.LeftDroppedDirectories + r.RightDroppedDirectories, r.UnreadableFiles);
                     w.WritePropertyName("report");
                     Stats(w, r);
                     w.WriteStartObject("counts");
@@ -217,6 +226,7 @@ public static class ResultStore
                     Head(w, "compare3", s.Id, "done", s.StartedUtc, s.Elapsed);
                     Roots(w, "compare3", [c3.Base, c3.V1, c3.V2]);
                     Options(w, s.Options);
+                    Unknowns(w, t.DroppedDirectories, t.UnreadableFiles);
                     w.WritePropertyName("v1Report");
                     Stats(w, t.V1Report);
                     w.WritePropertyName("v2Report");
@@ -231,6 +241,25 @@ public static class ResultStore
             default:
                 throw new ArgumentException($"can't save a {result.GetType().Name} for a {s.GetType().Name}");
         }
+    }
+
+    /// <summary>What a listing needs to tell a finished compare from an incomplete one (<see cref="SavedCompare.Incomplete"/>).</summary>
+    private static void Unknowns(Utf8JsonWriter w, int droppedDirectories, int unreadableFiles)
+    {
+        w.WriteNumber("droppedDirectories", droppedDirectories);
+        w.WriteNumber("unreadableFiles", unreadableFiles);
+    }
+
+    /// <summary>A saved compare's dropped directories and unreadable files. Results saved before 2026-10-16 have no
+    /// totals: their dropped directories are read from the per-compare stats, their unreadable files are unknown (0).</summary>
+    private static (int Dropped, int Unreadable) Unknowns(JsonElement m)
+    {
+        static int Int(JsonElement e, string name) => e.TryGetProperty(name, out var v) ? v.GetInt32() : 0;
+        if (m.TryGetProperty("droppedDirectories", out var d)) return (d.GetInt32(), Int(m, "unreadableFiles"));
+        int dropped = 0;
+        foreach (var report in new[] { "report", "v1Report", "v2Report" })
+            if (m.TryGetProperty(report, out var r)) dropped += Int(r, "leftDroppedDirectories") + Int(r, "rightDroppedDirectories");
+        return (dropped, 0);
     }
 
     /// <summary>Best effort: record that the compare failed or was cancelled (so a listing doesn't show it as still running).</summary>
@@ -292,8 +321,9 @@ public static class ResultStore
                     .Select(p => (p.Name, PathOf(rootsEl, p.Name))).ToList();
                 var counts = m.TryGetProperty("counts", out var cs) ? cs.EnumerateObject().Select(p => (p.Name, p.Value.GetInt64())).ToList() : [];
                 var (state, alive) = Live(m);
+                var (dropped, unreadable) = Unknowns(m);
                 list.Add(new SavedCompare(dir, Str(m, "id"), Str(m, "kind"), state, Started(m), Elapsed(m), roots, counts,
-                    m.TryGetProperty("error", out var e) ? e.GetString() : null, alive));
+                    m.TryGetProperty("error", out var e) ? e.GetString() : null, alive, dropped, unreadable));
             }
             // A corrupt or foreign compare.json is left out of the list, whatever is wrong with it (a number out of range too).
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException

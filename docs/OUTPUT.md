@@ -155,6 +155,9 @@ it is listed as `stopped` (and `results --prune` may delete it at once; one whos
 is never pruned, however long it has run; a "running" one from another machine, or one whose process can't be
 checked, is kept a day). A compare still running in another process (another MCP
 server, a CLI run) is listed, but only that process can answer about it; it opens here once it is done.
+A done compare with a directory that couldn't be listed or a file that couldn't be read (what the CLI exits 3 for)
+is listed as `INCOMPLETE`, not `done`: its verdicts there are unknown (one saved before 2026-10-16 is so listed
+only for its unlisted directories, since its unreadable files weren't totalled).
 A malformed `compare.json` is reported as a corrupt result, never an error that ends the server; a path with an
 unpaired UTF-16 surrogate (legal on NTFS) is saved losslessly, so it reopens as the same file; `changes.jsonl` (2-way, every path) or `v1.jsonl`/`v2.jsonl`/
 `entries.jsonl` (3-way: each side's changes, its unchanged files a count in `compare.json`) hold the verdicts. Only verdicts are stored, not file contents: any compare_id (or
@@ -295,6 +298,10 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   as itself, left out of rename matching), every summary warns, and the CLI exits 3. Files are opened so a
   writer can keep writing (a log being appended to is still read), and the hashes read are kept even when a
   compare fails.
+- Files are what is compared: a directory added or removed with no files in it doesn't show. A directory named
+  `.git` (anywhere below the root, in any case) is never walked, on any side and by every command (compare, compare3, apply,
+  statcheck): a repository's object store isn't the tree's content, and its packs would swamp the answer. A `.git`
+  *file* (a worktree's or submodule's pointer) is an ordinary file and is compared.
 - Symlinks and junctions are not followed (one can point outside the tree, or back into it); a link a server
   follows itself (Samba's default) arrives as a plain directory, and one that lists exactly what a directory above
   it lists (the same names and file ids: `x -> ..`) is that directory again, skipped as a link instead of listed

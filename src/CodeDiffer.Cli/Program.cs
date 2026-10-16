@@ -326,7 +326,7 @@ static int Results(string[] args)
     foreach (var c in saved)
     {
         var counts = c.Counts.Where(x => x.Count > 0 && x.Name != "identical").Select(x => $"{x.Name} {x.Count:N0}");
-        Console.WriteLine($"  {c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.State,-7} {string.Join("  ", c.Roots.Select(r => r.Path))}");
+        Console.WriteLine($"  {c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.Shown,-7} {string.Join("  ", c.Roots.Select(r => r.Path))}");
         Console.WriteLine($"        {string.Join(", ", counts)}{(c.Error is { } e ? $"  error: {e}" : "")}");
     }
     return 0;
@@ -410,7 +410,7 @@ static int Prune(string[] args)
     {
         long size = ResultStore.SizeOf(c.Dir);
         total += Math.Max(0, size);
-        Console.WriteLine($"  {c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.State,-9} {(size < 0 ? "?" : AgentViews.Bytes(size)),9}  {Path.GetFileName(c.Dir)}");
+        Console.WriteLine($"  {c.Id}  {c.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}  {c.Kind,-8} {c.Shown,-10} {(size < 0 ? "?" : AgentViews.Bytes(size)),9}  {Path.GetFileName(c.Dir)}");
         if (!yes) continue;
         try
         {

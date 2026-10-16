@@ -194,6 +194,37 @@ public sealed class DifferReviewTests : IDisposable
             .Where(d => Directory.GetFileSystemEntries(d).Length == 0)); // no emptied directory left behind
     }
 
+    // ---- O3: a saved compare that finished incomplete is listed as incomplete, not as a plain "done" ----
+
+    [Fact]
+    public void AnIncompleteCompare_IsListedIncomplete()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        foreach (var side in new[] { "B", "L", "R" })
+        {
+            Directory.CreateDirectory(Path.Combine(_dir, side));
+            File.WriteAllText(Path.Combine(_dir, side, "keep.c"), "a\n");
+        }
+        File.WriteAllText(@"\\?\" + Path.Combine(_dir, "L", "x."), "left\n");  // legal on NTFS, unopenable by plain path
+        File.WriteAllText(@"\\?\" + Path.Combine(_dir, "R", "x."), "right\n");
+        File.WriteAllText(@"\\?\" + Path.Combine(_dir, "B", "x."), "left\n");
+        var results = Path.Combine(_dir, "res");
+        var store = new CodeDiffer.Core.Sessions.SessionStore(resultsRoot: results);
+        var noCache = new CompareOptions { Cache = CodeDiffer.Core.Ledger.CacheMode.Off };
+        Assert.True(store.Start(Path.Combine(_dir, "L"), Path.Combine(_dir, "R"), noCache).Wait(TimeSpan.FromMinutes(1)));
+        Assert.True(store.Start3(Path.Combine(_dir, "B"), Path.Combine(_dir, "L"), Path.Combine(_dir, "R"), noCache).Wait(TimeSpan.FromMinutes(1)));
+
+        var listed = CodeDiffer.Core.Sessions.ResultStore.List(results);
+        Assert.Equal(2, listed.Count);
+        Assert.All(listed, c => Assert.Equal(("done", true), (c.State, c.Incomplete)));
+        Assert.All(listed, c => Assert.Equal("INCOMPLETE", c.Shown));
+
+        foreach (var side in new[] { "B", "L", "R" }) File.Delete(@"\\?\" + Path.Combine(_dir, side, "x."));
+        Assert.True(store.Start(Path.Combine(_dir, "L"), Path.Combine(_dir, "R"), noCache).Wait(TimeSpan.FromMinutes(1)));
+        var clean = CodeDiffer.Core.Sessions.ResultStore.List(results)[0];
+        Assert.Equal(("done", false, "done"), (clean.State, clean.Incomplete, clean.Shown));
+    }
+
     // ---- K4: a legacy file's bytes 0x80–0x9F are cp1252 punctuation, not Latin-1 controls ----
 
     [Theory]
