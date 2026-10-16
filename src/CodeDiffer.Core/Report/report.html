@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -551,7 +551,7 @@ var CD = (function () {
       if (f.c !== undefined) bits.push(f.c + " conflict / " + f.cl + " clean");
     } else {
       if (f.r) bits.push(f.r);
-      if (f.a !== undefined) bits.push("+" + fmt(f.a) + " −" + fmt(f.x));
+      if (f.a !== undefined) bits.push("+" + fmt(f.a) + " −" + fmt(f.x) + (f.co ? " (coarse)" : ""));
       else if (f.k && f.k !== "text") bits.push(f.k);
       if (f.sim !== undefined) bits.push(Math.floor(f.sim / 10) + "% similar" + (f.ed && f.sim >= 995 ? " (but edited)" : ""));
       bits.push(f.t === "A" ? bytes(f.rs) : f.t === "D" ? bytes(f.ls) : f.ls === f.rs ? bytes(f.rs) : bytes(f.ls) + " → " + bytes(f.rs));
@@ -567,6 +567,7 @@ var CD = (function () {
     var head = el("div", "head");
     head.appendChild(el("span", null, f.f ? f.f + " → " + f.p : f.p));
     if (f.k) head.appendChild(el("span", null, f.k));
+    if (f.co) head.appendChild(el("span", "w", "coarse: too many changes to align exactly, one hunk wider than the change (its +/− counts are of that hunk)"));
     if (f.n) head.appendChild(el("span", null, f.n));
     if (f.w) head.appendChild(el("span", "w", f.w));
     panel.appendChild(head);

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Model;
@@ -7,7 +7,15 @@ using CodeDiffer.Core.ThreeWay;
 namespace CodeDiffer.Core.Sessions;
 
 /// <summary>Per-file line counts from a rendered patch section (computed on demand, then remembered).</summary>
-public readonly record struct FileDiffInfo(int Hunks, int AddedLines, int RemovedLines, string Kind);
+public readonly record struct FileDiffInfo(int Hunks, int AddedLines, int RemovedLines, string Kind, bool Coarse = false)
+{
+    /// <summary>What a coarse diff (<see cref="Coarse"/>: too many changes to align, one replace wider than the change)
+    /// adds to its counts, wherever they are shown: they are of that replace, not of the lines that changed.</summary>
+    public const string CoarseNote = "coarse: too many changes to align exactly, one hunk wider than the change";
+
+    /// <summary>The line counts as a listing shows them.</summary>
+    public string Lines() => $"+{AddedLines:N0} -{RemovedLines:N0} in {Hunks:N0} hunk(s)" + (Coarse ? $" ({CoarseNote})" : "");
+}
 
 /// <summary>
 /// A compare run in the background: the agent gets an id at once and queries it while (and after) it runs —

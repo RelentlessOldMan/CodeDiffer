@@ -831,7 +831,8 @@ static int DiffFiles(string[] args)
     using var stdout = PatchStdout();
     // One name for both sides — the file the patch changes (the right one's): two names would make git apply rename it.
     var name = Path.GetFileName(right ?? left!);
-    PatchWriter.WriteFiles(stdout, left, right, name, name, popt);
+    var stats = PatchWriter.WriteFiles(stdout, left, right, name, name, popt);
+    if (stats.CoarseFiles > 0) Console.Error.WriteLine($"note: {FileDiffInfo.CoarseNote} (the patch is correct, but shows more lines changed than were)");
     return 0;
 }
 

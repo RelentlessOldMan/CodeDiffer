@@ -123,6 +123,33 @@ public sealed class DifferReviewTests : IDisposable
             Assert.Equal(expected, Classify(a, b, ".h", streamed));
     }
 
+    // ---- P1: a coarse line diff (past the work cap: one wide replace) says so wherever it is shown ----
+
+    /// <summary>Two text files, every line different: past the line diff's work cap, so one replace over the lot.</summary>
+    internal static void PutCoarsePair(string left, string right)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(left)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(right)!);
+        File.WriteAllText(left, string.Concat(Enumerable.Range(0, 15_000).Select(i => $"left {i}\n")));
+        File.WriteAllText(right, string.Concat(Enumerable.Range(0, 15_000).Select(i => $"right {i}\n")));
+    }
+
+    [Fact]
+    public void ACoarseDiff_IsFlaggedCoarse_InGetFileDiff_AndTheHtmlReport()
+    {
+        string l = Path.Combine(_dir, "L"), r = Path.Combine(_dir, "R");
+        PutCoarsePair(Path.Combine(l, "big.txt"), Path.Combine(r, "big.txt"));
+        var s = new CodeDiffer.Core.Sessions.SessionStore(resultsRoot: Path.Combine(_dir, "res"))
+            .Start(l, r, new CompareOptions { Cache = CodeDiffer.Core.Ledger.CacheMode.Off });
+        Assert.True(s.Wait(TimeSpan.FromMinutes(1)));
+
+        var head = CodeDiffer.Core.Sessions.AgentViews.FileDiff(s, "big.txt").Split('\n')[0];
+        Assert.Contains("coarse", head);
+        var rep = CodeDiffer.Core.Report.HtmlReport.Write(s);
+        var (_, files) = CodeDiffer.Core.Report.HtmlReport.ReadIndex(Path.Combine(Path.GetDirectoryName(rep.IndexPath)!, "data", "index.js"));
+        Assert.True(files.Single().TryGetProperty("co", out _));
+    }
+
     // ---- K4: a legacy file's bytes 0x80–0x9F are cp1252 punctuation, not Latin-1 controls ----
 
     [Theory]

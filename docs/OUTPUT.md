@@ -70,7 +70,11 @@ reason · hunk count · ±lines. Hides identical by default (mostly noise on big
 
 `get_file_diff(path, context=3, max_lines=2000)` — one file, hard cap, `"capped: summary only, N hunks
 total"` fallback for the pathological ones. Diffs inline when small, by reference (a `.patch` handle)
-when large.
+when large. A text pair with too many changes to align exactly in time (past the line diff's work cap: most of
+their lines differ, or more than about 35,000 lines do however long the files) comes out as one replace over the differing middle: still a correct patch,
+but its `+`/`-` counts are of that replace, not of the lines that changed. It is marked `coarse` wherever the counts
+show: `get_file_diff`'s first line, `list_files`, `get_stats`, the HTML report, and a note on stderr from
+`codediffer diff`.
 
 `get_stats` — totals by status/reason, byte mass, biggest/most-changed.
 

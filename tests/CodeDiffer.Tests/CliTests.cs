@@ -112,6 +112,16 @@ public sealed class CliTests : IDisposable
     }
 
     [Fact]
+    public void Diff_OfACoarseDiff_SaysSoOnStderr()
+    {
+        DifferReviewTests.PutCoarsePair(_t.P("C/L/big.txt"), _t.P("C/R/big.txt"));
+        var r = Cli("diff", _t.P("C/L/big.txt"), _t.P("C/R/big.txt"));
+        Assert.Equal(0, r.ExitCode);
+        Assert.Contains("coarse", r.Stderr);
+        Assert.Contains("@@ -1,15000 +1,15000 @@", r.Stdout);
+    }
+
+    [Fact]
     public void UnknownCommand_IsAUsageError()
     {
         var r = Cli("frobnicate", "x");

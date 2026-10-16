@@ -313,6 +313,7 @@ public static class HtmlReport
                 var info = AgentViews.Count(text, stats);
                 row["k"] = info.Kind;
                 if (info.Kind == "text") { row["a"] = info.AddedLines; row["x"] = info.RemovedLines; row["h"] = info.Hunks; }
+                if (info.Coarse) row["co"] = 1; // its counts are of one replace wider than the change
                 return (text, "patch", AgentViews.Stale(s, c));
             }));
         }

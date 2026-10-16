@@ -162,7 +162,7 @@ public static class AgentViews
         {
             o.Append($"most-changed lines (of {s.DiffInfo.Count:N0} file diff(s) rendered so far):\n");
             foreach (var (path, i) in lined)
-                o.Append($"  +{i.AddedLines:N0} -{i.RemovedLines:N0} in {i.Hunks:N0} hunk(s)  {path}\n");
+                o.Append($"  {i.Lines()}  {path}\n");
         }
 
         o.Append($"read cost: {r.ComparedPairs:N0} same-size pair(s) · {r.CacheHits:N0} side(s) from hash cache" +
@@ -226,7 +226,7 @@ public static class AgentViews
                 _ => c.LeftSize == c.RightSize ? $"  {Bytes(c.RightSize)}" : $"  {Bytes(c.LeftSize)} -> {Bytes(c.RightSize)}",
             });
             if (s.DiffInfo.TryGetValue(c.RelativePath, out var i))
-                o.Append(i.Kind == "text" ? $"  +{i.AddedLines:N0} -{i.RemovedLines:N0} ({i.Hunks:N0} hunk(s))" : $"  ({i.Kind})");
+                o.Append(i.Kind == "text" ? $"  +{i.AddedLines:N0} -{i.RemovedLines:N0} ({i.Hunks:N0} hunk(s){(i.Coarse ? ", " + FileDiffInfo.CoarseNote : "")})" : $"  ({i.Kind})");
             if (maybeRename?.Contains(c.RelativePath) == true) o.Append("  (may still pair into a rename)");
             o.Append('\n');
         }
@@ -285,7 +285,7 @@ public static class AgentViews
 
         var o = new StringBuilder();
         o.Append($"{Tag(c)} {Name(c)}{(c.ReasonLabel is { } rr ? $"  [{rr}]" : "")}  ");
-        o.Append(info.Kind == "text" ? $"+{info.AddedLines:N0} -{info.RemovedLines:N0} in {info.Hunks:N0} hunk(s)" : info.Kind);
+        o.Append(info.Kind == "text" ? info.Lines() : info.Kind);
         o.Append($" · {total:N0} patch line(s)\n");
         if (found is not null)
             o.Append("note: the compare is still running" + (mayBeRename ? "; this file may still pair into a rename" : "") + "\n");
@@ -632,7 +632,7 @@ public static class AgentViews
             if (line[0] == '+') plus++;
             else if (line[0] == '-') minus++;
         }
-        return new FileDiffInfo(hunks, plus, minus, kind);
+        return new FileDiffInfo(hunks, plus, minus, kind, stats.CoarseFiles > 0);
     }
 
     // ---- helpers ----

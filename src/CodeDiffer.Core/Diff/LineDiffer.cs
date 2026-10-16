@@ -39,7 +39,8 @@ public static class LineDiffer
 
     /// <summary>
     /// The work cap for a pair of N and M lines: room for a diff of up to half their lines ((N+M)²/8 steps), between
-    /// <see cref="DefaultMaxWork"/> and <see cref="MaxWorkCeiling"/>. A fixed cap gave up on any diff of past ~20,000
+    /// <see cref="DefaultMaxWork"/> and <see cref="MaxWorkCeiling"/> (so half their lines only up to ~69,000 lines in all;
+    /// past that, ~35,000 changed lines, flagged coarse). A fixed cap gave up on any diff of past ~20,000
     /// changed lines however long the files — 40,000 lines with every fourth edited went coarse (one conflict over the
     /// whole file in a 3-way merge) though the exact diff takes about as long; a pair mostly unlike still gives up.
     /// </summary>
