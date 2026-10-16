@@ -266,7 +266,7 @@ public sealed class CliTests : IDisposable
         Assert.Matches(@"(?m)^  identical  1   \(hidden\)\r?$", r.Stdout);
         Assert.Matches(@"(?m)^  added      1\r?$", r.Stdout);
         Assert.Matches(@"(?m)^  removed    1\r?$", r.Stdout);
-        Assert.Matches(@"(?m)^  renamed    1\r?$", r.Stdout);
+        Assert.Matches(@"(?m)^  renamed    1   pure 1 · edited 0\r?$", r.Stdout);
         Assert.Matches(@"(?m)^  modified   5   content 1 . eol 1 . whitespace 1 . encoding 1 . binary 1\r?$", r.Stdout);
         Assert.Matches(@"(?m)^  elapsed    \d+:\d\d  \(threads \d+, cache on\)", r.Stdout);
         Assert.Matches(@"(?m)^  content    \d+ same-size pair\(s\)", r.Stdout);
@@ -817,6 +817,25 @@ public sealed class CliTests : IDisposable
             File.Delete(@"\\?\" + _t.P("I/L/x."));
             File.Delete(@"\\?\" + _t.P("I/R/x."));
         }
+    }
+
+    [Fact]
+    public void Renames_ArePureOrEdited_AndAReorderedFileIsNot100PercentSimilar()
+    {
+        var lines = Enumerable.Range(0, 40).Select(i => $"rename line {i}\n").ToList();
+        _t.Put("N/L/pure.txt", string.Concat(lines));
+        _t.Put("N/R/pure2.txt", string.Concat(lines));
+        _t.Put("N/L/order.txt", string.Concat(lines.Select(l => l.Replace("rename", "order"))));
+        _t.Put("N/R/order2.txt", string.Concat(Enumerable.Reverse(lines).Select(l => l.Replace("rename", "order")))); // same lines, other order
+        var r = Cli("compare", "N/L", "N/R", "--no-save");
+        Assert.True(r.ExitCode == 0, r.ToString());
+        Assert.Contains("renamed    2   pure 1 · edited 1", r.Stdout);
+        Assert.Contains("R order.txt -> order2.txt  (100% similar, but edited)", r.Stdout);
+        Assert.Contains("R pure.txt -> pure2.txt\n", r.Stdout.Replace("\r", "")); // a pure one, as before: unmarked
+
+        var p = Cli("compare", "N/L", "N/R", "--no-save", "--patch");
+        Assert.Contains("similarity index 99%\nrename from order.txt", p.Stdout);   // git keeps 100% for identical
+        Assert.Contains("similarity index 100%\nrename from pure.txt", p.Stdout);
     }
 
     [Fact]

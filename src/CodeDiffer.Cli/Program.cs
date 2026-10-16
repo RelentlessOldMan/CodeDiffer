@@ -782,7 +782,9 @@ static void PrintSummary(TextWriter o, string left, string right, CompareReport 
     o.WriteLine($"  identical  {r.Count(ChangeStatus.Identical)}   (hidden)");
     o.WriteLine($"  added      {r.Count(ChangeStatus.Added)}");
     o.WriteLine($"  removed    {r.Count(ChangeStatus.Removed)}");
-    o.WriteLine($"  renamed    {r.Count(ChangeStatus.Renamed)}");
+    int pure = r.Changes.Count(c => c.PureRename);
+    o.WriteLine($"  renamed    {r.Count(ChangeStatus.Renamed)}" +
+                (r.Count(ChangeStatus.Renamed) > 0 ? $"   pure {pure} · edited {r.Count(ChangeStatus.Renamed) - pure}" : ""));
     o.WriteLine(
         $"  modified   {r.Count(ChangeStatus.Modified)}   " +
         $"content {r.ReasonCount(ChangeReason.Content)} · eol {r.ReasonCount(ChangeReason.Eol)} · " +
@@ -808,7 +810,11 @@ static void PrintChanges(CompareReport r)
         };
         var reason = c.ReasonLabel is { } rr ? $" [{rr}]" : "";
         var from = c.RenamedFrom is { } f ? $"{f} -> " : "";
-        Console.WriteLine($"    {tag} {from}{c.RelativePath}{reason}");
+        // A rename says whether its bytes moved unchanged: "100% similar" alone (a file reordered) read as pure.
+        var how = c.Status != ChangeStatus.Renamed ? ""
+                : c.PureRename ? ""
+                : $"  ({(c.SimilarityMilli ?? 0) / 10}% similar, but edited)";
+        Console.WriteLine($"    {tag} {from}{c.RelativePath}{how}{reason}");
     }
 }
 

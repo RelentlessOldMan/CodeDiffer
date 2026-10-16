@@ -274,7 +274,9 @@ public static class PatchWriter
                 WriteFile(w, c.RelativePath, c.RelativePath, Full(leftRoot, c.RelativePath), null, null, opt, stats, forGit);
                 break;
             case ChangeStatus.Renamed:
-                var header = $"similarity index {(c.SimilarityMilli ?? 0) / 10}%\nrename from {c.RenamedFrom}\nrename to {c.RelativePath}\n";
+                // git keeps 100% for a byte-identical rename: an edited one (a file reordered) is at most 99%.
+                int similarity = c.PureRename ? 100 : Math.Min(99, (c.SimilarityMilli ?? 0) / 10);
+                var header = $"similarity index {similarity}%\nrename from {c.RenamedFrom}\nrename to {c.RelativePath}\n";
                 if (c.PureRename)
                 {
                     // Byte-identical: the header alone moves it — for binary and large files too, and nothing is read.
