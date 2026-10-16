@@ -94,6 +94,9 @@ only when C equals the base byte for byte (compared and copied streamed, so a fi
 lone CR is content: merging across line endings converts only CRLF. A target in another line-ending style than the
 base is merged ignoring line endings and written in its own style (a mixed base too); a target still in the base's
 style takes a change that converts the file to one style, its own new lines included, as compare3 does.
+Removes are done first, then renames, then adds and edits, so a directory that became a file (or the reverse)
+ports in one run: a directory the removes and renames leave empty is removed before the adds (one still holding
+anything, the target's own files included, stays, and so does any directory behind a link).
 Stopping `apply --write` part way is safe: Ctrl+C stops between files (the report says how many were written
 and how many were not reached), each file is written whole via `<file>.codediffer.tmp` and a rename, and
 running the same apply again finishes the job — what is done comes out "already", a rename stopped between

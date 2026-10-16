@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using CodeDiffer.Core.Compare;
+using CodeDiffer.Core.Model;
 using Xunit;
 
 namespace CodeDiffer.Tests;
@@ -148,6 +149,49 @@ public sealed class DifferReviewTests : IDisposable
         var rep = CodeDiffer.Core.Report.HtmlReport.Write(s);
         var (_, files) = CodeDiffer.Core.Report.HtmlReport.ReadIndex(Path.Combine(Path.GetDirectoryName(rep.IndexPath)!, "data", "index.js"));
         Assert.True(files.Single().TryGetProperty("co", out _));
+    }
+
+    // ---- P2: apply, where a file and a directory trade places ----
+
+    public static TheoryData<string, string[], string[]> FileAndDirectorySwaps()
+    {
+        var longText = string.Concat(Enumerable.Range(0, 40).Select(i => $"a fairly long line number {i}\n"));
+        return new()
+        {
+            { "dir to file", ["x/y=in dir\n"], ["x=file\n"] },
+            { "file to dir", ["x=file\n"], ["x/y=now dir\n"] },
+            { "rename out of a dir that became a file", ["d/f.txt=" + longText], ["d=file now\n", "e/f.txt=" + longText + "!\n"] },
+            { "nested dir to file", ["p/q/r.txt=deep\n", "keep.txt=k\n"], ["p=flat\n", "keep.txt=k\n"] },
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(FileAndDirectorySwaps))]
+    public void Apply_WhereAFileAndADirectoryTradePlaces_PortsInOneRun(string name, string[] left, string[] right)
+    {
+        _ = name;
+        void Tree(string root, string[] files)
+        {
+            foreach (var f in files)
+            {
+                var (rel, text) = (f[..f.IndexOf('=')], f[(f.IndexOf('=') + 1)..]);
+                var p = Path.Combine(_dir, root, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+                File.WriteAllText(p, text);
+            }
+        }
+        Tree("L", left);
+        Tree("C", left);
+        Tree("R", right);
+        Directory.CreateDirectory(Path.Combine(_dir, "R")); // (a tree may be all one side's)
+        var report = new DirectoryComparer(new CompareOptions { Cache = CodeDiffer.Core.Ledger.CacheMode.Off }).Compare(Path.Combine(_dir, "L"), Path.Combine(_dir, "R"));
+        var run = CodeDiffer.Core.Port.ChangePorter.Run(report, Path.Combine(_dir, "L"), Path.Combine(_dir, "R"), Path.Combine(_dir, "C"), write: true);
+        Assert.All(run.Files, f => Assert.True(f.Status is CodeDiffer.Core.Port.PortStatus.Clean, $"{f.Path}: {f.Status} {f.Note}"));
+
+        var again = new DirectoryComparer(new CompareOptions { Cache = CodeDiffer.Core.Ledger.CacheMode.Off }).Compare(Path.Combine(_dir, "C"), Path.Combine(_dir, "R"));
+        Assert.All(again.Changes, c => Assert.Equal(ChangeStatus.Identical, c.Status));
+        Assert.Empty(Directory.GetDirectories(Path.Combine(_dir, "C"), "*", SearchOption.AllDirectories)
+            .Where(d => Directory.GetFileSystemEntries(d).Length == 0)); // no emptied directory left behind
     }
 
     // ---- K4: a legacy file's bytes 0x80–0x9F are cp1252 punctuation, not Latin-1 controls ----

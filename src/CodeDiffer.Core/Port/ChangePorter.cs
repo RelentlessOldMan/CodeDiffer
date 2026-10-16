@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Diff;
 using CodeDiffer.Core.Model;
@@ -104,7 +104,21 @@ public static class ChangePorter
             .GroupBy(t => t.p, TreeMerger.PathComparer)
             .Where(g => g.Select(t => t.i).Distinct().Count() > 1 && g.Select(t => t.p).Distinct(StringComparer.Ordinal).Count() > 1)
             .SelectMany(g => g.Select(t => t.p)).ToHashSet(StringComparer.Ordinal);
-        Parallel.For(0, changed.Count, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism) }, i =>
+        // In phases, each in parallel: what frees a path before what takes one. A directory that became a file (x/y
+        // removed, x added) or a file that became one (the reverse) is a remove and an add on one path prefix; run
+        // together, the add found the old file or directory still there. So removes first, then renames (each deletes
+        // its old path once its new one is written), then the directories those emptied, then adds and edits.
+        var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism) };
+        var deleted = new System.Collections.Concurrent.ConcurrentBag<string>();
+        int Phase(FileChange c) => c.Status switch { ChangeStatus.Removed => 0, ChangeStatus.Renamed => 1, _ => 2 };
+        foreach (var phase in Enumerable.Range(0, changed.Count).GroupBy(i => Phase(changed[i])).OrderBy(g => g.Key))
+        {
+            if (phase.Key == 2 && write) RemoveEmptied(deleted, target, links);
+            Parallel.ForEach(phase, options, i => Port(i));
+        }
+        return new PortResult { Target = target, Written = write, Files = files, Cancelled = files.Any(f => f.Status == PortStatus.NotReached) };
+
+        void Port(int i)
         {
             var c = changed[i];
             if (ct.IsCancellationRequested) // checked per file, never inside one: a file is done whole or not at all
@@ -123,6 +137,8 @@ public static class ChangePorter
                     ? new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Conflict, "none", [],
                         $"the target has a symlink/junction at {link} — never written or deleted through")
                     : One(c, leftRoot, rightRoot, target, write, maxTextBytes, ct);
+                if (write && files[i].Status == PortStatus.Clean && (c.Status == ChangeStatus.Removed || c.Status == ChangeStatus.Renamed))
+                    deleted.Add(c.RenamedFrom ?? c.RelativePath);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -139,8 +155,28 @@ public static class ChangePorter
                 progress.Step();
                 progress.AfterFile?.Invoke(progress.Done);
             }
-        });
-        return new PortResult { Target = target, Written = write, Files = files, Cancelled = files.Any(f => f.Status == PortStatus.NotReached) };
+        }
+    }
+
+    /// <summary>
+    /// The directories the deletes left empty, deepest first, up to (never) the target root: the change set's left side
+    /// had files there and its right side has none, so the path is free for an add (a file where a directory was). Only
+    /// an empty real directory goes, never one behind a link; one that still holds anything, the target's own files
+    /// included, stays.
+    /// </summary>
+    private static void RemoveEmptied(IEnumerable<string> deleted, string target, LinkGuard links)
+    {
+        var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rel in deleted)
+            for (var d = Path.GetDirectoryName(Full(target, rel)); d is not null && d.Length > target.Length && dirs.Add(d); d = Path.GetDirectoryName(d)) { }
+        foreach (var d in dirs.OrderByDescending(d => d.Length))
+            try
+            {
+                if (links.LinkOnTheWay(d) is null && Directory.Exists(d) && (File.GetAttributes(d) & FileAttributes.ReparsePoint) == 0
+                    && !Directory.EnumerateFileSystemEntries(d).Any())
+                    Directory.Delete(d);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } // left as it was: an add there says why
     }
 
     /// <summary>A link on the way to either of the change's target paths, or null.</summary>
