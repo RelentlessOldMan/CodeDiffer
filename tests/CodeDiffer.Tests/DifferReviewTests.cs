@@ -32,6 +32,31 @@ public sealed class DifferReviewTests : IDisposable
     private string Classify(string left, string right, string ext, bool streamed)
         => Classify(Encoding.UTF8.GetBytes(left), Encoding.UTF8.GetBytes(right), ext, streamed);
 
+    // ---- K1: quote parity, kept past a comment, a raw string's inner quotes and a triple-quoted string's ----
+
+    [Theory]
+    [InlineData(".c", "int w = 3; /* 3\" wide */ printf(\"%d , %d\", a, b);\n", "int w = 3; /* 3\" wide */ printf(\"%d, %d\", a, b);\n", "content")]
+    [InlineData(".c", "int w = 3; // 3\" wide\nprintf(\"%d , %d\", a);\n", "int w = 3; // 3\" wide\nprintf(\"%d, %d\", a);\n", "content")]
+    [InlineData(".cpp", "auto s = R\"(msg=\"Hello , world\")\";\n", "auto s = R\"(msg=\"Hello, world\")\";\n", "content")]
+    [InlineData(".cpp", "auto s = R\"x(a)\" , b)x\";\n", "auto s = R\"x(a)\", b)x\";\n", "content")]
+    [InlineData(".py", "s = \"\"\"say \"x , y\" ok\"\"\"\n", "s = \"\"\"say \"x, y\" ok\"\"\"\n", "content")]
+    [InlineData(".py", "s = '''it's , here'''\n", "s = '''it's, here'''\n", "content")]
+    [InlineData(".cs", "var s = \"\"\"say \"x , y\" ok\"\"\";\n", "var s = \"\"\"say \"x, y\" ok\"\"\";\n", "content")]
+    [InlineData(".c", "/* don't */ s = \"a , b\";\n", "/* don't */ s = \"a, b\";\n", "content")]  // controls
+    [InlineData(".c", "s = \"a\\\" , b\";\n", "s = \"a\\\", b\";\n", "content")]
+    [InlineData(".c", "c = '\"'; s = \"a , b\";\n", "c = '\"'; s = \"a, b\";\n", "content")]
+    [InlineData(".js", "let s = `a \"b , c\" d`;\n", "let s = `a \"b, c\" d`;\n", "content")]
+    [InlineData(".c", "x = a / b; /* c */ y=1; // d\n", "x = a/b; /* c */ y = 1; // d\n", "whitespace")]
+    [InlineData(".c", "p = \"/*\";  x=1; /**/ z=2;\n", "p = \"/*\"; x = 1; /**/ z = 2;\n", "whitespace")]
+    [InlineData(".cpp", "auto s = R\"(a)\";  x=1;\n", "auto s = R\"(a)\"; x = 1;\n", "whitespace")]
+    [InlineData(".py", "s = \"\"\"a\"\"\";  x=1\n", "s = \"\"\"a\"\"\"; x = 1\n", "whitespace")]
+    [InlineData(".py", "s = r\"a b\";  x=1\n", "s = r\"a b\"; x = 1\n", "whitespace")]
+    public void AQuoteInACommentOrInsideARawOrTripleString_LeavesTheStringsWhereTheyAre(string ext, string a, string b, string expected)
+    {
+        foreach (var streamed in new[] { false, true })
+            Assert.Equal(expected, Classify(a, b, ext, streamed));
+    }
+
     // ---- K2: a backslash-newline splices two lines into one ----
 
     [Theory]

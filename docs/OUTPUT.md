@@ -360,7 +360,11 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   inside a string literal reads as whitespace. Where a line reads more than one way, a space is kept if any reading
   puts it in a string, so a guess wrong for the file only makes a verdict stricter: an apostrophe is read as a quote
   and as not one (`can't` in a comment, a Rust `'static`), and a string after a raw prefix (`r"…"`, `R"(…)"`,
-  `r#"…"#`, a backtick string, C#'s `"""…"""`) with its backslashes as text and as escapes. So
+  `r#"…"#`, a backtick string, C#'s `"""…"""`) with its backslashes as text and as escapes. Where a backslash
+  escapes, and in C#, one reading more skips `//` and `/* … */` comments (a `3"` in one opens no string), closes a
+  C++ raw string only at its `)delim"` and a `"""` or `'''` string only at the same three quotes, so a quote inside
+  either is text: `R"(msg="Hello , world")"` → `Hello, world` and `/* 3" wide */ printf("%d , %d")` → `%d, %d` are
+  `content`. So
   `/* it's */ puts("don't a= b");` → `a=b` is `content`, and a reformat beside a raw string ending in a backslash
   is `content` too. A string is read a line at a time: one that goes on past its line (a Python `"""` docstring, a C#
   raw or multi-line verbatim string, a JS template literal) is a string on its first line only, so a space taken

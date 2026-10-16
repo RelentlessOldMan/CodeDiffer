@@ -378,9 +378,11 @@ public enum StringRules
 /// readings run side by side, in a string if any is: an apostrophe a quote (a char literal, a string) or not (prose in
 /// a comment, a Rust lifetime: read as a quote, the next apostrophe, inside a real string, would close it); a string
 /// after a raw prefix (<c>r"…"</c>, <c>R"(…)"</c>, <c>r#"…"#</c>, a backtick string, C#'s <c>"""…"""</c>) one whose
-/// backslashes are text or not; and in <see cref="StringRules.Both"/> a backslash an escape or text. A reading wrong
-/// for the file only puts more of a line in a string, so a verdict is stricter, never one that calls a change in a
-/// string whitespace.
+/// backslashes are text or not; and in <see cref="StringRules.Both"/> a backslash an escape or text. Where a backslash
+/// escapes (and in C#) one reading more reads the line's structure: it skips <c>//</c> and <c>/* … */</c> comments (a
+/// <c>3"</c> in one opens no string), closes a C++ raw string only at its <c>)delim"</c> and a <c>"""</c> or
+/// <c>'''</c> string only at the same three quotes (the quotes inside them are text). A reading wrong for the file only
+/// puts more of a line in a string, so a verdict is stricter, never one that calls a change in a string whitespace.
 /// </summary>
 internal struct StringScan
 {
@@ -388,7 +390,10 @@ internal struct StringScan
     private readonly int _n;
     private int _escapeNext, _closedVerbatim, _inString; // a bit a reading
     private readonly int _unspliced;                      // the readings whose backslashes are text (Both's literal ones)
+    private readonly bool _structured;                    // one reading reads comments, raw and triple-quoted strings
+    private int _everyChar;                               // the readings that need every character, now (Structured)
     private int _p1 = -1, _p2 = -1;                       // the last two characters stepped over but spacing
+    private ulong _tail;                                  // the last eight stepped over, spacing too, a byte each (Tail)
     private Pp _pp;                                       // where on a preprocessor line the scan is
     private ulong _directive;                             // its directive's name so far, a byte a character
 
@@ -402,6 +407,8 @@ internal struct StringScan
             _r[_n++] = new Reading(e, apostrophe: true, raw: true);
             _r[_n++] = new Reading(e, apostrophe: false, raw: false);
             _r[_n++] = new Reading(e, apostrophe: false, raw: true);
+            _r[_n++] = new Reading(e, apostrophe: true, raw: true, structured: true);
+            _structured = true;
         }
         if (rules is StringRules.Both or StringRules.Literal or StringRules.PowerShell)
         {
@@ -472,6 +479,8 @@ internal struct StringScan
     public bool Step(int c)
     {
         bool escaped = _escapeNext != 0;
+        ulong tail = _tail;
+        _tail = (tail << 8) | Tail(c);
         if ((_pp != Pp.None || c is '\n' or '\r') && !(escaped && c is '\n' or '\r')) PpStep(TextInspector.IsHorizontalSpace(c) ? -2 : c);
         if (TextInspector.IsHorizontalSpace(c))
         {
@@ -479,9 +488,10 @@ internal struct StringScan
             // escaped space is a character, after which a verbatim string's closing quote is no longer half of "".
             _closedVerbatim &= ~_escapeNext;
             _escapeNext = 0;
+            if (_everyChar != 0) Spacing();
             return escaped;
         }
-        if (c is not ('"' or '\'' or '`' or '\\' or '\n' or '\r'))
+        if (_everyChar == 0 && c is not ('"' or '\'' or '`' or '\\' or '\n' or '\r') && !(_structured && c is '/' or '*'))
         {
             // Nothing any reading treats specially (most of a file): the same step for all of them.
             _escapeNext = _closedVerbatim = 0;
@@ -489,13 +499,20 @@ internal struct StringScan
             _p1 = c;
             return escaped;
         }
-        int next = 0, closed = 0, inString = 0;
+        int next = 0, closed = 0, inString = 0, every = 0;
         for (int i = 0; i < _n; i++)
         {
             ref var r = ref _r[i];
             int bit = 1 << i;
             bool e = (_escapeNext & bit) != 0;
             if (!e && r.Escapes(c)) next |= bit;
+            if (r.Structured)
+            {
+                if (Structured(ref r, c, e, tail, (_closedVerbatim & bit) != 0)) closed |= bit;
+                if (r.Quote != '\0') inString |= bit;
+                if (r.Mode is Mode.RawHead or Mode.Triple) every |= bit;
+                continue;
+            }
             if (c is '\n' or '\r')
             {
                 if (!e) // an escaped one (a splice) goes on with the line, and its string
@@ -525,10 +542,129 @@ internal struct StringScan
         _escapeNext = next;
         _closedVerbatim = closed;
         _inString = inString;
+        _everyChar = every;
         _p2 = _p1;
         _p1 = c;
         return escaped;
     }
+
+    /// <summary>A character as <see cref="_tail"/> holds it: ASCII as itself, anything else as 0xFF, so a UTF-16 char
+    /// (whole) and its UTF-8 bytes (streamed) never match a quote, a parenthesis or a raw string's delimiter.</summary>
+    private static uint Tail(int c) => c is >= 0 and < 0x80 ? (uint)c : 0xFF;
+
+    /// <summary>The low <paramref name="n"/> bytes of a <see cref="_tail"/>.</summary>
+    private static ulong Mask(int n) => n >= 8 ? ulong.MaxValue : (1UL << (8 * n)) - 1;
+
+    /// <summary>Spacing, for the readings that need every character: a raw string's head isn't one (a raw string to
+    /// its quote), a triple's closing quotes aren't three in a row.</summary>
+    private void Spacing()
+    {
+        for (int i = 0; i < _n; i++)
+        {
+            ref var r = ref _r[i];
+            if (r.Mode == Mode.RawHead) r.Mode = Mode.None;
+            else if (r.Mode == Mode.Triple) r.Run = 0;
+        }
+        _everyChar = 0;
+        for (int i = 0; i < _n; i++)
+            if (_r[i].Mode == Mode.Triple) _everyChar |= 1 << i;
+    }
+
+    /// <summary>
+    /// The structured reading's step over <paramref name="c"/> (not spacing; <paramref name="e"/> escaped,
+    /// <paramref name="tail"/> what came before it): a comment opens no string, a C++ raw string (<c>R"delim(…)delim"</c>)
+    /// closes only at its delimiter, a <c>"""</c> or <c>'''</c> string only at the same three quotes. Whether a C#
+    /// verbatim string closed (<paramref name="closedVerbatim"/>: the last step closed one, so this quote is half of "").
+    /// </summary>
+    private readonly bool Structured(ref Reading r, int c, bool e, ulong tail, bool closedVerbatim)
+    {
+        int prev = (int)(tail & 0xFF), prev2 = (int)(tail >> 8 & 0xFF);
+        bool justOpened = r.JustOpened;
+        r.JustOpened = false;
+        if (c is '\n' or '\r')
+        {
+            if (!e) // an escaped one (a splice) goes on with the line: its string, its comment
+            {
+                r.Quote = '\0';
+                r.Verbatim = false;
+                r.Mode = Mode.None;
+                r.Empty = false;
+            }
+            return false;
+        }
+        switch (r.Mode)
+        {
+            case Mode.LineComment:
+                return false;
+            case Mode.BlockComment:
+                if (c == '/' && prev == '*' && !justOpened) r.Mode = Mode.None; // "/*/" is no comment's end
+                return false;
+            case Mode.RawHead:
+                // R"delim( : the delimiter, up to the parenthesis; anything else (r"abc", Python's) is a raw string to its quote.
+                if (c == '(') r.Mode = r.DelimLen < 8 ? Mode.RawDelim : Mode.None; // ')' and the delimiter fit a tail
+                else if (c == r.Quote) Close(ref r, prev);
+                else if (c is ')' or '\\' or < 0x21 or >= 0x7F || r.DelimLen >= 16) r.Mode = Mode.None;
+                else
+                {
+                    r.Want = (r.Want << 8) | (uint)c;
+                    r.DelimLen++;
+                }
+                return false;
+            case Mode.RawDelim:
+                if (c == '"' && ((tail ^ r.Want) & Mask(r.DelimLen + 1)) == 0) Close(ref r, -1);
+                return false;
+            case Mode.Triple:
+                if (c == r.Quote && !e)
+                {
+                    if (++r.Run == 3) Close(ref r, -1);
+                }
+                else r.Run = 0;
+                return false;
+        }
+        if (r.Quote == '\0')
+        {
+            if (c == '/' && prev == '/') { r.Mode = Mode.LineComment; return false; }
+            if (c == '*' && prev == '/') { r.Mode = Mode.BlockComment; r.JustOpened = true; return false; }
+            if (e || !r.IsQuote(c)) return false;
+            if (r.Empty && prev == c && prev2 == c && c is '"' or '\'')
+            {
+                // The third quote of """ (or '''): the two before it were an empty string. Raw in C#, and after an r.
+                r.Mode = Mode.Triple;
+                r.Run = 0;
+                r.Quote = (char)c;
+                r.Verbatim = r.Rules == StringRules.CSharp || (tail >> 16 & 0xFF) is 'r' or 'R';
+                r.Empty = false;
+                return false;
+            }
+            r.Empty = false;
+            r.Quote = (char)c;
+            r.Verbatim = (r.Rules == StringRules.CSharp && c == '"' && (closedVerbatim || _p1 == '@' || (_p1 == '$' && _p2 == '@')))
+                         || Raw(r.Rules, c);
+            if (r.Verbatim && r.Rules != StringRules.CSharp && c == '"' && _p1 is 'r' or 'R')
+            {
+                r.Mode = Mode.RawHead;
+                r.Want = ')';
+                r.DelimLen = 0;
+            }
+            return false;
+        }
+        if (e || c != r.Quote) return false;
+        bool verbatim = r.Verbatim;
+        Close(ref r, prev);
+        return verbatim;
+    }
+
+    /// <summary>A string's closing quote: an empty one (<paramref name="prev"/> the opening quote) may be the first two of three.</summary>
+    private static void Close(ref Reading r, int prev)
+    {
+        r.Empty = prev == r.Quote;
+        r.Quote = '\0';
+        r.Verbatim = false;
+        r.Mode = Mode.None;
+    }
+
+    /// <summary>What the structured reading is in, beyond a plain string.</summary>
+    private enum Mode : byte { None, LineComment, BlockComment, RawHead, RawDelim, Triple }
 
     /// <summary>Whether a string opening at quote <paramref name="c"/> is raw (its backslashes text): C#'s third quote
     /// of <c>"""</c>; else a backtick (Go), or a quote after an <c>r</c>/<c>R</c> prefix (<c>r"…"</c>, <c>R"(…)"</c>,
@@ -539,18 +675,23 @@ internal struct StringScan
           || (_p1 is 'r' or 'R' && !(TextInspector.IsWordChar(_p2) && _p2 is not ('b' or 'B' or 'u' or 'U' or 'L' or '8' or 'f' or 'F')))
           || (_p1 == '#' && _p2 is 'r' or '#');
 
-    [InlineArray(6)]
+    [InlineArray(8)]
     private struct Readings
     {
         private Reading _first;
     }
 
-    private struct Reading(StringRules rules, bool apostrophe, bool raw)
+    private struct Reading(StringRules rules, bool apostrophe, bool raw, bool structured = false)
     {
         public readonly StringRules Rules = rules;
         public readonly bool Raw = raw;
+        public readonly bool Structured = structured; // reads comments, raw strings' delimiters and triple quotes
         public char Quote;    // the quote of the string the reading is in, or '\0'
         public bool Verbatim; // that string's backslashes are text
+        public Mode Mode;     // structured: a comment, a raw string's head or delimiter, a triple-quoted string
+        public byte Run, DelimLen; // a triple's closing quotes so far; a raw string's delimiter's length
+        public bool Empty, JustOpened; // the last string closed was ""; a block comment opened at the last character
+        public ulong Want;    // a raw string's ')' and delimiter, a byte each (StringScan.Tail)
 
         /// <summary>Whether <paramref name="c"/>, not itself escaped, escapes the next character.</summary>
         public readonly bool Escapes(int c) => Rules switch
