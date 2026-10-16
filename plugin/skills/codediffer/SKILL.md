@@ -11,7 +11,9 @@ files over 1 GB, locally or on a network share, and every answer is bounded so t
   agreed, merged, conflict). They run in the background and return a compare_id; repeat compares are fast
   (hash cache).
 - **get_summary**: constant-size counts; while running, progress and the differences found so far.
-- **list_files**: the changed files, paged and filtered by status, reason or path.
+- **list_files**: the changed files, paged and filtered by status, reason or path. A rename marked "not
+  followed by compare3 or apply" is a guess (alike only in boilerplate, a trivial file, or tied with
+  another file): the 3-way merge and apply treat it as a remove and an add, so an edit to it is a conflict.
 - **get_file_diff**: one file's diff (2-way) or its merge with diff3 conflict markers (3-way), capped.
 - **get_stats**: detailed totals: files and bytes per status and reason, the biggest changed files.
   A `whitespace` reason is judged alike for every kind of file: where indentation or spacing is code (Python,

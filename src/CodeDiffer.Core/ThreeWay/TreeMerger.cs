@@ -98,7 +98,14 @@ public static class TreeMerger
             var k = keys[i];
             side1.TryGetValue(k, out var c1);
             side2.TryGetValue(k, out var c2);
-            try { entries[i] = Classify(k.Path, c1, c2, baseDir, v1Dir, v2Dir, opt.MaxClassifyBytes, ct); }
+            try
+            {
+                var e = Classify(k.Path, c1, c2, baseDir, v1Dir, v2Dir, opt.MaxClassifyBytes, ct);
+                // A held rename, merged as its remove and its add: the entry says why it wasn't followed.
+                var held = (c1?.RenameHeld is { } h1 ? $"v1: {h1}" : null) is { } n1 && c2?.RenameHeld is { } h2 ? $"{n1}; v2: {h2}"
+                         : c1?.RenameHeld is { } only1 ? $"v1: {only1}" : c2?.RenameHeld is { } only2 ? $"v2: {only2}" : null;
+                entries[i] = held is null ? e : e with { Note = e.Note is { } n ? $"{n}; {held}" : held };
+            }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 entries[i] = new Merge3Entry(k.Path, c1, c2, Merge3Outcome.Conflict, "unreadable", 0, 0, null, ex.Message);
@@ -161,7 +168,7 @@ public static class TreeMerger
     private static Dictionary<Key, FileChange> Index(CompareReport r)
     {
         var d = new Dictionary<Key, FileChange>();
-        foreach (var c in r.Changes)
+        foreach (var c in r.Changes.SelectMany(c => c.ActedOn())) // a held rename: its remove and its add
             switch (c.Status)
             {
                 case ChangeStatus.Identical: break;

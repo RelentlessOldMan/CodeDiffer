@@ -39,6 +39,14 @@ public sealed record RenameResult(
 /// never in the removed set, so they can't be falsely paired. Among genuine remove/add candidates we
 /// take the single best match per file, which is what keeps precision up when one removed file resembles
 /// several adds. Giant/binary files only ever rename via the pure (SHA) pass.
+///
+/// Every rename found is listed (the contract's metric), but one too weak or too ambiguous to act on is HELD
+/// (<see cref="RenameOp.Held"/>): compare3 and apply take it as the remove and the add it may be, so the other side's
+/// edit is a conflict, never written into an unrelated file. Held: a tie (another file as good a match); a file with
+/// fewer than <see cref="MinSignificant"/> significant lines (<see cref="SignificantLines"/>) that changed its name; an
+/// edited rename whose significant lines are less than <see cref="FollowMilli"/> alike, unless they are at least the
+/// threshold alike and the name or directory is kept. Shared boilerplate (a licence header, includes, braces) is
+/// what the significant lines leave out.
 /// </summary>
 public sealed class RenameDetector
 {
@@ -127,10 +135,11 @@ public sealed class RenameDetector
         var usedRemoved = new bool[removed.Count];
         var usedAdded = new bool[added.Count];
         var found = new List<(int R, RenameOp Op)>();
-        void Pair(int ri, int ai)
+        void Pair(int ri, int ai, string? held = null)
         {
             usedRemoved[ri] = usedAdded[ai] = true;
-            found.Add((ri, new RenameOp(removed[ri].RelativePath, added[ai].RelativePath, 1000)));
+            found.Add((ri, new RenameOp(removed[ri].RelativePath, added[ai].RelativePath, 1000,
+                held ?? (rName[ri] == aName[ai] ? null : TrivialPure(added[ai])))));
         }
 
         foreach (var (rs, adds) in groups.Values)
@@ -157,9 +166,27 @@ public sealed class RenameDetector
                             if (!free.TryGetValue(k, out var q)) free[k] = q = new Queue<int>();
                             q.Enqueue(a);
                         }
+                    // Two removed files or two added files at the same level is a tie: they pair as before, but every pair
+                    // of that level is held — which is the rename can't be told (M3).
+                    var groupA = free.ToDictionary(kv => kv.Key, kv => kv.Value.ToList(), StringComparer.Ordinal);
+                    var rest = new Dictionary<string, List<int>>(StringComparer.Ordinal);
                     foreach (var r in rs)
-                        if (!usedRemoved[r] && free.TryGetValue(key(rName[r], rDir[r]), out var q) && q.Count > 0)
-                            Pair(r, q.Dequeue());
+                        if (!usedRemoved[r])
+                        {
+                            var k = key(rName[r], rDir[r]);
+                            if (!rest.TryGetValue(k, out var l)) rest[k] = l = [];
+                            l.Add(r);
+                        }
+                    foreach (var r in rs)
+                    {
+                        var k = key(rName[r], rDir[r]);
+                        if (usedRemoved[r] || !free.TryGetValue(k, out var q) || q.Count == 0) continue;
+                        int a = q.Dequeue();
+                        int otherA = groupA[k].FirstOrDefault(x => x != a, -1), otherR = rest[k].FirstOrDefault(x => x != r, -1);
+                        string? tie = otherA >= 0 ? Tied(added[otherA].RelativePath)
+                                    : otherR >= 0 ? Tied(removed[otherR].RelativePath) : null;
+                        Pair(r, a, tie);
+                    }
                 }
                 continue;
             }
@@ -241,8 +268,8 @@ public sealed class RenameDetector
     {
         // Read + EOL-normalize + count each candidate's lines once; skip binary / oversized (line metric needs text).
         var intern = new LineIds();
-        var removedLines = ReadLines(removed, intern, unreadable, ref bytesRead, ct);
-        var addedLines = ReadLines(added, intern, unreadable, ref bytesRead, ct);
+        var (removedLines, removedSig) = ReadLines(removed, intern, unreadable, ref bytesRead, ct);
+        var (addedLines, addedSig) = ReadLines(added, intern, unreadable, ref bytesRead, ct);
         int threshold = _options.RenameSimilarityThresholdMilli;
 
         var rName = removed.Select(e => Name(e.RelativePath)).ToArray();
@@ -308,18 +335,65 @@ public sealed class RenameDetector
             return c != 0 ? c : string.CompareOrdinal(added[x.ai].RelativePath, added[y.ai].RelativePath);
         }));
         var head = new int[removed.Count];
+        // Which removed files' queued heads are on each added file (a tie on the added side), and the files a tie was
+        // seen with: the other side of a tie is held too when it pairs, whichever way the greedy took it.
+        var headsOn = new Dictionary<int, List<int>>();
+        var tiedR = new Dictionary<int, string>();
+        var tiedA = new Dictionary<int, string>();
+        void Enqueue(int ri, int milli, int ai)
+        {
+            queue.Enqueue(ri, (milli, ri, ai));
+            if (!headsOn.TryGetValue(ai, out var l)) headsOn[ai] = l = [];
+            l.Add(ri);
+        }
         for (int ri = 0; ri < removed.Count; ri++)
-            if (rows[ri] is { Count: > 0 } row) queue.Enqueue(ri, (row[0].milli, ri, row[0].ai));
+            if (rows[ri] is { Count: > 0 } row) Enqueue(ri, row[0].milli, row[0].ai);
 
         var pairedR = new HashSet<string>(StringComparer.Ordinal);
         var pairedA = new HashSet<string>(StringComparer.Ordinal);
         while (queue.TryDequeue(out var ri, out var p))
         {
             ct.ThrowIfCancellationRequested();
+            headsOn[p.ai].Remove(ri);
             if (!usedA[p.ai])
             {
+                // A tie (M3): another free added file this one is as alike to and as near by name and directory, or
+                // another removed file whose best is this added file as well. Taken as before (best first, then by
+                // path), but held — and so is the other file of the tie, when it pairs.
+                int rank = Rank(rName[ri], rDir[ri], aName[p.ai], aDir[p.ai]);
+                bool Same(int milli, int r, int a) => milli == p.milli && Rank(rName[r], rDir[r], aName[a], aDir[a]) == rank;
+                string? tie = tiedR.GetValueOrDefault(ri) ?? tiedA.GetValueOrDefault(p.ai);
+                var cur = rows[ri]!;
+                int h2 = head[ri] + 1;
+                for (; h2 < cur.Count && cur[h2].milli == p.milli && tie is null; h2++)
+                    if (!usedA[cur[h2].ai] && Same(cur[h2].milli, ri, cur[h2].ai))
+                    {
+                        tie = Tied(added[cur[h2].ai].RelativePath);
+                        tiedA[cur[h2].ai] = Tied(removed[ri].RelativePath);
+                    }
+                if (tie is null && h2 == cur.Count && more[ri])
+                {
+                    // The kept candidates ran out still tied: the next free one decides (the same as with every candidate kept).
+                    usedA[p.ai] = true;
+                    var next = Row(ri, 1, out _);
+                    usedA[p.ai] = false;
+                    if (next is [var n] && Same(n.milli, ri, n.ai))
+                    {
+                        tie = Tied(added[n.ai].RelativePath);
+                        tiedA[n.ai] = Tied(removed[ri].RelativePath);
+                    }
+                }
+                if (tie is null)
+                    foreach (var r2 in headsOn[p.ai])
+                        if (Same(rows[r2]![head[r2]].milli, r2, p.ai))
+                        {
+                            tie = Tied(removed[r2].RelativePath);
+                            tiedR[r2] = Tied(added[p.ai].RelativePath);
+                            break;
+                        }
                 usedA[p.ai] = true;
-                renames.Add(new RenameOp(removed[ri].RelativePath, added[p.ai].RelativePath, p.milli));
+                renames.Add(new RenameOp(removed[ri].RelativePath, added[p.ai].RelativePath, p.milli,
+                    tie ?? WeakEdited(removedSig[ri]!, addedSig[p.ai]!, rName[ri] == aName[p.ai], rDir[ri] == aDir[p.ai], threshold)));
                 edited.Add(added[p.ai].RelativePath);
                 pairedR.Add(removed[ri].RelativePath);
                 pairedA.Add(added[p.ai].RelativePath);
@@ -337,12 +411,92 @@ public sealed class RenameDetector
                 if (row.Count == 0) continue;
             }
             head[ri] = h;
-            queue.Enqueue(ri, (row[h].milli, ri, row[h].ai));
+            Enqueue(ri, row[h].milli, row[h].ai);
         }
 
         removed.RemoveAll(e => pairedR.Contains(e.RelativePath));
         added.RemoveAll(e => pairedA.Contains(e.RelativePath));
     }
+
+    /// <summary>Significant lines alike (per mille) at or past which an edited rename is followed whatever its name.</summary>
+    internal const int FollowMilli = 800;
+
+    /// <summary>Fewer significant lines than this (the smaller file's), and a file that changed its name is too small to tell.</summary>
+    internal const int MinSignificant = 3;
+
+    private const string NotFollowed = "not followed by compare3 or apply: ";
+
+    private static string Tied(string other) => NotFollowed + $"tied with {other}, as good a match";
+
+    /// <summary>Why an edited rename is held, or null (followed). Judged on the significant lines alone.</summary>
+    private static string? WeakEdited(LineCounts from, LineCounts to, bool sameName, bool sameDir, int threshold)
+    {
+        int small = Math.Min(from.Count, to.Count), max = Math.Max(from.Count, to.Count);
+        if (small < MinSignificant && !sameName)
+            return NotFollowed + $"too small to tell ({small} significant line{(small == 1 ? "" : "s")})";
+        int milli = max == 0 ? 1000 : Milli(LineCounts.Common(from, to), max);
+        if (milli >= FollowMilli || (milli >= threshold && (sameName || sameDir))) return null;
+        return NotFollowed + $"only {milli / 10.0:0.#}% alike past shared boilerplate (comments, braces), " +
+               (milli >= threshold ? "with another name and directory" : $"under {threshold / 10.0:0.#}%");
+    }
+
+    /// <summary>Why a byte-identical rename to another name is held — a file too small to tell (a one-line header, a
+    /// stub) — or null. Only a small file is read for it (identical bytes: the added side's).</summary>
+    private static string? TrivialPure(FileEntry added)
+    {
+        if (added.Length > TrivialBytes) return null;
+        try
+        {
+            var bytes = TextInspector.ReadAll(added.FullPath);
+            int n = TextInspector.LooksBinary(bytes) ? (bytes.Length < 64 ? 0 : MinSignificant)
+                  : SignificantLines(TextInspector.Decode(bytes)).Take(MinSignificant).Count();
+            return n < MinSignificant ? NotFollowed + $"too small to tell ({n} significant line{(n == 1 ? "" : "s")})" : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null; // as before: a read that fails here never changes the listing
+        }
+    }
+
+    /// <summary>A byte-identical rename this size or smaller is read to see if it is trivial; past it, it isn't.</summary>
+    private const int TrivialBytes = 4096;
+
+    /// <summary>
+    /// A text's significant lines, trimmed: past its leading comment block (blank lines, <c>//</c>, <c>/* … */</c>,
+    /// <c>*</c>, <c>--</c>, <c>&lt;!--</c>, and <c>#</c> followed by a space, <c>!</c> or <c>#</c> — a licence header, a
+    /// shebang — but not <c>#include</c>), and only lines with a letter or digit (not braces, blank lines). What a rename
+    /// is followed by: a licence, includes and braces shared by two unrelated files are not.
+    /// </summary>
+    internal static IEnumerable<string> SignificantLines(string text)
+    {
+        bool lead = true, inBlock = false;
+        foreach (var raw in LineText.NormalizedLines(text))
+        {
+            var t = raw.Trim();
+            if (lead)
+            {
+                if (inBlock)
+                {
+                    if (t.Contains("*/", StringComparison.Ordinal)) inBlock = false;
+                    continue;
+                }
+                if (t.Length == 0) continue;
+                if (LeadingComment(t))
+                {
+                    if (t.StartsWith("/*", StringComparison.Ordinal) && !t.AsSpan(2).Contains("*/", StringComparison.Ordinal)) inBlock = true;
+                    continue;
+                }
+                lead = false;
+            }
+            foreach (var ch in t)
+                if (char.IsLetterOrDigit(ch)) { yield return t; break; }
+        }
+    }
+
+    private static bool LeadingComment(string t)
+        => t.StartsWith("//", StringComparison.Ordinal) || t.StartsWith("/*", StringComparison.Ordinal) || t[0] == '*'
+           || t.StartsWith("--", StringComparison.Ordinal) || t.StartsWith("<!--", StringComparison.Ordinal)
+           || (t[0] == '#' && (t.Length == 1 || t[1] is ' ' or '\t' or '!' or '#'));
 
     /// <summary>How many candidates of each removed file the edited-rename pass keeps at first (a test sets it to 1).</summary>
     internal int TopCandidates { get; init; } = 8;
@@ -365,10 +519,11 @@ public sealed class RenameDetector
 
     /// <summary>Each entry's line multiset, or null where the file is empty (or only a BOM), binary, past the read cap or unreadable.
     /// Read in parallel; lines are interned so a pair's common count is a merge of two sorted id arrays.</summary>
-    private LineCounts?[] ReadLines(IReadOnlyList<FileEntry> entries, LineIds intern,
+    private (LineCounts?[] All, LineCounts?[] Significant) ReadLines(IReadOnlyList<FileEntry> entries, LineIds intern,
         ConcurrentDictionary<string, string> unreadable, ref long bytesRead, CancellationToken ct)
     {
         var result = new LineCounts?[entries.Count];
+        var significant = new LineCounts?[entries.Count];
         long read = 0;
         Parallel.For(0, entries.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism, CancellationToken = ct }, i =>
         {
@@ -390,9 +545,10 @@ public sealed class RenameDetector
             bytes = null!;
             if (text.Length == 0) return; // only a BOM: empty text pairs with nothing, as an empty file
             result[i] = LineCounts.Of(LineText.NormalizedLines(text), intern);
+            significant[i] = LineCounts.Of(SignificantLines(text), intern);
         });
         bytesRead += read;
-        return result;
+        return (result, significant);
     }
 
     /// <summary>A file's lines as a multiset: distinct interned line ids (ascending) with how often each occurs.</summary>

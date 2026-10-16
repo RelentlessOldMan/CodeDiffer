@@ -93,7 +93,9 @@ public static class ChangePorter
         if (report.LeftDroppedDirectories + report.RightDroppedDirectories > 0)
             throw new ArgumentException($"the compare is incomplete ({report.LeftDroppedDirectories} left / {report.RightDroppedDirectories} right " +
                                         "director(ies) could not be listed): its adds and removes there may be listing failures — refusing to port it; compare again");
-        var changed = report.Changes.Where(c => c.Status != ChangeStatus.Identical).ToList();
+        // A held rename (too weak or tied to act on) is ported as the remove and the add it may be: a target that edited
+        // the source keeps it (a conflict), never has it deleted for an unrelated file.
+        var changed = report.Changes.Where(c => c.Status != ChangeStatus.Identical).SelectMany(c => c.ActedOn()).ToList();
         var files = new PortFile[changed.Count];
         if (progress is not null) progress.Total = changed.Count;
         var links = new LinkGuard(target);
@@ -137,6 +139,7 @@ public static class ChangePorter
                     ? new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Conflict, "none", [],
                         $"the target has a symlink/junction at {link} — never written or deleted through")
                     : One(c, leftRoot, rightRoot, target, write, maxTextBytes, ct);
+                if (c.RenameHeld is { } held) files[i] = files[i] with { Note = files[i].Note is { } n ? $"{n}; {held}" : held };
                 if (write && files[i].Status == PortStatus.Clean && (c.Status == ChangeStatus.Removed || c.Status == ChangeStatus.Renamed))
                     deleted.Add(c.RenamedFrom ?? c.RelativePath);
             }

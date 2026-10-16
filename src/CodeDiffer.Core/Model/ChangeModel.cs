@@ -123,8 +123,9 @@ public sealed record FileDelta(
     IReadOnlyList<Hunk> Hunks,
     IReadOnlyList<RunHunk> RunHunks);
 
-/// <summary>A rename/move op. SimilarityMilli = round(sim*1000), sim = commonLines/max(old,new) over EOL-normalized lines.</summary>
-public sealed record RenameOp(string From, string To, int SimilarityMilli);
+/// <summary>A rename/move op. SimilarityMilli = round(sim*1000), sim = commonLines/max(old,new) over EOL-normalized lines.
+/// <paramref name="Held"/>: why compare3 and apply don't act on it (too weak or tied), or null (see <see cref="FileChange.RenameHeld"/>).</summary>
+public sealed record RenameOp(string From, string To, int SimilarityMilli, string? Held = null);
 
 /// <summary>
 /// The parsed CodeSpawner base→variant delta manifest (the consumer-side model). Assert

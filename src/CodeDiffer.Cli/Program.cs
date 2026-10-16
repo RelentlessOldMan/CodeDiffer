@@ -814,7 +814,8 @@ static void PrintChanges(CompareReport r)
         var how = c.Status != ChangeStatus.Renamed ? ""
                 : c.PureRename ? ""
                 : $"  ({(c.SimilarityMilli ?? 0) / 10}% similar, but edited)";
-        Console.WriteLine($"    {tag} {from}{c.RelativePath}{how}{reason}");
+        var held = c.RenameHeld is { } h ? $"  ({h})" : "";
+        Console.WriteLine($"    {tag} {from}{c.RelativePath}{how}{reason}{held}");
     }
 }
 

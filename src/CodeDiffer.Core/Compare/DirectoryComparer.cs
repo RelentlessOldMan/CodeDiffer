@@ -432,7 +432,7 @@ public sealed class DirectoryComparer
                 long fromSize = removedByPath.TryGetValue(r.From, out var fe) ? fe.Length : 0;
                 long toSize = addedByPath.TryGetValue(r.To, out var te) ? te.Length : 0;
                 changes.Add(new FileChange(r.To, ChangeStatus.Renamed, null, fromSize, toSize, r.From, r.SimilarityMilli,
-                    EditedRename: result.Edited?.Contains(r.To) ?? false));
+                    EditedRename: result.Edited?.Contains(r.To) ?? false, RenameHeld: r.Held));
             }
         }
 

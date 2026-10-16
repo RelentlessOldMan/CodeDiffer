@@ -231,6 +231,7 @@ public static class AgentViews
             if (s.DiffInfo.TryGetValue(c.RelativePath, out var i))
                 o.Append(i.Kind == "text" ? $"  +{i.AddedLines:N0} -{i.RemovedLines:N0} ({i.Hunks:N0} hunk(s){(i.Coarse ? ", " + FileDiffInfo.CoarseNote : "")})" : $"  ({i.Kind})");
             if (maybeRename?.Contains(c.RelativePath) == true) o.Append("  (may still pair into a rename)");
+            if (c.RenameHeld is { } held) o.Append($"  ({held})");
             o.Append('\n');
         }
         if (page < pages) o.Append($"next page: page={page + 1}\n");

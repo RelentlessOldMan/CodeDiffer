@@ -87,7 +87,8 @@ public class TreeMergerTests : IDisposable
         Put("B/old.c", t);
         Put("V1/new.c", t);                         // pure rename in v1
         Put("V2/old.c", Edit(t, 10, "edited"));     // edit in v2
-        Put("B/r.c", t); Put("V1/r1.c", t); Put("V2/r2.c", t); // renamed to different names
+        var u = Lines(1, 40, "rr");                 // other bytes: identical files to other names would be a tie
+        Put("B/r.c", u); Put("V1/r1.c", u); Put("V2/r2.c", u); // renamed to different names
 
         var r = Run();
         var e = E(r, "old.c");

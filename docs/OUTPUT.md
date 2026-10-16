@@ -196,7 +196,7 @@ merging a merged file again with a side can now conflict there rather than say "
 (byte-identical) and the other changed in place merges to the change at the new name — binary and large files
 too, taken whole. A side with no line break at all has no line-ending style: it never "changes the line endings"
 (a CRLF file cut to one line is not CRLF → LF). Renames are followed (renamed on one side, edited
-on the other ⇒ merged at the new name). The same `get_summary` / `list_files` / `get_file_diff` / `get_stats`
+on the other ⇒ merged at the new name), except one too weak or tied to trust (below), whose note says so. The same `get_summary` / `list_files` / `get_file_diff` / `get_stats`
 serve it; `get_file_diff` shows the merged file with diff3 markers (`<<<<<<< v1 / ||||||| base / ======= /
 >>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested). Among identical lines (a run of one
 repeated statement, a column of `}`), a line a side edited in place is a replace of the line it stands on — not,
@@ -426,6 +426,19 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   never pair as renames, and nor does a file that is only a BOM (an editor's "empty" `.cs`): that is empty text.
   Equally similar edited renames are paired the same way: the same name and directory first, then the same name,
   then the same directory, so `a/g.c`, `b/f.c` → `c/f.c`, `c/g.c` never cross-pair.
+- A rename is always listed, but compare3 and apply follow only one they can trust; any other is marked "not
+  followed by compare3 or apply: …" (in the CLI listing, `list_files` and the saved result) and is merged and
+  ported as the remove and the add it may be, so an edit the other side made to the old file is a delete/modify
+  conflict, not written into an unrelated new one. Not followed:
+  - a tie: another file is as good a match, at the same level of name and directory (both pairings of two
+    identical files moved to two new names are held);
+  - a file with fewer than 3 significant lines (a one-line header, a stub) that changed its name;
+  - an edited rename whose significant lines are under 80% alike, unless they are at least the threshold
+    alike and the file kept its name or its directory.
+  Significant lines leave out the leading comment block (a licence header, a shebang; `#include` is code) and
+  lines without a letter or digit (braces), so two files alike only in shared boilerplate are not followed.
+  A same-name move is always followed, however small the file. `verify` and the delta contract are unchanged:
+  they check the listing.
 - `apply` carries a change's re-encoding with its edits (the right side dropped the BOM, or went UTF-16 →
   UTF-8, and edited a line): the target, still in the base's encoding, is written in the right side's, and the
   note says so. A target that re-encoded the file its own way keeps its own encoding, also said.

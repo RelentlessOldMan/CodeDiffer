@@ -14,6 +14,8 @@ namespace CodeDiffer.Core.Model;
 /// <see cref="BehindLink"/>: an add or remove whose path is behind a symlink / junction the OTHER tree has there (not
 /// followed), so whether it really changed is unknown — never acted on as a delete or an add (it is also Unreadable).
 /// A name Windows can't open by path (a file, or a directory as one row) is such a row too, in a side or both.
+/// <see cref="RenameHeld"/>: a rename listed (the contract's metric) but too weak or too ambiguous to act on — shared
+/// boilerplate, a trivial file, a tie — and why. compare3 and apply take it as the remove and the add it may be.
 /// </summary>
 public sealed record FileChange(
     string RelativePath,
@@ -25,13 +27,28 @@ public sealed record FileChange(
     int? SimilarityMilli = null,
     string? Unreadable = null,
     bool EditedRename = false,
-    bool BehindLink = false)
+    bool BehindLink = false,
+    string? RenameHeld = null)
 {
     /// <summary>The reason token to show: the reason, "unreadable", or null.</summary>
     public string? ReasonLabel => Reason is { } r ? CanonicalTokens.Token(r) : Unreadable is not null ? "unreadable" : null;
 
     /// <summary>A byte-identical rename: the header alone moves it, nothing to diff.</summary>
     public bool PureRename => Status == ChangeStatus.Renamed && SimilarityMilli == 1000 && !EditedRename;
+
+    /// <summary>This change as compare3 and apply act on it: a held rename (<see cref="RenameHeld"/>) as the remove of its
+    /// source and the add of its destination, each saying why; any other change as it is.</summary>
+    public IEnumerable<FileChange> ActedOn()
+    {
+        if (Status != ChangeStatus.Renamed || RenameHeld is not { } held)
+        {
+            yield return this;
+            yield break;
+        }
+        var why = $"the rename {RenamedFrom} → {RelativePath} is {held}";
+        yield return new FileChange(RenamedFrom!, ChangeStatus.Removed, null, LeftSize, 0, RenameHeld: why);
+        yield return new FileChange(RelativePath, ChangeStatus.Added, null, 0, RightSize, RenameHeld: why);
+    }
 }
 
 /// <summary>

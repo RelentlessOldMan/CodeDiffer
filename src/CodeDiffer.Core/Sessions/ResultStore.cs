@@ -724,6 +724,7 @@ public static class ResultStore
         if (c.Unreadable is { } u) w.WriteString("unreadable", u);
         if (c.EditedRename) w.WriteBoolean("edited", true);
         if (c.BehindLink) w.WriteBoolean("behindLink", true);
+        if (c.RenameHeld is { } h) w.WriteString("held", h);
         w.WriteEndObject();
     }
 
@@ -745,7 +746,8 @@ public static class ResultStore
         e.TryGetProperty("similarity", out var s) ? s.GetInt32() : null,
         e.TryGetProperty("unreadable", out var u) ? u.GetString() : null,
         e.TryGetProperty("edited", out var ed) && ed.GetBoolean(),
-        e.TryGetProperty("behindLink", out var bl) && bl.GetBoolean());
+        e.TryGetProperty("behindLink", out var bl) && bl.GetBoolean(),
+        e.TryGetProperty("held", out var h) ? h.GetString() : null); // absent (saved before 1.0.87): followed, as then
 
     private static void WriteEntry(Utf8JsonWriter w, Merge3Entry e)
     {
