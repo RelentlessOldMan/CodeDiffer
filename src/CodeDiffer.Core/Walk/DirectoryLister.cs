@@ -5,9 +5,10 @@ namespace CodeDiffer.Core.Walk;
 
 /// <summary>One directory-listing row. <paramref name="IsLink"/>: a symlink, junction or other name-surrogate reparse
 /// point — not followed. Other reparse points (OneDrive / cloud placeholders, deduplicated files) are ordinary
-/// files and directories.</summary>
+/// files and directories. <paramref name="Attributes"/>, <paramref name="FileIndex"/> and <paramref name="ReparseTag"/>
+/// are the raw listing fields (0 when unknown), kept for statcheck.</summary>
 internal readonly record struct DirRow(string Name, bool IsDirectory, bool IsLink, long Length,
-    long LastWriteUtcTicks, long ChangeUtcTicks, long FileId);
+    long LastWriteUtcTicks, long ChangeUtcTicks, long FileId, uint Attributes = 0, uint FileIndex = 0, uint ReparseTag = 0);
 
 /// <summary>
 /// Lists one directory. On Windows it uses GetFileInformationByHandleEx(FileIdBothDirectoryInfo) — the
@@ -26,7 +27,7 @@ internal static class DirectoryLister
     private const int BufferBytes = 64 * 1024;
 
     // FILE_ID_BOTH_DIR_INFO field offsets (x86 and x64 identical: all fields are fixed-size).
-    private const int OffNext = 0, OffLastWrite = 24, OffChange = 32, OffEndOfFile = 40, OffAttributes = 56,
+    private const int OffNext = 0, OffFileIndex = 4, OffLastWrite = 24, OffChange = 32, OffEndOfFile = 40, OffAttributes = 56,
         OffNameLength = 60, OffEaSize = 64, OffFileId = 96, OffName = 104;
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -86,7 +87,8 @@ internal static class DirectoryLister
                     {
                         uint attrs = (uint)Marshal.ReadInt32(p, OffAttributes);
                         // For a reparse point, EaSize holds its reparse tag; bit 29 marks a name surrogate (a link).
-                        bool link = (attrs & FileAttributeReparsePoint) != 0 && ((uint)Marshal.ReadInt32(p, OffEaSize) & NameSurrogate) != 0;
+                        uint tag = (attrs & FileAttributeReparsePoint) != 0 ? (uint)Marshal.ReadInt32(p, OffEaSize) : 0;
+                        bool link = (tag & NameSurrogate) != 0;
                         rows.Add(new DirRow(
                             name,
                             (attrs & FileAttributeDirectory) != 0,
@@ -94,7 +96,10 @@ internal static class DirectoryLister
                             Marshal.ReadInt64(p, OffEndOfFile),
                             FileTimeToUtcTicks(Marshal.ReadInt64(p, OffLastWrite)),
                             FileTimeToUtcTicks(Marshal.ReadInt64(p, OffChange)),
-                            Marshal.ReadInt64(p, OffFileId)));
+                            Marshal.ReadInt64(p, OffFileId),
+                            attrs,
+                            (uint)Marshal.ReadInt32(p, OffFileIndex),
+                            tag));
                     }
                     if (next == 0) break;
                     off += next;

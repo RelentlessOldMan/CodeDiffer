@@ -8,8 +8,10 @@ a fork against its upstream), use the **CodeDiffer** MCP tools. They handle tree
 files over 1 GB, locally or on a network share, and every answer is bounded so the context never floods.
 
 - **start_compare** / **start_compare3**: compare 2 trees, or base + two variants (3-way: v1 only, v2 only,
-  agreed, merged, conflict). They run in the background and return a compare_id; repeat compares are fast
-  (hash cache).
+  agreed, merged, conflict). They run in the background and return a compare_id. The first compare of a
+  tree reads every byte; later ones take unchanged files from the hash cache and read only what changed,
+  so comparing two releases again, current code against a release, or two trees in progress takes minutes,
+  not hours.
 - **get_summary**: constant-size counts; while running, progress and the differences found so far.
 - **list_files**: the changed files, paged and filtered by status, reason or path. A rename marked "not
   followed by compare3 or apply" is a guess (alike only in boilerplate, a trivial file, or tied with

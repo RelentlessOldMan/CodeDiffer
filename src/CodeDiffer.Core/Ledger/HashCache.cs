@@ -83,7 +83,9 @@ internal sealed record TrustTiming(long FirstLookTicks, long SettleTicks)
 /// the very same mtime AND ChangeTime — "a sub-second stamp can't be racy" is false. So:
 /// <list type="number">
 /// <item>Recorded only if the file's handle stat was identical before and after the read and matched the
-///   listing (an edit DURING the read is never cached).</item>
+///   listing (an edit DURING the read is never cached). A server whose listing gives a file another FileId than
+///   its open handle (size, mtime and ChangeTime all agreeing) has the file recorded with no id: size, mtime and
+///   ChangeTime are then its identity.</item>
 /// <item>First look: trusted if mtime and ChangeTime are both at least <see cref="TrustTiming.FirstLookTicks"/>
 ///   older than the read's start.</item>
 /// <item>Otherwise PENDING: stored with mtime negated and HashedAt = when it was recorded (our clock). A later
@@ -119,7 +121,7 @@ public sealed class HashCache
     private readonly string _ccPrefix; // root's path under the CodeCompass-indexed ancestor ("" = same root)
     private readonly TrustTiming _timing;
     private readonly ConcurrentDictionary<string, LedgerEntry> _fresh = new(StringComparer.Ordinal);
-    private int _hits, _ccHits, _pending;
+    private int _hits, _ccHits, _pending, _withoutId;
     private readonly ConcurrentDictionary<string, ReadDoubt> _unstable = new(StringComparer.Ordinal);
     private long _recorded;
 
@@ -133,6 +135,8 @@ public sealed class HashCache
     public IReadOnlyDictionary<string, ReadDoubt> Unstable => _unstable;
     /// <summary>Files hashed this run but modified too recently to trust yet (re-read and trusted on a later run).</summary>
     public int Pending => _pending;
+    /// <summary>Files hashed this run and cached with no FileId, because the listing's and the handle's differ.</summary>
+    public int WithoutId => _withoutId;
 
     private HashCache(CacheMode mode, bool strict, string ownDir, LedgerSnapshot? own, LedgerSnapshot? cc, string ccPrefix, TrustTiming timing)
     {
@@ -210,7 +214,9 @@ public sealed class HashCache
         long mtime = e.LastWriteTimeUtc.Ticks;
         if (mtime <= 0 || e.ChangeTimeUtcTicks == 0 || h.HashedAtUtcTicks == 0) return; // can't vouch ⇒ don't cache
 
-        var entry = new LedgerEntry(e.Length, mtime, h.XxHash128, e.ChangeTimeUtcTicks, e.FileId, h.HashedAtUtcTicks, h.Sha256);
+        // The listing's id and the handle's differ: neither can be checked against the other next time.
+        var entry = new LedgerEntry(e.Length, mtime, h.XxHash128, e.ChangeTimeUtcTicks, h.ListingIdDiffers ? 0 : e.FileId, h.HashedAtUtcTicks, h.Sha256);
+        if (h.ListingIdDiffers) Interlocked.Increment(ref _withoutId);
         bool settled = _own is not null && _own.Entries.TryGetValue(e.RelativePath, out var p) && p.MTimeTicks < 0 &&
                        Identity(e, p) && h.HashedAtUtcTicks >= p.HashedAtTicks + _timing.SettleTicks;
         if (!settled && !FirstLook(mtime, e.ChangeTimeUtcTicks, h.HashedAtUtcTicks, _timing))

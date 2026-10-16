@@ -338,6 +338,43 @@ public class HashCacheTests : IDisposable
     }
 
     [Fact]
+    public async Task AServerThatNumbersAFileTwoWays_StillHasItCached_BySizeAndTimes()
+    {
+        // A share in use gave a third of its files one FileId in the listing and another on the open handle, so every
+        // "warm" compare read them all again. Size, mtime and ChangeTime agreeing, the file is cached with no id.
+        if (!OperatingSystem.IsWindows()) return;
+        var full = Put("L/big.bin", "payload");
+        var live = FileStat.OfPath(full);
+        FileEntry Listed(long fileId, long mtime) =>
+            new("big.bin", full, live.Length, new DateTime(mtime, DateTimeKind.Utc), live.ChangeUtcTicks, fileId);
+        var odd = Listed(live.FileId ^ 0x7123_0000_0000_0000, live.LastWriteUtcTicks);
+
+        var h = await PairComparer.HashAsync(odd);
+        Assert.True(h.Stable);
+        Assert.True(h.ListingIdDiffers);
+        var cache = HashCache.Open(Path.Combine(_dir, "L"), CacheMode.On, true, CacheBase, CompassBase, new TrustTiming(0, 0));
+        cache.Record(odd, h);
+        Assert.Equal(1, cache.WithoutId);
+        cache.Save([odd]);
+        Assert.Equal(0, OwnLedger("L").Entries["big.bin"].FileId);
+
+        // Next run, strict (the open handle checked against the entry too): a hit, the listing's id not asked for.
+        var next = HashCache.Open(Path.Combine(_dir, "L"), CacheMode.On, true, CacheBase, CompassBase, new TrustTiming(0, 0));
+        Assert.True(next.TryGet(odd, out var id));
+        Assert.Equal(h.XxHash128, id.XxHash);
+
+        // Only the id is let go: a listing whose mtime disagrees too is still a stale entry, never cached.
+        var stale = await PairComparer.HashAsync(Listed(live.FileId ^ 0x7123_0000_0000_0000, live.LastWriteUtcTicks - TimeSpan.TicksPerSecond));
+        Assert.False(stale.Stable);
+        Assert.Equal(ReadDoubt.Listing, stale.Doubt);
+        Assert.False(stale.ListingIdDiffers);
+        // And ids that agree are kept as before.
+        var plain = await PairComparer.HashAsync(Listed(live.FileId, live.LastWriteUtcTicks));
+        Assert.True(plain.Stable);
+        Assert.False(plain.ListingIdDiffers);
+    }
+
+    [Fact]
     public void FirstLook_UsesTheLaterOfMtimeAndChangeTime()
     {
         long start = DateTime.UtcNow.Ticks, sec = TimeSpan.TicksPerSecond;

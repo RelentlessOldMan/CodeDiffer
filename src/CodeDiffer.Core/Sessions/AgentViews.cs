@@ -688,6 +688,9 @@ public static class AgentViews
         if (r.UnstableListing > 0)
             yield return $"{pre}{r.UnstableListing:N0} file(s) steady while read but not as their directory listing says (a stale entry: written through " +
                          "another hard link, or a server's cached listing; or touched since the walk) — compared as read, not cached. `codediffer statcheck` measures it.";
+        if (r.CachedWithoutId > 0)
+            yield return $"{pre}{r.CachedWithoutId:N0} file side(s) cached by size, modified and change time only: the server gives them another " +
+                         "file id in its directory listing than when opened.";
         if (r.UnstableNoChangeTime > 0) yield return $"{pre}{r.UnstableNoChangeTime:N0} file(s) on a server that gives no change time — compared as read, not cached.";
         if (r.SkippedLinks > 0)
             yield return $"{pre}{r.SkippedLinks:N0} symlink(s)/junction(s) not followed — nothing behind them is compared" +

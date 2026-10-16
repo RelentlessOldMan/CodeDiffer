@@ -104,6 +104,9 @@ public sealed class CompareReport
     public int UnstableNoChangeTime { get; init; }
     /// <summary>Files hashed this run but modified too recently to trust yet: cached as pending, re-read next run.</summary>
     public int PendingFiles { get; init; }
+    /// <summary>File sides hashed this run and cached without a FileId: the server's listing and open handle give
+    /// different ids, so size, mtime and ChangeTime alone tell the file next time.</summary>
+    public int CachedWithoutId { get; init; }
     /// <summary>Content bytes read to reach the verdicts (an upper bound when early exit applies).</summary>
     public long BytesRead { get; init; }
     /// <summary>Wall time per compare phase, in order (for --timings).</summary>

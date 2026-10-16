@@ -14,7 +14,12 @@ namespace CodeDiffer.Core.Compare;
 /// cached. <see cref="HashedAtUtcTicks"/> is the local UTC clock just before the read began. Why a read isn't stable:
 /// <see cref="Doubt"/>.
 /// </summary>
-public sealed record FileHashes(string XxHash128, string Sha256, bool Stable, long HashedAtUtcTicks, ReadDoubt Doubt = ReadDoubt.None);
+public sealed record FileHashes(string XxHash128, string Sha256, bool Stable, long HashedAtUtcTicks, ReadDoubt Doubt = ReadDoubt.None)
+{
+    /// <summary>Stable, but the listing's FileId isn't the handle's (size, mtime and ChangeTime all agree): a server
+    /// that numbers a file one way in its listing and another when it's opened. Cached without an id.</summary>
+    public bool ListingIdDiffers { get; init; }
+}
 
 /// <summary>Why a read's hashes can't vouch for the file the listing describes (never cached), most telling first.</summary>
 public enum ReadDoubt : byte
@@ -164,11 +169,14 @@ public static class PairComparer
     public static Task<FileHashes> HashAsync(string path, CancellationToken ct = default)
         => HashAsync(new FileEntry("", path, -1, default), ct);
 
-    private static ReadDoubt Doubt(FileStat before, FileStat after, FileEntry listing)
-        => before != after ? ReadDoubt.Changed
-         : !after.Matches(listing) ? ReadDoubt.Listing
-         : after.ChangeUtcTicks == 0 ? ReadDoubt.NoChangeTime
-         : ReadDoubt.None;
+    private static (ReadDoubt, bool OnlyId) Doubt(FileStat before, FileStat after, FileEntry listing)
+    {
+        if (before != after) return (ReadDoubt.Changed, false);
+        // Size, mtime and ChangeTime still have to agree: only the id is let go, and only for a read that held still.
+        bool onlyId = after.OnlyIdDiffers(listing);
+        if (!onlyId && !after.Matches(listing)) return (ReadDoubt.Listing, false);
+        return (after.ChangeUtcTicks == 0 ? ReadDoubt.NoChangeTime : ReadDoubt.None, onlyId);
+    }
 
     private sealed class Hasher
     {
@@ -181,9 +189,10 @@ public static class PairComparer
             _sha.AppendData(data);
         }
 
-        public FileHashes Finish(ReadDoubt doubt, long hashedAt)
+        public FileHashes Finish((ReadDoubt Doubt, bool OnlyId) d, long hashedAt)
         {
-            var result = new FileHashes(Convert.ToHexString(_xx.GetCurrentHash()), Convert.ToHexString(_sha.GetHashAndReset()), doubt == ReadDoubt.None, hashedAt, doubt);
+            var result = new FileHashes(Convert.ToHexString(_xx.GetCurrentHash()), Convert.ToHexString(_sha.GetHashAndReset()), d.Doubt == ReadDoubt.None, hashedAt, d.Doubt)
+                { ListingIdDiffers = d.OnlyId };
             _sha.Dispose();
             return result;
         }

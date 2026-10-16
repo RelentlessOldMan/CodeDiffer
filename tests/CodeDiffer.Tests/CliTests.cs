@@ -946,6 +946,37 @@ public sealed class CliTests : IDisposable
         Assert.Equal(64, Cli("statcheck").ExitCode);
     }
 
+    [Fact]
+    public void StatCheck_FileIdsThatDiffer_AreBrokenDown_AgainstTheOnesThatAgree()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        _t.Put("T/secret-a.c", "x\n");
+        _t.Put("T/secret-b.c", "y\n");
+        var seen = new[] { "secret-a.c", "secret-b.c" }.Select((name, i) =>
+        {
+            var full = Path.Combine(_t.Root, "T", name);
+            using var h = File.OpenHandle(full);
+            var stat = CodeDiffer.Core.Walk.FileStat.Of(h, full);
+            // A server whose listing gives another id than the handle: the first file's high half differs.
+            long listed = i == 0 ? stat.FileId ^ 0x7123_0000_0000_0000 : stat.FileId;
+            var e = new CodeDiffer.Core.Walk.FileEntry(name, full, stat.Length, new DateTime(stat.LastWriteUtcTicks, DateTimeKind.Utc),
+                stat.ChangeUtcTicks, listed);
+            return new CodeDiffer.Core.Walk.StatCheck.Seen(e, stat, CodeDiffer.Core.Walk.StatCheck.HandleIds.Of(h), i == 0);
+        }).ToArray();
+        var sb = new System.Text.StringBuilder();
+        CodeDiffer.Core.Walk.StatCheck.FileIds(sb, Path.Combine(_t.Root, "T"), seen, 2, default);
+        var s = sb.ToString();
+        Assert.Contains("1 of 2 files differ", s);
+        Assert.Contains("0 with every file differing · 1 with some", s);
+        Assert.Matches(@"ids · low 32 bits equal\s+1\b", s);
+        Assert.DoesNotContain("ids · high 32 bits equal", s);
+        Assert.Matches(@"relist · now the handle's id\s+1\b", s);
+        Assert.Matches(@"reopen · same id as the first open\s+1\b", s);
+        Assert.Matches(@"differs · size 1: < 64 KB\s+1\b", s);
+        Assert.Matches(@"agrees  · size 1: < 64 KB\s+1\b", s);
+        Assert.DoesNotContain("secret", s);
+    }
+
     // ---------------------------------------------------------------- verify
 
     [Fact]

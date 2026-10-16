@@ -590,6 +590,7 @@ public static class ResultStore
         w.WriteNumber("unstableChanged", r.UnstableChanged);
         w.WriteNumber("unstableListing", r.UnstableListing);
         w.WriteNumber("unstableNoChangeTime", r.UnstableNoChangeTime);
+        w.WriteNumber("cachedWithoutId", r.CachedWithoutId);
         w.WriteNumber("pendingFiles", r.PendingFiles);
         w.WriteNumber("bytesRead", r.BytesRead);
         w.WriteNumber("leftDroppedDirectories", r.LeftDroppedDirectories);
@@ -657,6 +658,7 @@ public static class ResultStore
             UnstableChanged = stats.TryGetProperty("unstableChanged", out var uc) ? uc.GetInt32() : stats.GetProperty("unstableFiles").GetInt32(),
             UnstableListing = stats.TryGetProperty("unstableListing", out var ul) ? ul.GetInt32() : 0,
             UnstableNoChangeTime = stats.TryGetProperty("unstableNoChangeTime", out var un) ? un.GetInt32() : 0,
+            CachedWithoutId = stats.TryGetProperty("cachedWithoutId", out var cw) ? cw.GetInt32() : 0,
             PendingFiles = stats.GetProperty("pendingFiles").GetInt32(),
             BytesRead = stats.GetProperty("bytesRead").GetInt64(),
             SkippedLinks = stats.TryGetProperty("skippedLinks", out var links) ? links.GetInt32() : 0, // absent before 2026-10-07

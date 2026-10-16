@@ -32,6 +32,32 @@ exactly this case.
 
 Full output model: [`docs/OUTPUT.md`](docs/OUTPUT.md).
 
+## Compare again in minutes, not hours
+
+The first compare of a tree reads every byte. It also saves a hash of each file in a local hash cache, kept
+outside the tree with the file's size, modified time, change time and id. Every later compare that touches
+that tree (a **warm run**) takes the hash from the cache for each file that hasn't changed, and reads only
+the files that did. So after the first run, a compare costs what changed, not what the tree weighs.
+
+On CodeSpawner's `death` corpus over SMB (68,661 files, ~94 GB a tree, a 1 Gbit link): base→v1 cold reads
+188.8 GB in 33 min; warm it reads nothing and takes under 2 min. A full `compare3` goes from 51 min to 2:13.
+
+The cache is per file and per tree, so it pays off in each of the usual cases:
+
+1. **Two releases compared again.** Releases don't change, so after the first run both sides come from the
+   cache: re-checking a result, or a `compare3`, `apply` or report on the same trees, reads almost nothing.
+2. **Current code against an existing release.** The release side comes entirely from the cache; on the
+   current side only the files edited since the last run are read. Most files don't change, so this is
+   nearly as fast as case 1, and a new drop compared against a release already seen reads only the drop.
+3. **Two trees both still being worked on.** Files unchanged on either side since the last run come from
+   the cache; only the edited ones are read. A file written just before the run (within 3 s locally, 1 h
+   on a share, whose clock may differ) is read again until it has settled, so a file mid-edit is never trusted.
+
+A cache entry is used only while the file's size, modified time and change time (and its id, where the
+server gives the same one in its listing as on an opened file) are what they were, and by default each hit
+is confirmed by a live stat of the file too. A miss costs a read, never a wrong answer. Details: §4 of
+[`docs/OUTPUT.md`](docs/OUTPUT.md).
+
 ## Family
 
 CodeDiffer is one of a family of local, large-repo tools (shared author, stack, and patterns):

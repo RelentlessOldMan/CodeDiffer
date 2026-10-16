@@ -261,8 +261,15 @@ skipped, plus both sides of the 1,561 modified files), 4:19. The 68,661 per-file
 a run on CodeDiffer's own ledger. Locally, a same-size edit with the mtime put back, a delete + recreate
 with the same size and mtime, and a move over an existing file were all re-read and reported modified.
 
+Why it matters, and the three everyday cases it speeds up (two releases compared again, current code against
+a release, two trees both in progress): see "Compare again in minutes, not hours" in the README.
+
 The cache trusts an entry only if size, mtime, ChangeTime and file id (where both sides know it) all match the
-listing, and it records one only from a read whose handle stat didn't change across it. A file stamped within
+listing, and it records one only from a read whose handle stat didn't change across it. Some servers give a
+file one id in a directory listing and another on an open handle (one share seen in use did, for a third of its
+files, which held nearly all its bytes): such a file, its size, mtime and ChangeTime agreeing, is cached with no id
+and told by those three alone, and the summary counts it ("cached by size, modified and change time only").
+Before v1.0.89 such files were never cached, so every compare read them again. A file stamped within
 the last moments before its read (3 s; 1 h on a share, whose clock may differ) is held pending and trusted only
 on a later stable read. By default a hit is confirmed by a live stat of the file too. `--fast-stat` skips that and
 trusts the listing alone: a same-size edit made through another hard link to the file, which this name's listing
@@ -273,7 +280,10 @@ takes 16–19 s against 100–110 s, the per-file stat being nearly all of a war
 
 `codediffer statcheck <dir>` measures how far a share's listing lags its open handles. Opening a file to measure
 it refreshes the share's stale entry for it, so a second statcheck straight after reads fewer mismatches: the
-first run's numbers are the ones that describe the share.
+first run's numbers are the ones that describe the share. When the listing's FileId and the handle's disagree, a
+last section breaks those files down against the ones that agree: whether each id holds still (the tree listed
+again, the file opened again), how the two relate bit for bit, and the files' sizes, attributes, link counts and
+folders. Such a file is cached with no id (above).
 
 ## 5. The human HTML report
 

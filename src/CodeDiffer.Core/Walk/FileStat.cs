@@ -18,6 +18,14 @@ public readonly record struct FileStat(long Length, long LastWriteUtcTicks, long
            ChangeUtcTicks == e.ChangeTimeUtcTicks &&
            (FileId == 0 || e.FileId == 0 || FileId == e.FileId);
 
+    /// <summary>The same size, mtime and ChangeTime as the listing row, but another FileId: a server whose directory
+    /// listing and open files number a file differently (seen on a share in use for a third of its files).</summary>
+    public bool OnlyIdDiffers(FileEntry e)
+        => Length == e.Length &&
+           LastWriteUtcTicks == e.LastWriteTimeUtc.Ticks &&
+           ChangeUtcTicks == e.ChangeTimeUtcTicks &&
+           FileId != 0 && e.FileId != 0 && FileId != e.FileId;
+
     /// <summary>Stat an open handle. Off Windows, only length + mtime are available (ChangeTime/FileId = 0).</summary>
     public static FileStat Of(SafeFileHandle h, string path)
     {

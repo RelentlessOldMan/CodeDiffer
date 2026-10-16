@@ -332,6 +332,7 @@ public sealed class DirectoryComparer
             UnstableListing = Unstable(leftCache, rightCache, ReadDoubt.Listing),
             UnstableNoChangeTime = Unstable(leftCache, rightCache, ReadDoubt.NoChangeTime),
             PendingFiles = leftCache.Pending + rightCache.Pending,
+            CachedWithoutId = leftCache.WithoutId + rightCache.WithoutId,
             ComparedPairs = sameSize.Count,
             BytesRead = bytesRead,
             Timings = timings,
