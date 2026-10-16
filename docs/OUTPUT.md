@@ -269,7 +269,12 @@ listing, and it records one only from a read whose handle stat didn't change acr
 file one id in a directory listing and another on an open handle (one share seen in use did, for a third of its
 files, which held nearly all its bytes): such a file, its size, mtime and ChangeTime agreeing, is cached with no id
 and told by those three alone, and the summary counts it ("cached by size, modified and change time only").
-Before v1.0.89 such files were never cached, so every compare read them again. A file stamped within
+Before v1.0.89 such files were never cached, so every compare read them again.
+
+`--rehash` re-reads every tree and refreshes its cache; `--rehash-side` does that for the trees named and uses
+the others' cache: `compare --rehash-side left|right`, `compare3 --rehash-side base|v1|v2` (several with commas,
+e.g. `v1,v2`). It checks one tree's cache against its bytes, or times one side cold, without reading the rest
+again. The summary's cache field names it (`cache on, rehash v1`). A file stamped within
 the last moments before its read (3 s; 1 h on a share, whose clock may differ) is held pending and trusted only
 on a later stable read. By default a hit is confirmed by a live stat of the file too. `--fast-stat` skips that and
 trusts the listing alone: a same-size edit made through another hard link to the file, which this name's listing

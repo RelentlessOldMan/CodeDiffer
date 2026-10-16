@@ -80,7 +80,7 @@ internal sealed class RunRecord : IDisposable
 
                 w.WriteStartObject("options");
                 w.WriteNumber("threads", _session.Options.Parallelism);
-                w.WriteString("cache", _session.Options.Cache.ToString().ToLowerInvariant());
+                w.WriteString("cache", _session.Options.CacheLabel);
                 w.WriteBoolean("strictStat", _session.Options.StrictStat);
                 w.WriteEndObject();
 

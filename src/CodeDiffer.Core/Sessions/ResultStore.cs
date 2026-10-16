@@ -442,6 +442,7 @@ public static class ResultStore
                 Cache = Enum.TryParse<CacheMode>(Str(opt, "cache"), true, out var cm) ? cm : CacheMode.On,
                 Parallelism = Math.Clamp(opt.GetProperty("threads").GetInt32(), 1, 64),
                 StrictStat = opt.GetProperty("strictStat").GetBoolean(),
+                RehashSides = opt.TryGetProperty("rehash", out var rh) ? rh.GetString() ?? "" : "",
             };
             var roots = m.GetProperty("roots");
             return Str(m, "kind") switch
@@ -576,6 +577,7 @@ public static class ResultStore
         w.WriteString("cache", o.Cache.ToString().ToLowerInvariant());
         w.WriteNumber("threads", o.Parallelism);
         w.WriteBoolean("strictStat", o.StrictStat);
+        if (o.RehashSides.Length > 0) w.WriteString("rehash", o.RehashSides);
         w.WriteEndObject();
     }
 

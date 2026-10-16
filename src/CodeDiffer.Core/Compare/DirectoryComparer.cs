@@ -37,6 +37,24 @@ public sealed class CompareOptions
     /// <summary>Hash-ledger use: On (default; trust path+size+mtime), Off (--no-cache), Rehash (--rehash).</summary>
     public CacheMode Cache { get; init; } = CacheMode.On;
 
+    /// <summary>--rehash-side: with the cache on, these trees (full paths) are re-read and their cache refreshed, as
+    /// --rehash does, while the other trees' cache is used. <see cref="RehashSides"/> names them as given (left,
+    /// right; base, v1, v2) for the summary.</summary>
+    public IReadOnlyList<string> RehashRoots { get; init; } = [];
+    public string RehashSides { get; init; } = "";
+
+    /// <summary>The cache mode as a summary shows it: on, off, rehash, or "on, rehash v1".</summary>
+    public string CacheLabel => Cache.ToString().ToLowerInvariant() + (RehashSides.Length > 0 ? $", rehash {RehashSides}" : "");
+
+    /// <summary>The cache mode for one tree: <see cref="Cache"/>, or Rehash for a tree in <see cref="RehashRoots"/>.</summary>
+    internal CacheMode CacheFor(string root)
+    {
+        if (Cache != CacheMode.On || RehashRoots.Count == 0) return Cache;
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return RehashRoots.Any(r => string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(r)), full, cmp)) ? CacheMode.Rehash : Cache;
+    }
+
     /// <summary>
     /// Confirm every cache hit against the live HANDLE stat (~0.4 ms/file over SMB), not just the listing —
     /// a listing can be stale while a writer holds the file open. Default on; off = listing-only (faster).
@@ -111,9 +129,9 @@ public sealed class DirectoryComparer
         var leftFiles = Ordered(lw.Files);
         var rightFiles = Ordered(rw.Files);
         var classifier = new ReasonClassifier(_options.MaxClassifyBytes);
-        var leftCache = HashCache.Open(left, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing,
+        var leftCache = HashCache.Open(left, _options.CacheFor(left), _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing,
             sharedLeft?.StartedUtcTicks ?? 0);
-        var rightCache = HashCache.Open(right, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing);
+        var rightCache = HashCache.Open(right, _options.CacheFor(right), _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing);
         long bytesRead = 0;
 
         int pathCount = 0;

@@ -122,6 +122,22 @@ public sealed class CliTests : IDisposable
     }
 
     [Fact]
+    public void RehashSide_NamesTheTreeInTheSummary_AndRefusesWhatCantGoWithIt()
+    {
+        _t.Put("L/a.c", "x\n");
+        _t.Put("R/a.c", "x\n");
+        var r = Cli("compare", "L", "R", "--rehash-side", "right");
+        Assert.True(r.ExitCode == 0, r.ToString());
+        Assert.Contains("cache on, rehash right", r.Stdout + r.Stderr);
+        var bad = Cli("compare", "L", "R", "--rehash-side", "v1");
+        Assert.Equal(64, bad.ExitCode);
+        Assert.Contains("--rehash-side takes left, right", bad.Stderr);
+        Assert.Equal(64, Cli("compare", "L", "R", "--rehash-side", "left", "--no-cache").ExitCode);
+        Assert.Equal(64, Cli("compare", "L", "R", "--rehash-side", "left", "--rehash").ExitCode);
+        Assert.Contains("--rehash-side takes base, v1, v2", Cli("compare3", "L", "R", "R", "--rehash-side", "left").Stderr);
+    }
+
+    [Fact]
     public void PatchWithFastStat_IsRefusedBeforeTheCompare()
     {
         var r = Cli("compare", "nowhere-left", "nowhere-right", "--fast-stat", "--patch");

@@ -81,7 +81,7 @@ static int Dispatch(string[] args)
 
 static int Compare(string[] args)
 {
-    const string compareUsage = "usage: codediffer compare <left-tree> <right-tree> [--threads N] [--no-cache | --rehash] [--fast-stat] " +
+    const string compareUsage = "usage: codediffer compare <left-tree> <right-tree> [--threads N] [--no-cache | --rehash | --rehash-side left|right] [--fast-stat] " +
                                 "[--patch [-U N] [--literal]] [--timings] [--no-save] [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]";
     if (args.Length < 3)
     {
@@ -90,7 +90,7 @@ static int Compare(string[] args)
     }
     if (!ArgsOk(args, 2, compareUsage,
             ["--no-cache", "--rehash", "--fast-stat", "--patch", "--literal", "--timings", "--no-save", "--html", "--large", "--include-identical"],
-            ["--threads", "-U", "--max-diffs", "--out"]))
+            ["--threads", "-U", "--max-diffs", "--out", "--rehash-side"]))
         return 64;
 
     int threads = new CompareOptions().Parallelism;
@@ -100,7 +100,9 @@ static int Compare(string[] args)
         return 64;
     }
     var cache = args.Contains("--no-cache") ? CacheMode.Off : args.Contains("--rehash") ? CacheMode.Rehash : CacheMode.On;
-    var options = new CompareOptions { Parallelism = threads, Cache = cache, StrictStat = !args.Contains("--fast-stat") };
+    if (!RehashSides(args, ["left", "right"], [args[1], args[2]], out var rehashRoots, out var rehashSides)) return 64;
+    var options = new CompareOptions { Parallelism = threads, Cache = cache, StrictStat = !args.Contains("--fast-stat"),
+                                       RehashRoots = rehashRoots, RehashSides = rehashSides };
     // Every option is checked before a compare that may take an hour, not after it.
     bool patch = args.Contains("--patch");
     if (patch && !options.StrictStat)
@@ -163,7 +165,7 @@ static int Compare(string[] args)
     }
 
     PrintSummary(info, args[1], args[2], report);
-    info.WriteLine($"  elapsed    {ProgressView.Clock(session.Elapsed)}  (threads {options.Parallelism}, cache {cache.ToString().ToLowerInvariant()})");
+    info.WriteLine($"  elapsed    {ProgressView.Clock(session.Elapsed)}  (threads {options.Parallelism}, cache {options.CacheLabel})");
     info.WriteLine($"  content    {report.ComparedPairs} same-size pair(s) · {report.CacheHits} side(s) from hash cache" +
         (report.CodeCompassHits > 0 ? $" ({report.CodeCompassHits} via CodeCompass)" : "") +
         $" · {report.BytesRead / (1024.0 * 1024 * 1024):F1} GB read" +
@@ -969,13 +971,38 @@ static int ApplyOverlay(string[] args)
     return r.Cancelled ? 130 : r.Failed.Count > 0 ? 1 : 0;
 }
 
+/// <summary>--rehash-side a[,b]: the named trees re-read and their cache refreshed, the others' cache used. False (usage
+/// said) for an unknown name or one given with --no-cache or --rehash.</summary>
+static bool RehashSides(string[] args, string[] names, string[] roots, out IReadOnlyList<string> picked, out string label)
+{
+    picked = [];
+    label = "";
+    if (FlagValue(args, "--rehash-side", from: names.Length + 1) is not { } v) return true;
+    if (args.Contains("--no-cache") || args.Contains("--rehash"))
+    {
+        Console.Error.WriteLine("error: --rehash-side can't go with --no-cache or --rehash");
+        return false;
+    }
+    var want = v.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => x.ToLowerInvariant()).Distinct().ToList();
+    if (want.Count == 0 || want.Any(x => !names.Contains(x)))
+    {
+        Console.Error.WriteLine($"error: --rehash-side takes {string.Join(", ", names)} (several with commas)");
+        return false;
+    }
+    want = names.Where(want.Contains).ToList(); // in tree order
+    picked = want.Select(x => roots[Array.IndexOf(names, x)]).ToList();
+    label = string.Join("+", want);
+    return true;
+}
+
 /// <summary>compare3: base vs v1 vs v2. Exit 1 when anything conflicts, 3 on an incomplete walk.</summary>
 static int Compare3(string[] args)
 {
-    const string compare3Usage = "usage: codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache] [--merge-out DIR] [--no-save] " +
+    const string compare3Usage = "usage: codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache | --rehash-side base|v1|v2[,...]] [--merge-out DIR] [--no-save] " +
                                  "[--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]";
     if (args.Length < 4 || !ArgsOk(args, 3, compare3Usage,
-            ["--all", "--no-cache", "--no-save", "--html", "--large", "--include-identical"], ["--threads", "--merge-out", "--max-diffs", "--out"]))
+            ["--all", "--no-cache", "--no-save", "--html", "--large", "--include-identical"], ["--threads", "--merge-out", "--max-diffs", "--out", "--rehash-side"]))
     {
         if (args.Length < 4) Console.Error.WriteLine(compare3Usage);
         return 64;
@@ -986,7 +1013,9 @@ static int Compare3(string[] args)
         Console.Error.WriteLine("error: --threads needs a positive integer");
         return 64;
     }
-    var options = new CompareOptions { Parallelism = threads, Cache = args.Contains("--no-cache") ? CacheMode.Off : CacheMode.On };
+    if (!RehashSides(args, ["base", "v1", "v2"], [args[1], args[2], args[3]], out var rehashRoots, out var rehashSides)) return 64;
+    var options = new CompareOptions { Parallelism = threads, Cache = args.Contains("--no-cache") ? CacheMode.Off : CacheMode.On,
+                                       RehashRoots = rehashRoots, RehashSides = rehashSides };
     if (!HtmlOptionsOk(args, args[1], args[2], args[3])) return 64;
     var store = new SessionStore(save: !args.Contains("--no-save"));
     var outDir = FlagValue(args, "--merge-out", from: 4);
@@ -1146,13 +1175,15 @@ static void PrintUsage()
 
         usage:
           codediffer version                   print version
-          codediffer compare <left> <right> [--threads N] [--no-cache | --rehash] [--fast-stat]
+          codediffer compare <left> <right> [--threads N] [--no-cache | --rehash | --rehash-side S]
+                                       [--fast-stat]
                                        [--patch [-U N] [--literal]] [--timings] [--no-save]
                                        [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]
                                        compare two trees (parallel; default min(cores,8)).
                                        Hash cache ON by default: a file whose size, mtime, ChangeTime
                                        and file id match a trusted ledger entry isn't re-read. --no-cache
-                                       proves every byte; --rehash re-reads and refreshes it.
+                                       proves every byte; --rehash re-reads and refreshes it;
+                                       --rehash-side left|right does that for one tree only.
                                        Cache hits are confirmed by a live per-file stat;
                                        --fast-stat trusts the directory listing alone (only for
                                        a tree nothing else writes: see docs/OUTPUT.md); its
@@ -1162,11 +1193,14 @@ static void PrintUsage()
                                        (git apply-able; summary goes to stderr).
                                        The result is saved (see `results`; --no-save skips);
                                        --html also writes the HTML report (report flags below).
-          codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache] [--no-save]
+          codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache | --rehash-side S]
+                              [--no-save]
                               [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]
                               [--merge-out DIR]
                                        3-way: v1 only | v2 only | agreed | merged | conflict
                                        (the paths both sides touched; --all lists every one)
+                                       --rehash-side base|v1|v2 (or several: v1,v2) re-reads those
+                                       trees and refreshes their cache; the others' is used.
                                        --merge-out writes the merge as an overlay on v1 (new or
                                        empty DIR): deletes.txt to apply to v1 first, then files\
                                        to copy over it (text conflicts with diff3 markers),
