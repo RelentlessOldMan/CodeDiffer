@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace CodeDiffer.Core.Compare;
@@ -147,6 +147,18 @@ internal static class TextInspector
         catch (DecoderFallbackException) { int k = skip == 3 ? 3 : 0; return Encoding.Latin1.GetString(bytes, k, bytes.Length - k); }
     }
 
+    /// <summary>
+    /// Whether <see cref="Decode"/> reads these bytes as Latin-1 (not UTF-8, no UTF-16/32 BOM) and they hold a byte in
+    /// 0x80–0x9F: in cp1252, the usual legacy code page, those are punctuation (“ ” € …), in Latin-1 control characters.
+    /// The same text as a UTF-8 side is then no proof of a re-save — U+0093 is what a byte-for-byte "conversion" makes.
+    /// </summary>
+    public static bool LegacyC1(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes is [0xFF, 0xFE, ..] or [0xFE, 0xFF, ..] or [0x00, 0x00, 0xFE, 0xFF, ..]) return false;
+        var rest = bytes is [0xEF, 0xBB, 0xBF, ..] ? bytes[3..] : bytes;
+        return !System.Text.Unicode.Utf8.IsValid(rest) && rest.IndexOfAnyInRange((byte)0x80, (byte)0x9F) >= 0;
+    }
+
     public static string NormalizeEol(string s) => s.Replace("\r\n", "\n").Replace('\r', '\n');
 
     /// <summary>Horizontal whitespace for the whitespace reason: ASCII space, tab, VT and FF only — never NBSP, NEL or
@@ -249,16 +261,47 @@ internal static class TextInspector
         return sb.ToString();
     }
 
+    /// <summary>Whether a backslash before a line ending splices the two lines into one (C's preprocessor, Python): the
+    /// spacing before the backslash and the next line's indent are then one run, between the characters either side.</summary>
+    internal static bool Splices(StringRules rules) => rules is StringRules.Escape or StringRules.Both;
+
+    /// <summary>
+    /// Whether a run held back before a backslash (where <see cref="Splices"/>) is kept, as one space, decided at the
+    /// backslash: <paramref name="last"/> the character before the run, <paramref name="next"/> the one after the
+    /// backslash (-1: the end). Before a splice (<paramref name="splice"/>) it is part of the run across it, kept or not
+    /// after it; in <see cref="StringRules.Both"/> also kept as a literal reading, where the backslash is text, keeps it:
+    /// so the verdict is both readings'. One ending the text is read as before a splice too (a hunk's last line, checked
+    /// alone, then reads as it does in its file): nothing follows it, so it counts only in a string.
+    /// </summary>
+    internal static bool KeepsRunBeforeBackslash(in StringScan scan, bool both, int last, int next, out bool splice)
+    {
+        splice = next is '\n' or '\r';
+        if (splice) return both && (scan.KeepsRunUnspliced || Separates(last, '\\'));
+        return scan.KeepsRun || (both || next != -1) && Separates(last, '\\');
+    }
+
     /// <summary><see cref="WhitespaceKey"/> a character at a time: what it appends, in order (-1 at the end).</summary>
     private struct WhitespaceKeyReader(string s, StringRules rules)
     {
         private readonly string _s = s;
+        private readonly bool _splices = Splices(rules), _both = rules == StringRules.Both;
         private StringScan _scan = new(rules);
         private int _i;
         private bool _lineStart = true;
         private int _last = -1; // the last character of the key so far
+        private int _solid = -1, _solidPrev = -1; // the last two characters of it but a run's space
+        // A splice: a run held back before a backslash; just past one; spacing either side of it; the character before
+        // its backslash.
+        private bool _runBeforeBackslash, _spliced, _spliceRun;
+        private int _beforeSplice = -1;
 
         public int Next() => _last = Read();
+
+        private int Solid(int c)
+        {
+            (_solidPrev, _solid) = (_solid, c);
+            return c;
+        }
 
         private int Read()
         {
@@ -266,6 +309,23 @@ internal static class TextInspector
             for (; _i < s.Length; _i++)
             {
                 char c = s[_i];
+                if (_spliced && !IsHorizontalSpace(c))
+                {
+                    // The first character past a splice: the spacing either side of it is one run, between the character
+                    // before the backslash and this one (returned first; c is read again on the next call).
+                    _spliced = false;
+                    bool run = _spliceRun;
+                    _spliceRun = false;
+                    if (run && c != '\n' && (_scan.KeepsRun || Separates(_beforeSplice, c))) return ' ';
+                }
+                if (_runBeforeBackslash)
+                {
+                    // The backslash a run was held back for.
+                    _runBeforeBackslash = false;
+                    bool keep = KeepsRunBeforeBackslash(_scan, _both, _last, _i + 1 < s.Length ? s[_i + 1] : -1, out bool splice);
+                    _spliceRun = splice;
+                    if (keep) return ' ';
+                }
                 bool escaped = _scan.Step(c);
                 if (IsHorizontalSpace(c))
                 {
@@ -274,16 +334,20 @@ internal static class TextInspector
                     if (escaped)
                     {
                         // An escaped space is a character (taken out, the backslash escapes what follows): kept as it is, the
-                        // rest of its run not (a run's width never is), and trailing whitespace still.
-                        if (!lineEnd) { _i++; return c; }
+                        // rest of its run not (a run's width never is), and trailing whitespace still, but where a backslash
+                        // splices: there "\ " ending a line is no splice, and taken out it makes one.
+                        if (!lineEnd || _splices) { _i++; return Solid(c); }
                         continue;
                     }
-                    if (!_lineStart && !lineEnd && (_scan.InString || Separates((char)_last, s[_i + 1]))) { _i++; return ' '; }
+                    if (_spliced) { _spliceRun = true; continue; } // a continued line's indent
+                    if (_splices && !_lineStart && !lineEnd && s[_i + 1] == '\\') { _runBeforeBackslash = true; continue; }
+                    if (!_lineStart && !lineEnd && (_scan.KeepsRun || Separates((char)_last, s[_i + 1]))) { _i++; return ' '; }
                     continue;
                 }
+                if (c == '\n' && escaped && _splices && _solid == '\\') { _spliced = true; _beforeSplice = _solidPrev; }
                 _lineStart = c == '\n';
                 _i++;
-                return c;
+                return Solid(c);
             }
             return -1;
         }
@@ -323,7 +387,10 @@ internal struct StringScan
     private Readings _r;
     private readonly int _n;
     private int _escapeNext, _closedVerbatim, _inString; // a bit a reading
+    private readonly int _unspliced;                      // the readings whose backslashes are text (Both's literal ones)
     private int _p1 = -1, _p2 = -1;                       // the last two characters stepped over but spacing
+    private Pp _pp;                                       // where on a preprocessor line the scan is
+    private ulong _directive;                             // its directive's name so far, a byte a character
 
     public StringScan(StringRules rules)
     {
@@ -339,6 +406,7 @@ internal struct StringScan
         if (rules is StringRules.Both or StringRules.Literal or StringRules.PowerShell)
         {
             var l = rules == StringRules.PowerShell ? rules : StringRules.Literal;
+            _unspliced = 0b11 << _n;
             _r[_n++] = new Reading(l, apostrophe: true, raw: false);
             _r[_n++] = new Reading(l, apostrophe: false, raw: false);
         }
@@ -347,11 +415,64 @@ internal struct StringScan
     /// <summary>The scan is in a string, after the characters stepped over.</summary>
     public readonly bool InString => _inString != 0;
 
+    /// <summary>A run of spacing here is kept (as one space): in a string, between a <c>#define</c>'s name and what
+    /// follows it (<c>F(x)</c> is a function-like macro, <c>F (x)</c> one that expands to <c>(x)</c>), or inside an
+    /// <c>#include</c>'s <c>&lt;…&gt;</c> (another file name).</summary>
+    public readonly bool KeepsRun => _inString != 0 || _pp is Pp.AfterName or Pp.InAngle;
+
+    /// <summary><see cref="KeepsRun"/> but in a string only by a reading whose backslashes are text (one a splice
+    /// doesn't join to the next line).</summary>
+    public readonly bool KeepsRunUnspliced => (_inString & _unspliced) != 0 || _pp is Pp.AfterName or Pp.InAngle;
+
+    /// <summary>Where a line is, read as a preprocessor directive.</summary>
+    private enum Pp : byte { LineStart, Hash, Directive, BeforeName, Name, AfterName, BeforeAngle, InAngle, None }
+
+    private static readonly ulong Define = Packed("define"), Include = Packed("include"), Import = Packed("import");
+
+    private static ulong Packed(string s)
+    {
+        ulong w = 0;
+        foreach (var c in s) w = (w << 8) | c;
+        return w;
+    }
+
+    /// <summary>The directive just ended: what comes after it.</summary>
+    private readonly Pp AfterDirective(int c)
+        => _directive == Define ? (c == -2 ? Pp.BeforeName : Pp.None)
+         : _directive == Include || _directive == Import ? (c == '<' ? Pp.InAngle : c == -2 ? Pp.BeforeAngle : Pp.None)
+         : Pp.None;
+
+    /// <summary>One character's step through a preprocessor line (-2: a run of spacing).</summary>
+    private void PpStep(int c)
+    {
+        if (c is '\n' or '\r') { _pp = Pp.LineStart; return; }
+        switch (_pp)
+        {
+            case Pp.None: return;
+            case Pp.LineStart: _pp = c == '#' ? Pp.Hash : c == -2 ? Pp.LineStart : Pp.None; return;
+            case Pp.Hash:
+                if (c == -2) return;
+                _pp = c is (>= 'a' and <= 'z') ? Pp.Directive : Pp.None;
+                _directive = (ulong)c;
+                return;
+            case Pp.Directive:
+                if (c is (>= 'a' and <= 'z') or '_') { _directive = _directive >> 56 != 0 ? ulong.MaxValue : (_directive << 8) | (uint)c; return; }
+                _pp = AfterDirective(c);
+                return;
+            case Pp.BeforeName: _pp = c == -2 ? Pp.BeforeName : TextInspector.IsWordChar(c) && c is not (>= '0' and <= '9') ? Pp.Name : Pp.None; return;
+            case Pp.Name: _pp = c == -2 ? Pp.AfterName : TextInspector.IsWordChar(c) ? Pp.Name : Pp.None; return;
+            case Pp.AfterName: _pp = c == -2 ? Pp.AfterName : Pp.None; return;
+            case Pp.BeforeAngle: _pp = c == -2 ? Pp.BeforeAngle : c == '<' ? Pp.InAngle : Pp.None; return;
+            case Pp.InAngle: if (c == '>') _pp = Pp.None; return;
+        }
+    }
+
     /// <summary>Steps over one character (-1: the end; a line ending is '\n' or '\r'): whether it is escaped (by any
     /// reading).</summary>
     public bool Step(int c)
     {
         bool escaped = _escapeNext != 0;
+        if ((_pp != Pp.None || c is '\n' or '\r') && !(escaped && c is '\n' or '\r')) PpStep(TextInspector.IsHorizontalSpace(c) ? -2 : c);
         if (TextInspector.IsHorizontalSpace(c))
         {
             // Spacing never puts a scan in or out of a string, nor makes a quote verbatim: only what is kept does. An
@@ -377,8 +498,11 @@ internal struct StringScan
             if (!e && r.Escapes(c)) next |= bit;
             if (c is '\n' or '\r')
             {
-                r.Quote = '\0';
-                r.Verbatim = false;
+                if (!e) // an escaped one (a splice) goes on with the line, and its string
+                {
+                    r.Quote = '\0';
+                    r.Verbatim = false;
+                }
             }
             else if (!e && r.IsQuote(c))
             {

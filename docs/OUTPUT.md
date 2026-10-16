@@ -350,8 +350,12 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   spacing round punctuation (`x=1` → `x = 1`). A space that joins or splits a word (`return x` → `returnx`) or
   two operator characters (`- -x` → `--x`, `/ *` → `/*`, `> =` → `>=`), a word and a quote (`L "x"` → `L"x"`), a
   digit and a dot (`1 .5` → `1.5`), a space taken out of a quoted string (`split(" ")` → `split("")`,
-  `"Total: "` → `"Total:"`), a line joined, split or added, and NBSP / NEL (characters, not whitespace) are
-  `content`. Whitespace is ASCII space, tab, VT and FF, whole or streamed alike. Strings and comments aren't
+  `"Total: "` → `"Total:"`), a space after a `#define`'s name (`F(x)` → `F (x)`: a function-like macro made one
+  that expands to `(x)`) or inside an `#include <…>` (`<a.h >`: another file name), a line joined, split or added,
+  a space taken out of a line continuation where a backslash escapes (C, Python and the like: a `\` ending a line
+  joins it to the next, so `foo \⏎  bar` → `foo\⏎bar` is `foo bar` → `foobar`, a string goes on past one, and a
+  `\␠` ending a line, no continuation, made one by trimming the space),
+  and NBSP / NEL (characters, not whitespace) are `content`. Whitespace is ASCII space, tab, VT and FF, whole or streamed alike. Strings and comments aren't
   parsed: a quote not escaped opens a string until the same quote or the line's end, and a run of spaces widened
   inside a string literal reads as whitespace. Where a line reads more than one way, a space is kept if any reading
   puts it in a string, so a guess wrong for the file only makes a verdict stricter: an apostrophe is read as a quote
@@ -398,7 +402,10 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   corrupt saved result (a bad status, a number out of range) are errors or failed checks, never a crash.
 - Text that isn't valid UTF-8 (a cp1252 / Latin-1 file) is read byte for byte, never with U+FFFD in place of
   the bad bytes: `25°C` → `25±C` is a `content` change, not "the same text, encoding changed". Such a file that
-  only gained a UTF-8 BOM is `encoding`, small or large.
+  only gained a UTF-8 BOM is `encoding`, small or large. Re-saved as UTF-8, it is `encoding` when it reads the same
+  as Latin-1 — unless it has a byte in 0x80–0x9F: those are cp1252 punctuation (`“ ” €`), and a UTF-8 side holding
+  U+0093 for one is a byte-for-byte "conversion", `content`. (A correct cp1252 → UTF-8 re-save is `content` too: it
+  is not decoded as cp1252.)
 - A file is binary when it has a NUL and no UTF-16/32 BOM (UTF-8 never needs a NUL, so a UTF-8 BOM excuses
   none): anywhere in it up to 16 MB (the size a patch line-diffs, reading it whole; past 8 MB the rest is scanned
   for a NUL after its head), in its first 8 KB past that. So text that turns binary further in is `binary`, the

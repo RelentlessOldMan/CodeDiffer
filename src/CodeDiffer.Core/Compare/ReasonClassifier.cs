@@ -108,7 +108,9 @@ public sealed class ReasonClassifier
         var rightText = TextInspector.Decode(rightBytes);
 
         if (string.Equals(leftText, rightText, StringComparison.Ordinal))
-            return ChangeReason.Encoding; // same text, different bytes
+            // Same text, different bytes — unless one side is a legacy file whose 0x80–0x9F bytes were read as Latin-1
+            // controls: as cp1252 they are other characters, and the "same text" a byte-for-byte conversion.
+            return TextInspector.LegacyC1(leftBytes) != TextInspector.LegacyC1(rightBytes) ? ChangeReason.Content : ChangeReason.Encoding;
 
         var leftEol = TextInspector.NormalizeEol(leftText);
         var rightEol = TextInspector.NormalizeEol(rightText);
@@ -141,7 +143,23 @@ public sealed class ReasonClassifier
         if (reason != ChangeReason.Content || !decodingMatters) return reason;
         bool lu = IsUtf8(leftPath, l, ct), ru = IsUtf8(rightPath, r, ct);
         if (lu == ru) return reason;
-        return Verdict(leftPath, l, lu ? Utf8Strict : Encoding.Latin1, rightPath, r, ru ? Utf8Strict : Encoding.Latin1, true, rules, ct, out _);
+        reason = Verdict(leftPath, l, lu ? Utf8Strict : Encoding.Latin1, rightPath, r, ru ? Utf8Strict : Encoding.Latin1, true, rules, ct, out _);
+        // The legacy side's 0x80–0x9F bytes are cp1252 punctuation, not the Latin-1 controls that read as the same text.
+        return reason == ChangeReason.Encoding && HasC1(lu ? rightPath : leftPath, lu ? r : l, ct) ? ChangeReason.Content : reason;
+    }
+
+    /// <summary>Whether a file past <paramref name="skip"/> bytes holds a byte in 0x80–0x9F, streamed.</summary>
+    private static bool HasC1(string path, int skip, CancellationToken ct)
+    {
+        using var fs = TextInspector.OpenShared(path, 1);
+        fs.Position = skip;
+        var buf = new byte[1 << 16];
+        for (int n; (n = fs.Read(buf, 0, buf.Length)) > 0;)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (buf.AsSpan(0, n).IndexOfAnyInRange((byte)0x80, (byte)0x9F) >= 0) return true;
+        }
+        return false;
     }
 
     private static readonly Encoding Utf8Strict = new UTF8Encoding(false, true);
@@ -209,6 +227,24 @@ public sealed class ReasonClassifier
         while (true)
         {
             int c = f.Next();
+            if (norm == Norm.Whitespace)
+            {
+                // A splice, as TextInspector.WhitespaceKey reads one: the spacing either side of it is one run.
+                if (f.Spliced && !TextInspector.IsHorizontalSpace(c))
+                {
+                    f.Spliced = false;
+                    bool run = f.SpliceRun;
+                    f.SpliceRun = false;
+                    if (run && c is not ('\n' or '\r' or -1) && (f.Scan.KeepsRun || TextInspector.Separates(f.BeforeSplice, c))) { f.Unread(); return ' '; }
+                }
+                if (f.RunBeforeBackslash)
+                {
+                    f.RunBeforeBackslash = false;
+                    bool keep = TextInspector.KeepsRunBeforeBackslash(f.Scan, f.Both, f.Last, f.Peek(), out bool splice);
+                    f.SpliceRun = splice;
+                    if (keep) { f.Unread(); return ' '; }
+                }
+            }
             bool escaped = norm == Norm.Whitespace && f.Scan.Step(c);
             switch (norm)
             {
@@ -219,21 +255,26 @@ public sealed class ReasonClassifier
                     bool lineEnd = after is '\n' or '\r' or -1;
                     if (escaped)
                     {
-                        if (lineEnd) continue; // an escaped space is a character, but trailing whitespace still
+                        if (lineEnd && !f.Splices) continue; // an escaped space is a character, but trailing whitespace still (TextInspector)
                         f.LineStart = false;
-                        f.Last = c;
+                        (f.Prev, f.Last) = (f.Last, c);
                         return c;
                     }
                     if (after == -1 && f.LineStart) f.BlankTail = true; // TextInspector.EndsInBlankLine
-                    if (f.LineStart || lineEnd || (!f.Scan.InString && !TextInspector.Separates(f.Last, after))) continue;
+                    if (f.Spliced) { f.SpliceRun = true; continue; } // a continued line's indent
+                    if (f.Splices && !f.LineStart && !lineEnd && after == '\\') { f.RunBeforeBackslash = true; continue; }
+                    if (f.LineStart || lineEnd || (!f.Scan.KeepsRun && !TextInspector.Separates(f.Last, after))) continue;
                     return ' ';
                 case Norm.Whitespace or Norm.Eol when c == '\r':
                     if (f.Peek() == '\n') f.Next();
+                    if (escaped && f.Splices && f.Last == '\\') (f.Spliced, f.BeforeSplice) = (true, f.Prev);
                     f.LineStart = true;
+                    (f.Prev, f.Last) = (f.Last, '\n');
                     return '\n';
                 default:
+                    if (escaped && c == '\n' && f.Splices && f.Last == '\\') (f.Spliced, f.BeforeSplice) = (true, f.Prev);
                     f.LineStart = c == '\n';
-                    f.Last = c;
+                    (f.Prev, f.Last) = (f.Last, c);
                     return c;
             }
         }
@@ -250,8 +291,14 @@ public sealed class ReasonClassifier
         /// <summary>Nothing but whitespace since the last line ending (or the start).</summary>
         public bool LineStart = true;
 
-        /// <summary>The last byte returned that wasn't whitespace (whitespace normalization).</summary>
-        public int Last = -1;
+        /// <summary>The last byte returned that wasn't whitespace (whitespace normalization), and the one before it.</summary>
+        public int Last = -1, Prev = -1;
+
+        /// <summary>A splice (whitespace normalization, <see cref="TextInspector.Splices"/>): a run held back before a
+        /// backslash; just past one; spacing either side of it; the byte before its backslash.</summary>
+        public readonly bool Splices, Both;
+        public bool RunBeforeBackslash, Spliced, SpliceRun;
+        public int BeforeSplice = -1;
 
         /// <summary>Whether the comparison is in a string on this line (whitespace normalization).</summary>
         public StringScan Scan;
@@ -263,12 +310,19 @@ public sealed class ReasonClassifier
         {
             _ct = ct;
             Scan = new StringScan(rules);
+            Splices = TextInspector.Splices(rules);
+            Both = rules == StringRules.Both;
             var fs = TextInspector.OpenShared(path, 1);
             fs.Position = skip;
             _r = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: false, bufferSize: 1 << 16);
         }
 
-        public int Peek() => _i < _n || Fill() ? _buf[_i] : -1;
+        public int Peek() => _held ? _last : _i < _n || Fill() ? _buf[_i] : -1;
+
+        /// <summary>The character <see cref="Next()"/> last returned is returned again by the next call.</summary>
+        public void Unread() => _held = true;
+        private bool _held, _heldHighBefore;
+        private int _last;
 
         /// <summary>A non-ASCII character was read before the last one <see cref="Next()"/> returned.</summary>
         public bool HighBefore { get; private set; }
@@ -276,10 +330,16 @@ public sealed class ReasonClassifier
 
         public int Next()
         {
+            if (_held)
+            {
+                _held = false;
+                HighBefore = _heldHighBefore;
+                return _last;
+            }
             int c = _i < _n || Fill() ? _buf[_i++] : -1;
-            HighBefore = _high;
+            HighBefore = _heldHighBefore = _high;
             _high |= c >= 0x80;
-            return c;
+            return _last = c;
         }
 
         private bool Fill()
