@@ -224,6 +224,13 @@ public sealed class ReasonClassifier
 
     private static int Next(Feed f, Norm norm)
     {
+        int c = ReadNormalized(f, norm);
+        if (norm == Norm.Whitespace) (f.Number, f.Key) = (TextInspector.InNumber(f.Number, f.Key, c), c);
+        return c;
+    }
+
+    private static int ReadNormalized(Feed f, Norm norm)
+    {
         while (true)
         {
             int c = f.Next();
@@ -263,7 +270,7 @@ public sealed class ReasonClassifier
                     if (after == -1 && f.LineStart) f.BlankTail = true; // TextInspector.EndsInBlankLine
                     if (f.Spliced) { f.SpliceRun = true; continue; } // a continued line's indent
                     if (f.Splices && !f.LineStart && !lineEnd && after == '\\') { f.RunBeforeBackslash = true; continue; }
-                    if (f.LineStart || lineEnd || (!f.Scan.KeepsRun && !TextInspector.Separates(f.Last, after))) continue;
+                    if (f.LineStart || lineEnd || (!f.Scan.KeepsRun && !TextInspector.Separates(f.Last, after, f.Number))) continue;
                     return ' ';
                 case Norm.Whitespace or Norm.Eol when c == '\r':
                     if (f.Peek() == '\n') f.Next();
@@ -293,6 +300,10 @@ public sealed class ReasonClassifier
 
         /// <summary>The last byte returned that wasn't whitespace (whitespace normalization), and the one before it.</summary>
         public int Last = -1, Prev = -1;
+
+        /// <summary>The last byte returned, spaces too, and whether it is in a number (<see cref="TextInspector.InNumber"/>).</summary>
+        public int Key = -1;
+        public bool Number;
 
         /// <summary>A splice (whitespace normalization, <see cref="TextInspector.Splices"/>): a run held back before a
         /// backslash; just past one; spacing either side of it; the byte before its backslash.</summary>

@@ -363,7 +363,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - `whitespace` means only whitespace: the same lines but for indentation, trailing spaces / tabs and the
   spacing round punctuation (`x=1` → `x = 1`). A space that joins or splits a word (`return x` → `returnx`) or
   two operator characters (`- -x` → `--x`, `/ *` → `/*`, `> =` → `>=`), a word and a quote (`L "x"` → `L"x"`), a
-  digit and a dot (`1 .5` → `1.5`), a space taken out of a quoted string (`split(" ")` → `split("")`,
+  digit and a dot (`1 .5` → `1.5`), a number's exponent and its sign (`1e + 5` → `1e+5`, `0xe + 1` → `0xe+1`), a space taken out of a quoted string (`split(" ")` → `split("")`,
   `"Total: "` → `"Total:"`), a space after a `#define`'s name (`F(x)` → `F (x)`: a function-like macro made one
   that expands to `(x)`) or inside an `#include <…>` (`<a.h >`: another file name), a line joined, split or added,
   a space taken out of a line continuation where a backslash escapes (C, Python and the like: a `\` ending a line

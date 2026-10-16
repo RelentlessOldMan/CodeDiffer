@@ -107,6 +107,26 @@ public sealed class DifferReviewTests : IDisposable
         }
     }
 
+    // ---- K6: a number ending in an exponent letter takes a following sign into it ----
+
+    [Theory]
+    [InlineData("int x = 0xe + 1;\n", "int x = 0xe+1;\n", "content")]       // C: 0xe+1 is one (bad) number
+    [InlineData("y = 1e + 5;\n", "y = 1e+5;\n", "content")]
+    [InlineData("y = 1.5E - 2;\n", "y = 1.5E-2;\n", "content")]
+    [InlineData("y = 0x1p + 3;\n", "y = 0x1p+3;\n", "content")]
+    [InlineData("y = size + 1;\n", "y = size+1;\n", "whitespace")]          // a name ending in e: not a number
+    [InlineData("y = x1e + 1;\n", "y = x1e+1;\n", "whitespace")]
+    [InlineData("y = 10 + 1;\n", "y = 10+1;\n", "whitespace")]
+    public void ANumberEndingInAnExponentLetter_IsNotSpacedFromASign(string left, string right, string want)
+    {
+        foreach (var ext in new[] { ".c", ".txt" })
+        {
+            Assert.Equal(want, Classify(left, right, ext, false));
+            Assert.Equal(want, Classify(left, right, ext, true));
+        }
+        Assert.Equal(want == "whitespace", TextInspector.SameButWhitespace(left, right));
+    }
+
     // ---- K3: a macro's parameter list, an include's file name ----
 
     [Theory]

@@ -186,10 +186,16 @@ internal static class TextInspector
     /// <summary>Whether a run of whitespace between these two characters keeps them apart: two word characters or quotes
     /// (<c>L "x"</c> is not <c>L"x"</c>), two operator characters, or a digit and a '.' (<c>1 .5</c> is not <c>1.5</c>).
     /// Between anything else it can vanish without changing a token.</summary>
-    public static bool Separates(int before, int after)
+    public static bool Separates(int before, int after, bool inNumber = false)
         => ((IsWordChar(before) || IsQuote(before)) && (IsWordChar(after) || IsQuote(after)))
            || (IsOperatorChar(before) && IsOperatorChar(after))
-           || (before is >= '0' and <= '9' && after == '.') || (before == '.' && after is >= '0' and <= '9');
+           || (before is >= '0' and <= '9' && after == '.') || (before == '.' && after is >= '0' and <= '9')
+           || (inNumber && before is 'e' or 'E' or 'p' or 'P' && after is '+' or '-'); // 1e+5, 0x1p-3: the sign joins the number
+
+    /// <summary>Whether <paramref name="c"/>, read after <paramref name="before"/>, is in a number (a word that starts with a
+    /// digit, its dots too): <paramref name="inNumber"/> is whether <paramref name="before"/> was.</summary>
+    public static bool InNumber(bool inNumber, int before, int c)
+        => IsWordChar(c) ? (IsWordChar(before) ? inNumber : c is >= '0' and <= '9') : c == '.' && inNumber;
 
     /// <summary>
     /// Whether two EOL-normalized texts differ only in whitespace: their <see cref="WhitespaceKey"/>s match, strings read
@@ -295,7 +301,14 @@ internal static class TextInspector
         private bool _runBeforeBackslash, _spliced, _spliceRun;
         private int _beforeSplice = -1;
 
-        public int Next() => _last = Read();
+        private bool _number; // whether _last is in a number (InNumber)
+
+        public int Next()
+        {
+            int c = Read();
+            _number = InNumber(_number, _last, c);
+            return _last = c;
+        }
 
         private int Solid(int c)
         {
@@ -341,7 +354,7 @@ internal static class TextInspector
                     }
                     if (_spliced) { _spliceRun = true; continue; } // a continued line's indent
                     if (_splices && !_lineStart && !lineEnd && s[_i + 1] == '\\') { _runBeforeBackslash = true; continue; }
-                    if (!_lineStart && !lineEnd && (_scan.KeepsRun || Separates((char)_last, s[_i + 1]))) { _i++; return ' '; }
+                    if (!_lineStart && !lineEnd && (_scan.KeepsRun || Separates((char)_last, s[_i + 1], _number))) { _i++; return ' '; }
                     continue;
                 }
                 if (c == '\n' && escaped && _splices && _solid == '\\') { _spliced = true; _beforeSplice = _solidPrev; }
