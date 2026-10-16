@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 
 namespace CodeDiffer.Core.Walk;
@@ -18,14 +18,33 @@ public static class TempNames
     /// <see cref="MaxName"/> UTF-16 code units and as many bytes of UTF-8.</summary>
     public static bool Fits(string name) => name.Length <= MaxName && Encoding.UTF8.GetByteCount(name) <= MaxName;
 
-    /// <summary><paramref name="path"/> + <paramref name="suffix"/>, the same name every time (a killed run's leftover is
-    /// found and reused), or, where that is too long a name, one made from the name's hash beside it.</summary>
+    /// <summary><paramref name="path"/> + <paramref name="suffix"/>, the same name every time, or, where that is too long
+    /// a name, one made from the name's hash beside it.</summary>
     public static string Beside(string path, string suffix)
     {
         var name = Path.GetFileName(path);
         if (Fits(name + suffix)) return path + suffix;
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(name)))[..16].ToLowerInvariant();
         return Path.Combine(Path.GetDirectoryName(path) ?? "", "." + hash + suffix);
+    }
+
+    /// <summary>
+    /// A temp file beside <paramref name="path"/> that this call created (empty, opened CreateNew): <c>&lt;name&gt;.&lt;id&gt;</c>
+    /// + <paramref name="suffix"/>, fitted as <see cref="Beside"/> fits it. A fixed name was taken over whatever was
+    /// there, then deleted: a real file of that name, a parallel write's own destination. Its directory must exist.
+    /// </summary>
+    public static string Claim(string path, string suffix)
+    {
+        for (int tries = 0; ; tries++)
+        {
+            var tmp = Beside(path, "." + Guid.NewGuid().ToString("N")[..8] + suffix);
+            try
+            {
+                new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None).Dispose();
+                return tmp;
+            }
+            catch (IOException) when (tries < 8 && File.Exists(tmp)) { } // taken: another id
+        }
     }
 
     /// <summary>A name beside <paramref name="path"/> no other writer uses: short whatever the name.</summary>

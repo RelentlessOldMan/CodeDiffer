@@ -73,13 +73,13 @@ public sealed class PortResult
 /// <para>
 /// Interrupting it is safe: a cancel stops between files (each file is written whole, via a temp file and a
 /// rename), and running the same port again finishes the job — what was already written comes out "already",
-/// a rename stopped between writing the new path and deleting the old one is completed, and a temp file a
-/// killed run left behind is reused.
+/// and a rename stopped between writing the new path and deleting the old one is completed. A temp file a killed run
+/// left behind stays: a file of that name is never written over or deleted, since it could be a real one.
 /// </para>
 /// </summary>
 public static class ChangePorter
 {
-    /// <summary>The suffix of the temp file a write goes through (fixed, so a killed run's leftover is reused).</summary>
+    /// <summary>The suffix of the temp file a write goes through (<c>&lt;file&gt;.&lt;id&gt;.codediffer.tmp</c>).</summary>
     public const string TempSuffix = ".codediffer.tmp";
 
     public static PortResult Run(CompareReport report, string leftRoot, string rightRoot, string target,
@@ -402,14 +402,13 @@ public static class ChangePorter
         public bool Holds(string path) => _bytes is not null ? TextInspector.SameBytes(path, _bytes) : TextInspector.SameBytes(path, _from!);
 
         /// <summary>
-        /// Write via a temp file in the same directory, then replace: a reader never sees a half file. The temp name is
-        /// fixed (one change per path, so no two writes share it): a run killed mid-write leaves at most this file, and
-        /// the next run overwrites and renames it.
+        /// Write via a temp file in the same directory, then replace: a reader never sees a half file. The temp file is
+        /// one this write created (<see cref="Walk.TempNames.Claim"/>), never a file already there.
         /// </summary>
         public void WriteTo(string path)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            var tmp = Walk.TempNames.Beside(path, TempSuffix);
+            var tmp = Walk.TempNames.Claim(path, TempSuffix);
             try
             {
                 if (_bytes is not null) File.WriteAllBytes(tmp, _bytes);

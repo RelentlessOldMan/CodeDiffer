@@ -98,7 +98,7 @@ Removes are done first, then renames, then adds and edits, so a directory that b
 ports in one run: a directory the removes and renames leave empty is removed before the adds (one still holding
 anything, the target's own files included, stays, and so does any directory behind a link).
 Stopping `apply --write` part way is safe: Ctrl+C stops between files (the report says how many were written
-and how many were not reached), each file is written whole via `<file>.codediffer.tmp` and a rename, and
+and how many were not reached), each file is written whole via a `<file>.<id>.codediffer.tmp` it creates and a rename (a file already there under such a name, a real one or a killed run's leftover, is never written over or deleted), and
 running the same apply again finishes the job — what is done comes out "already", a rename stopped between
 writing the new path and deleting the old one is completed (and one already merged into the target's own
 edits comes out "already"; a rename without edits, whose new path is only much like the file and not its exact

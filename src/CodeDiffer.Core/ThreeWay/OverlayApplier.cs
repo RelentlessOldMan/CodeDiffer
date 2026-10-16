@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Port;
 using CodeDiffer.Core.Sessions;
@@ -151,7 +151,7 @@ public static class OverlayApplier
             if (ct.IsCancellationRequested) { Interlocked.Increment(ref notReached); return; }
             var src = Path.Combine(files, rel);
             var dest = Path.Combine(target, rel);
-            var tmp = Walk.TempNames.Beside(dest, ChangePorter.TempSuffix);
+            string? tmp = null;
             try
             {
                 if (Link(dest) is { } why) throw new IOException(why);
@@ -166,6 +166,7 @@ public static class OverlayApplier
                     if (write)
                     {
                         Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                        tmp = Walk.TempNames.Claim(dest, ChangePorter.TempSuffix); // never a file already there
                         File.Copy(src, tmp, overwrite: true);
                         if (File.Exists(dest)) File.SetAttributes(dest, File.GetAttributes(dest) & ~FileAttributes.ReadOnly);
                         File.Move(tmp, dest, overwrite: true);
@@ -176,7 +177,8 @@ public static class OverlayApplier
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                try { File.Delete(tmp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
+                if (tmp is not null)
+                    try { File.Delete(tmp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
                 failed.Add((rel.Replace('\\', '/'), $"not written: {ex.Message}"));
             }
             Step();

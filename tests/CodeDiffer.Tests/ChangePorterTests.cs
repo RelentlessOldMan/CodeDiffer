@@ -280,15 +280,17 @@ public class ChangePorterTests : IDisposable
     }
 
     [Fact]
-    public void AKilledRunsTempFile_IsReusedAndGone()
+    public void AFileNamedLikeATempFile_IsNeverWrittenOverOrDeleted()
     {
+        // A real file, or what a killed run left: no telling which, so neither is touched (it was reused, then deleted).
         Put("L/a.c", Lines(1, 10));
         Put("R/a.c", Lines(1, 9) + "ten\n");
         Put("C/a.c", Lines(1, 10));
-        Put("C/a.c" + ChangePorter.TempSuffix, "half a fi"); // what a run killed mid-write leaves
+        Put("C/a.c" + ChangePorter.TempSuffix, "mine, not a temp file\n");
         Port(write: true);
         Assert.Equal(Lines(1, 9) + "ten\n", Read("C/a.c"));
-        Assert.Equal(["a.c"], Directory.GetFiles(C).Select(Path.GetFileName));
+        Assert.Equal("mine, not a temp file\n", Read("C/a.c" + ChangePorter.TempSuffix));
+        Assert.Equal(["a.c", "a.c" + ChangePorter.TempSuffix], Directory.GetFiles(C).Select(Path.GetFileName!).Order(StringComparer.Ordinal));
     }
 
     [Fact]

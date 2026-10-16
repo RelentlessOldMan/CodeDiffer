@@ -309,6 +309,21 @@ public sealed class MergeOverlayTests : IDisposable
     }
 
     [Fact]
+    public void ApplyOverlay_NeverWritesOverOrDeletes_AFileNamedLikeItsTempFile()
+    {
+        Put("V2/many/m00.c", "new 0\n");
+        var outDir = Overlay();
+        var t = CopyOfV1();
+        var mine = Path.Combine(t, "many", "m00.c.codediffer.tmp");
+        Directory.CreateDirectory(Path.GetDirectoryName(mine)!);
+        File.WriteAllText(mine, "mine\n");
+        var r = OverlayApplier.Run(outDir, t, write: true);
+        Assert.Empty(r.Failed);
+        Assert.Equal("new 0\n", File.ReadAllText(Path.Combine(t, "many", "m00.c")));
+        Assert.Equal("mine\n", File.ReadAllText(mine));
+    }
+
+    [Fact]
     public void ApplyOverlay_Stopped_FinishesOnTheNextRun()
     {
         for (int i = 0; i < 12; i++) Put($"V2/many/m{i:00}.c", $"new {i}\n");

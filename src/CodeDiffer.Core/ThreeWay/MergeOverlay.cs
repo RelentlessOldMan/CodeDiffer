@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Sessions;
 
@@ -128,12 +128,13 @@ public static class MergeOverlay
         Parallel.ForEach(writes, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism), CancellationToken = ct }, w =>
         {
             var target = Path.GetFullPath(Full(files, w.Dest));
-            var temp = Walk.TempNames.Beside(target, ".codediffer-tmp");
+            string? temp = null;
             try
             {
                 if (!target.StartsWith(filesRoot, StringComparison.OrdinalIgnoreCase))
                     throw new IOException($"{w.Dest} is not a path inside the tree");
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                temp = Walk.TempNames.Claim(target, ".codediffer-tmp"); // never another write's destination
                 // Written beside its name and moved into place, so a failure never leaves a truncated file in files\.
                 switch (w.Kind)
                 {
@@ -160,7 +161,8 @@ public static class MergeOverlay
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { } // stopped in its merge, before its temp was written
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                try { File.Delete(temp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
+                if (temp is not null)
+                    try { File.Delete(temp); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
                 failed.Add((w.E, $"not written: {ex.Message}"));
             }
         });
