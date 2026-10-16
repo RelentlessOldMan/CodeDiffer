@@ -297,6 +297,33 @@ public sealed class SafetyTests : IDisposable
     }
 
     [Fact]
+    public void AStaleListing_IsNamedAsOne_AndCountedOncePerFile_NotAsALiveWriterPerSide()
+    {
+        // Both sides' a.c rewritten through hard links outside the trees, nothing open: no live writer, but each handle
+        // disagrees with its directory entry. One file, one cause — not "2 changed while being read (live writer)".
+        if (!OperatingSystem.IsWindows()) return;
+        Put("L/a.c", "one\n");
+        Put("R/a.c", "one\n");
+        Directory.CreateDirectory(P("X"));
+        foreach (var side in new[] { "L", "R" })
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("cmd") { UseShellExecute = false, RedirectStandardOutput = true };
+            foreach (var a in new[] { "/c", "mklink", "/H", P($"X/{side}.c"), P($"{side}/a.c") }) psi.ArgumentList.Add(a);
+            using (var p = System.Diagnostics.Process.Start(psi)!) { p.StandardOutput.ReadToEnd(); p.WaitForExit(); Assert.Equal(0, p.ExitCode); }
+            File.WriteAllText(P($"X/{side}.c"), "one two\n");
+        }
+        if (CodeDiffer.Core.Walk.DirectoryLister.List(P("R")).Single(x => x.Name == "a.c").Length != 4) return; // this volume kept it fresh
+
+        var r = new DirectoryComparer(new CompareOptions { CacheBaseDir = P("cache") }).Compare(P("L"), P("R"));
+        Assert.Equal(1, r.UnstableFiles);
+        Assert.Equal(1, r.UnstableListing);
+        Assert.Equal(0, r.UnstableChanged);
+        var note = Assert.Single(AgentViews.Notes(r), n => n.Contains("listing"));
+        Assert.DoesNotContain("live writer", note);
+        Assert.DoesNotContain(AgentViews.Notes(r), n => n.Contains("live writer"));
+    }
+
+    [Fact]
     public void ATimestampPastYear9999_IsUnknown_NotACrash()
     {
         Assert.Equal(0, CodeDiffer.Core.Walk.DirectoryLister.FileTimeToUtcTicks(long.MaxValue));

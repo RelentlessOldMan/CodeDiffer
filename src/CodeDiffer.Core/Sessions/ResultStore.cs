@@ -557,6 +557,9 @@ public static class ResultStore
         w.WriteNumber("codeCompassHits", r.CodeCompassHits);
         w.WriteNumber("reusedLeftFiles", r.ReusedLeftFiles);
         w.WriteNumber("unstableFiles", r.UnstableFiles);
+        w.WriteNumber("unstableChanged", r.UnstableChanged);
+        w.WriteNumber("unstableListing", r.UnstableListing);
+        w.WriteNumber("unstableNoChangeTime", r.UnstableNoChangeTime);
         w.WriteNumber("pendingFiles", r.PendingFiles);
         w.WriteNumber("bytesRead", r.BytesRead);
         w.WriteNumber("leftDroppedDirectories", r.LeftDroppedDirectories);
@@ -620,6 +623,10 @@ public static class ResultStore
             CodeCompassHits = stats.GetProperty("codeCompassHits").GetInt32(),
             ReusedLeftFiles = stats.TryGetProperty("reusedLeftFiles", out var reused) ? reused.GetInt32() : 0, // absent in results saved before 2026-10-06
             UnstableFiles = stats.GetProperty("unstableFiles").GetInt32(),
+            // Absent before 2026-10-16, when every unstable read was counted (per side) as "changed while being read".
+            UnstableChanged = stats.TryGetProperty("unstableChanged", out var uc) ? uc.GetInt32() : stats.GetProperty("unstableFiles").GetInt32(),
+            UnstableListing = stats.TryGetProperty("unstableListing", out var ul) ? ul.GetInt32() : 0,
+            UnstableNoChangeTime = stats.TryGetProperty("unstableNoChangeTime", out var un) ? un.GetInt32() : 0,
             PendingFiles = stats.GetProperty("pendingFiles").GetInt32(),
             BytesRead = stats.GetProperty("bytesRead").GetInt64(),
             SkippedLinks = stats.TryGetProperty("skippedLinks", out var links) ? links.GetInt32() : 0, // absent before 2026-10-07

@@ -365,7 +365,7 @@ public class HashCacheTests : IDisposable
         var cache = HashCache.Open(Path.Combine(_dir, "L"), CacheMode.On, cacheBaseDir: CacheBase, codeCompassBaseDir: CompassBase);
         var e = new FileEntry("x.txt", Put("L/x.txt", "x"), 1, Old, 999, 1);
         cache.Record(e, new FileHashes(new string('A', 32), new string('B', 64), Stable: false, DateTime.UtcNow.Ticks));
-        Assert.Equal(1, cache.Unstable);
+        Assert.Equal(ReadDoubt.Changed, Assert.Single(cache.Unstable).Value);
         cache.Save([e]);
         Assert.Empty(LedgerFormat.TryRead(Path.Combine(CacheBase, LedgerFormat.RootKey(Path.Combine(_dir, "L"))))!.Entries);
     }

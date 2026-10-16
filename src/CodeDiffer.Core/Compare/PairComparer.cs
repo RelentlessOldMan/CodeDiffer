@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.IO.Hashing;
 using System.Security.Cryptography;
 using CodeDiffer.Core.Walk;
@@ -11,9 +11,23 @@ namespace CodeDiffer.Core.Compare;
 /// form) and SHA-256 (64 uppercase hex). <see cref="Stable"/> is true only when the file's handle-level
 /// size/mtime/ChangeTime/FileId were identical immediately before and after the read AND matched the walk's
 /// listing row — i.e. the hashes provably describe the file the listing describes. Only stable hashes may be
-/// cached. <see cref="HashedAtUtcTicks"/> is the local UTC clock just before the read began.
+/// cached. <see cref="HashedAtUtcTicks"/> is the local UTC clock just before the read began. Why a read isn't stable:
+/// <see cref="Doubt"/>.
 /// </summary>
-public sealed record FileHashes(string XxHash128, string Sha256, bool Stable, long HashedAtUtcTicks);
+public sealed record FileHashes(string XxHash128, string Sha256, bool Stable, long HashedAtUtcTicks, ReadDoubt Doubt = ReadDoubt.None);
+
+/// <summary>Why a read's hashes can't vouch for the file the listing describes (never cached), most telling first.</summary>
+public enum ReadDoubt : byte
+{
+    None,
+    /// <summary>The handle's size, times or id moved between before and after the read: a writer during it.</summary>
+    Changed,
+    /// <summary>Steady through the read, but not what the walk's directory entry says: a stale entry (a write
+    /// through another hard link, a server's cached listing) or a touch since the walk.</summary>
+    Listing,
+    /// <summary>The server gives the handle no change time, so a same-size, same-mtime edit couldn't be told.</summary>
+    NoChangeTime,
+}
 
 /// <summary>
 /// Outcome of comparing one same-path, same-size file pair. Hashes are present only when the pair was read
@@ -92,8 +106,8 @@ public static class PairComparer
             }
             if (!hashes) return new PairResult(equal, null, null);
             return new PairResult(equal,
-                hl!.Finish(Stable(beforeL, FileStat.Of(lh, pathL), left), hashedAt),
-                hr!.Finish(Stable(beforeR, FileStat.Of(rh, pathR), right), hashedAt))
+                hl!.Finish(Doubt(beforeL, FileStat.Of(lh, pathL), left), hashedAt),
+                hr!.Finish(Doubt(beforeR, FileStat.Of(rh, pathR), right), hashedAt))
             { LeftBytes = keptL, RightBytes = keptR };
         }
         finally
@@ -138,7 +152,7 @@ public static class PairComparer
                 off += n;
                 tRead = IoMeter.Now();
             }
-            return hasher.Finish(Stable(before, FileStat.Of(h, path), file), hashedAt);
+            return hasher.Finish(Doubt(before, FileStat.Of(h, path), file), hashedAt);
         }
         finally
         {
@@ -150,8 +164,11 @@ public static class PairComparer
     public static Task<FileHashes> HashAsync(string path, CancellationToken ct = default)
         => HashAsync(new FileEntry("", path, -1, default), ct);
 
-    private static bool Stable(FileStat before, FileStat after, FileEntry listing)
-        => before == after && after.Matches(listing) && after.ChangeUtcTicks != 0;
+    private static ReadDoubt Doubt(FileStat before, FileStat after, FileEntry listing)
+        => before != after ? ReadDoubt.Changed
+         : !after.Matches(listing) ? ReadDoubt.Listing
+         : after.ChangeUtcTicks == 0 ? ReadDoubt.NoChangeTime
+         : ReadDoubt.None;
 
     private sealed class Hasher
     {
@@ -164,9 +181,9 @@ public static class PairComparer
             _sha.AppendData(data);
         }
 
-        public FileHashes Finish(bool stable, long hashedAt)
+        public FileHashes Finish(ReadDoubt doubt, long hashedAt)
         {
-            var result = new FileHashes(Convert.ToHexString(_xx.GetCurrentHash()), Convert.ToHexString(_sha.GetHashAndReset()), stable, hashedAt);
+            var result = new FileHashes(Convert.ToHexString(_xx.GetCurrentHash()), Convert.ToHexString(_sha.GetHashAndReset()), doubt == ReadDoubt.None, hashedAt, doubt);
             _sha.Dispose();
             return result;
         }

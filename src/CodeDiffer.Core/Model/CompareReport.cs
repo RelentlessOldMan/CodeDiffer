@@ -74,8 +74,17 @@ public sealed class CompareReport
     /// <summary>Left files whose content was already proven by the previous compare of the same left tree
     /// (compare3's second compare reusing the base): neither read nor stat-checked again.</summary>
     public int ReusedLeftFiles { get; init; }
-    /// <summary>Files whose metadata moved WHILE being read (a live writer): compared as read, never cached.</summary>
+    /// <summary>Files whose read can't vouch for the file listed: compared as read, never cached. Each counted once
+    /// (a file read on both sides is one), whatever the cause: <see cref="UnstableChanged"/>,
+    /// <see cref="UnstableListing"/>, <see cref="UnstableNoChangeTime"/>.</summary>
     public int UnstableFiles { get; init; }
+    /// <summary>Of <see cref="UnstableFiles"/>: the size, times or id moved during the read (a writer).</summary>
+    public int UnstableChanged { get; init; }
+    /// <summary>Of <see cref="UnstableFiles"/>: steady, but not what the directory listing says (a stale entry, a write
+    /// through another hard link, a touch since the walk).</summary>
+    public int UnstableListing { get; init; }
+    /// <summary>Of <see cref="UnstableFiles"/>: the server gives no change time.</summary>
+    public int UnstableNoChangeTime { get; init; }
     /// <summary>Files hashed this run but modified too recently to trust yet: cached as pending, re-read next run.</summary>
     public int PendingFiles { get; init; }
     /// <summary>Content bytes read to reach the verdicts (an upper bound when early exit applies).</summary>

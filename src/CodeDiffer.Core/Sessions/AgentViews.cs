@@ -671,7 +671,12 @@ public static class AgentViews
     {
         var pre = side is null ? "" : side + ": ";
         var skipped = r.LeftSkipped.Select(x => (x, "left")).Concat(r.RightSkipped.Select(x => (x, "right"))).ToList();
-        if (r.UnstableFiles > 0) yield return $"{pre}{r.UnstableFiles:N0} file(s) changed while being read (live writer) — compared as read, not cached.";
+        // Why a read couldn't vouch for its file, cause by cause (a file is counted once, both sides together).
+        if (r.UnstableChanged > 0) yield return $"{pre}{r.UnstableChanged:N0} file(s) changed while being read (a live writer) — compared as read, not cached.";
+        if (r.UnstableListing > 0)
+            yield return $"{pre}{r.UnstableListing:N0} file(s) steady while read but not as their directory listing says (a stale entry: written through " +
+                         "another hard link, or a server's cached listing; or touched since the walk) — compared as read, not cached. `codediffer statcheck` measures it.";
+        if (r.UnstableNoChangeTime > 0) yield return $"{pre}{r.UnstableNoChangeTime:N0} file(s) on a server that gives no change time — compared as read, not cached.";
         if (r.SkippedLinks > 0)
             yield return $"{pre}{r.SkippedLinks:N0} symlink(s)/junction(s) not followed — nothing behind them is compared" +
                          Some(skipped.Where(t => t.x.Kind == Walk.SkipKind.Link).Select(t => $"{t.Item2} {t.x.Path}"));

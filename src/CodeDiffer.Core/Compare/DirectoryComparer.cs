@@ -327,7 +327,10 @@ public sealed class DirectoryComparer
             CacheHits = leftCache.Hits + rightCache.Hits,
             CodeCompassHits = leftCache.CodeCompassHits + rightCache.CodeCompassHits,
             ReusedLeftFiles = reusedFiles,
-            UnstableFiles = leftCache.Unstable + rightCache.Unstable,
+            UnstableFiles = Unstable(leftCache, rightCache, null),
+            UnstableChanged = Unstable(leftCache, rightCache, ReadDoubt.Changed),
+            UnstableListing = Unstable(leftCache, rightCache, ReadDoubt.Listing),
+            UnstableNoChangeTime = Unstable(leftCache, rightCache, ReadDoubt.NoChangeTime),
             PendingFiles = leftCache.Pending + rightCache.Pending,
             ComparedPairs = sameSize.Count,
             BytesRead = bytesRead,
@@ -344,6 +347,17 @@ public sealed class DirectoryComparer
                 return files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal).Values
                             .OrderBy(e => e.RelativePath, StringComparer.Ordinal).ToArray();
         return files;
+    }
+
+    /// <summary>The paths read unstably on either side (<paramref name="doubt"/>'s, or any), each once: a file
+    /// read on both sides is one file.</summary>
+    private static int Unstable(HashCache left, HashCache right, ReadDoubt? doubt)
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var cache in new[] { left, right })
+            foreach (var (path, d) in cache.Unstable)
+                if (doubt is null || d == doubt) paths.Add(path);
+        return paths.Count;
     }
 
     /// <summary>

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Walk;
 
@@ -119,7 +119,8 @@ public sealed class HashCache
     private readonly string _ccPrefix; // root's path under the CodeCompass-indexed ancestor ("" = same root)
     private readonly TrustTiming _timing;
     private readonly ConcurrentDictionary<string, LedgerEntry> _fresh = new(StringComparer.Ordinal);
-    private int _hits, _ccHits, _unstable, _pending;
+    private int _hits, _ccHits, _pending;
+    private readonly ConcurrentDictionary<string, ReadDoubt> _unstable = new(StringComparer.Ordinal);
     private long _recorded;
 
     /// <summary>Entries added to this run's ledger so far (rises as files are hashed, or carried over from CodeCompass).</summary>
@@ -127,8 +128,9 @@ public sealed class HashCache
 
     public int Hits => _hits;
     public int CodeCompassHits => _ccHits;
-    /// <summary>Files whose metadata moved while being read (live writer) — compared, but not cached.</summary>
-    public int Unstable => _unstable;
+    /// <summary>Files read this run whose hashes can't vouch for the listing's file, and why (<see cref="ReadDoubt"/>):
+    /// compared as read, but not cached. A file read twice (a rename's hash, then its pair) is one.</summary>
+    public IReadOnlyDictionary<string, ReadDoubt> Unstable => _unstable;
     /// <summary>Files hashed this run but modified too recently to trust yet (re-read and trusted on a later run).</summary>
     public int Pending => _pending;
 
@@ -202,7 +204,7 @@ public sealed class HashCache
         if (_mode == CacheMode.Off) return;
         if (!h.Stable)
         {
-            Interlocked.Increment(ref _unstable);
+            _unstable[e.RelativePath] = h.Doubt == ReadDoubt.None ? ReadDoubt.Changed : h.Doubt;
             return;
         }
         long mtime = e.LastWriteTimeUtc.Ticks;
