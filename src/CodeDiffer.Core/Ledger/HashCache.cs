@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Walk;
 

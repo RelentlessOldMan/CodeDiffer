@@ -41,8 +41,14 @@ public sealed class PatchStats
     public int TextFiles, BinaryFiles, GiantFiles, NoteFiles, CoarseFiles, OtherFiles, UnreadableFiles, CaseFiles, NameFiles;
 
     /// <summary>Written with no context lines: plain <c>git apply</c> refuses such hunks (it wants
-    /// <c>--unidiff-zero</c>).</summary>
+    /// <c>--unidiff-zero</c>, which has no context to check a hunk's place by: it can apply one at the wrong place,
+    /// unchecked).</summary>
     public bool ZeroContext;
+
+    /// <summary>What a zero-context patch needs said wherever it is written.</summary>
+    public const string ZeroContextNote = "no context lines: `git apply` needs `--unidiff-zero`, which has no context to check a hunk's " +
+                                          "place by and can apply it at the wrong place without a word; for an exact apply, use context 1 or more, " +
+                                          "or `codediffer apply`";
 
     /// <summary>Files the patch describes in '#' comments but does not carry: copy them by hand.</summary>
     public int NotCarried => BinaryFiles + GiantFiles + OtherFiles + UnreadableFiles + CaseFiles + NameFiles;
@@ -68,7 +74,7 @@ public sealed class PatchStats
                           (CaseFiles > 0 ? $" · {CaseFiles:N0} case-only path change(s)" : "") +
                           (NameFiles > 0 ? $" · {NameFiles:N0} path(s) UTF-8 can't spell" : "") : "") +
         (NoteFiles > 0 && !literal ? " · eol/encoding-only files are notes, not hunks (--literal / literal=true carries them)" : "") +
-        (ZeroContext ? " · no context lines: apply with `git apply --unidiff-zero`" : "");
+        (ZeroContext ? $" · {ZeroContextNote}" : "");
 }
 
 /// <summary>
@@ -318,7 +324,7 @@ public static class PatchWriter
     {
         if (opt.Context != 0) return;
         stats.ZeroContext = true;
-        w.Write("# written with no context lines (-U 0): apply with `git apply --unidiff-zero`\n");
+        w.Write($"# written with no context lines (-U 0): {PatchStats.ZeroContextNote}\n");
     }
 
     /// <param name="encodingNote">Both sides present: add "Encoding differs too" to the header when their encodings

@@ -1,4 +1,4 @@
-﻿using CodeDiffer.Core.Model;
+using CodeDiffer.Core.Model;
 
 namespace CodeDiffer.Core.Diff;
 

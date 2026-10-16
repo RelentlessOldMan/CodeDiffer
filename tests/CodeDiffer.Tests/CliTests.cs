@@ -796,6 +796,30 @@ public sealed class CliTests : IDisposable
     }
 
     [Fact]
+    public void Report_OfAnIncompleteCompare_Exits3_AndSaysSo()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        _t.Put("I/L/a.c", "one\n");
+        _t.Put("I/R/a.c", "two\n");
+        File.WriteAllText(@"\\?\" + _t.P("I/L/x."), "left\n"); // legal on NTFS, unopenable by plain path: unreadable
+        File.WriteAllText(@"\\?\" + _t.P("I/R/x."), "right\n");
+        try
+        {
+            var c = Cli("compare", "I/L", "I/R");
+            Assert.True(c.ExitCode == 3, c.ToString());
+            var r = Cli("report", Id(c), "--out", "rep-i");
+            Assert.True(r.ExitCode == 3, r.ToString());
+            Assert.Contains("is incomplete", r.Stderr);
+            Assert.True(File.Exists(_t.P("rep-i/index.html")));
+        }
+        finally
+        {
+            File.Delete(@"\\?\" + _t.P("I/L/x."));
+            File.Delete(@"\\?\" + _t.P("I/R/x."));
+        }
+    }
+
+    [Fact]
     public void Report_UnknownId_IsError2()
     {
         var r = Cli("report", "zzzz");

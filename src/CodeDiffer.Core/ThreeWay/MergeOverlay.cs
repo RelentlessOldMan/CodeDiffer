@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Sessions;
 

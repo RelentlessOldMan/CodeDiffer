@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Report;

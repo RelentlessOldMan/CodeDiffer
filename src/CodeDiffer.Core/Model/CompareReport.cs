@@ -1,4 +1,4 @@
-﻿using CodeDiffer.Core.Walk;
+using CodeDiffer.Core.Walk;
 
 namespace CodeDiffer.Core.Model;
 

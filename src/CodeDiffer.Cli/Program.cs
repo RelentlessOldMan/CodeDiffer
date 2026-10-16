@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Giant;
 using CodeDiffer.Core.Ledger;
@@ -306,7 +306,18 @@ static int Report(string[] args)
         return 2;
     }
     Console.WriteLine($"{(s is Compare3Session ? "compare3" : "compare")} {s.Id} · {s.Title}");
-    return WriteHtml(s, args, Console.Out) ?? 0;
+    if (WriteHtml(s, args, Console.Out) is { } code) return code;
+    // A report of an incomplete compare is as incomplete as the compare was (the page says so too): exit 3, as it did.
+    var (dropped, unreadable) = s switch
+    {
+        CompareSession { Report: { } r } => (r.LeftDroppedDirectories + r.RightDroppedDirectories, r.UnreadableFiles),
+        Compare3Session { Report: { } t } => (t.DroppedDirectories, t.UnreadableFiles),
+        _ => (0, 0),
+    };
+    if (dropped + unreadable == 0) return 0;
+    Console.Error.WriteLine($"WARNING: compare {s.Id} is incomplete — {dropped:N0} director(ies) could not be listed, {unreadable:N0} file(s) " +
+                            "could not be read; their verdicts are unknown (the report says so). Compare again once they can be read.");
+    return 3;
 }
 
 /// <summary>results: list saved compares, newest first; --prune deletes old ones (a dry run unless --yes).</summary>

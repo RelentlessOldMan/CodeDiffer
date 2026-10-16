@@ -1,4 +1,4 @@
-﻿using CodeDiffer.Core.Diff;
+using CodeDiffer.Core.Diff;
 using CodeDiffer.Core.Model;
 using Xunit;
 

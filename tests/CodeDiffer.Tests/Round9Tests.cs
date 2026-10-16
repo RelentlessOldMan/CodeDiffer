@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Diff;
 using CodeDiffer.Core.Ledger;

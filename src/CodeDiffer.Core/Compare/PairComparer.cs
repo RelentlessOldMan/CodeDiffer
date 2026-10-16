@@ -1,4 +1,4 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.IO.Hashing;
 using System.Security.Cryptography;
 using CodeDiffer.Core.Walk;

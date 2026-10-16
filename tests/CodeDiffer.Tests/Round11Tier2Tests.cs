@@ -178,6 +178,8 @@ public sealed class Round11Tier2Tests : IDisposable
         var s = Done(new SessionStore(resultsRoot: P("results")).Start(P("L"), P("R"), NoCache));
         var answer = AgentViews.Export(s, P("out/zero.patch"), context: 0);
         Assert.Contains("--unidiff-zero", answer);
+        Assert.Contains("the wrong place", answer); // --unidiff-zero applies a hunk by line number alone, unchecked
+        Assert.Contains("the wrong place", File.ReadAllText(P("out/zero.patch")).Split('\n')[0]);
         Assert.StartsWith("# written with no context lines", File.ReadAllText(P("out/zero.patch")));
         AgentViews.Export(s, P("out/three.patch"));
         Assert.DoesNotContain("unidiff-zero", File.ReadAllText(P("out/three.patch")));

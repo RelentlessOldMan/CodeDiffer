@@ -445,7 +445,8 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   reasons none. A path twice in the delta (two `modified` records, or removed and renamed from) is refused (exit 2).
 - `get_file_diff` / `export_changeset` / `-U` context past the file's length is the whole file; a negative one is
   refused (export) or none, never a corrupt hunk header. A patch written with no context (`-U 0`, `context=0`)
-  says in a `#` line at its top, and in its summary, that it needs `git apply --unidiff-zero`.
+  says in a `#` line at its top, and in its summary, that it needs `git apply --unidiff-zero` — which has no context
+  to check a hunk's place by, so it can apply one at the wrong place without a word. For an exact apply use context 1 or more, or `codediffer apply`.
 - A whole patch (`--patch`, `export_changeset`) is for `git apply`: what it can't carry — binary and large
   files, text that isn't UTF-8, unreadable files, the eol/encoding-only notes — is described in `#` lines
   outside any `diff --git` section, which git skips, so the rest still applies; the summary counts them as
