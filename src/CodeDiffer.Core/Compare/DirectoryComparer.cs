@@ -107,19 +107,17 @@ public sealed class DirectoryComparer
         int reusedFiles = 0;
         Phase("walk");
         progress?.SetPhase(ComparePhase.Pairing);
-        var leftMap = lw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
-        var rightMap = rw.Files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal);
+        // Both walks are in ordinal path order: pair them by a merge, not by maps and a sorted union of every path.
+        var leftFiles = Ordered(lw.Files);
+        var rightFiles = Ordered(rw.Files);
         var classifier = new ReasonClassifier(_options.MaxClassifyBytes);
         var leftCache = HashCache.Open(left, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing,
             sharedLeft?.StartedUtcTicks ?? 0);
         var rightCache = HashCache.Open(right, _options.Cache, _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing);
         long bytesRead = 0;
 
-        var paths = new SortedSet<string>(StringComparer.Ordinal);
-        paths.UnionWith(leftMap.Keys);
-        paths.UnionWith(rightMap.Keys);
-
-        var changes = new List<FileChange>(paths.Count);
+        int pathCount = 0;
+        var changes = new List<FileChange>(Math.Max(leftFiles.Count, rightFiles.Count));
         var removed = new List<FileEntry>();
         var added = new List<FileEntry>();
         var behindLink = new List<FileChange>();
@@ -136,10 +134,15 @@ public sealed class DirectoryComparer
             // A path behind a link the other tree has in its place (not followed) is not known to be added or removed.
             var leftLinks = lw.SkippedPaths.Where(s => s.Kind == SkipKind.Link).Select(s => s.Path).ToHashSet(StringComparer.Ordinal);
             var rightLinks = rw.SkippedPaths.Where(s => s.Kind == SkipKind.Link).Select(s => s.Path).ToHashSet(StringComparer.Ordinal);
-            foreach (var path in paths)
+            for (int li = 0, ri = 0; li < leftFiles.Count || ri < rightFiles.Count;)
             {
-                bool inLeft = leftMap.TryGetValue(path, out var le);
-                bool inRight = rightMap.TryGetValue(path, out var re);
+                int c = li == leftFiles.Count ? 1 : ri == rightFiles.Count ? -1
+                      : string.CompareOrdinal(leftFiles[li].RelativePath, rightFiles[ri].RelativePath);
+                bool inLeft = c <= 0, inRight = c >= 0;
+                var le = inLeft ? leftFiles[li++] : default;
+                var re = inRight ? rightFiles[ri++] : default;
+                var path = inLeft ? le.RelativePath : re.RelativePath;
+                pathCount++;
 
                 if (inLeft && !inRight && BehindLink(path, rightLinks) is { } rl)
                 {
@@ -164,7 +167,7 @@ public sealed class DirectoryComparer
             if (progress is not null)
             {
                 // Partial answers: adds and removes are known now (a rename may still pair some of them up).
-                progress.Paired(paths.Count, sameSize.Count, sameSize.Sum(p => p.L.Length));
+                progress.Paired(pathCount, sameSize.Count, sameSize.Sum(p => p.L.Length));
                 foreach (var e in removed) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Removed, null, e.Length, 0), _options.DetectRenames);
                 foreach (var e in added) progress.Add(new FileChange(e.RelativePath, ChangeStatus.Added, null, 0, e.Length), _options.DetectRenames);
                 foreach (var c in behindLink) progress.Add(c);
@@ -221,6 +224,7 @@ public sealed class DirectoryComparer
             {
                 bool equal;
                 long read = 0;
+                byte[]? readL = null, readR = null; // a small differing pair's bytes, just read: classified from them
                 ContentId cl = default;
                 bool shared = reused is not null && sharedLeft!.Ids.TryGetValue(le.RelativePath, out cl);
                 if (shared) Interlocked.Increment(ref reusedFiles);
@@ -234,8 +238,9 @@ public sealed class DirectoryComparer
                 }
                 else if (_options.Cache == CacheMode.Off)
                 {
-                    var r = await PairComparer.CompareAsync(le, re, hashes: false, ct, onChunk, io).ConfigureAwait(false);
+                    var r = await PairComparer.CompareAsync(le, re, hashes: false, ct, onChunk, io, keepSmall: true).ConfigureAwait(false);
                     equal = r.Equal;
+                    (readL, readR) = (r.LeftBytes, r.RightBytes);
                     read = 2 * le.Length; // upper bound (early exit on a difference)
                 }
                 else if (hasL != hasR)
@@ -251,10 +256,11 @@ public sealed class DirectoryComparer
                 else
                 {
                     // Neither usable: read both at once, compare bytes, and keep both hashes for next time.
-                    var r = await PairComparer.CompareAsync(le, re, hashes: true, ct, onChunk, io).ConfigureAwait(false);
+                    var r = await PairComparer.CompareAsync(le, re, hashes: true, ct, onChunk, io, keepSmall: true).ConfigureAwait(false);
                     leftCache.Record(le, r.Left!);
                     rightCache.Record(re, r.Right!);
                     equal = r.Equal;
+                    (readL, readR) = (r.LeftBytes, r.RightBytes);
                     if (r.Left!.Stable) provenL = new ContentId(r.Left.XxHash128, r.Left.Sha256);
                     read = 2 * le.Length;
                 }
@@ -262,7 +268,9 @@ public sealed class DirectoryComparer
                 Interlocked.Add(ref bytesRead, read);
                 var verdict = equal
                     ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
-                    : Modified(classifier, le, re, ct);
+                    : readL is not null && readR is not null
+                        ? new FileChange(le.RelativePath, ChangeStatus.Modified, classifier.Classify(le.FullPath, readL, re.FullPath, readR, ct), le.Length, re.Length)
+                        : Modified(classifier, le, re, ct);
                 return (verdict, hasL, hasR);
             }
 
@@ -315,6 +323,17 @@ public sealed class DirectoryComparer
             BytesRead = bytesRead,
             Timings = timings,
         };
+    }
+
+    /// <summary>The walk's files in strictly ascending ordinal path order (a walk already is; anything else is put
+    /// in order, and a path twice still throws as it did when they were mapped).</summary>
+    private static IReadOnlyList<FileEntry> Ordered(IReadOnlyList<FileEntry> files)
+    {
+        for (int i = 1; i < files.Count; i++)
+            if (string.CompareOrdinal(files[i - 1].RelativePath, files[i].RelativePath) >= 0)
+                return files.ToDictionary(e => e.RelativePath, StringComparer.Ordinal).Values
+                            .OrderBy(e => e.RelativePath, StringComparer.Ordinal).ToArray();
+        return files;
     }
 
     /// <summary>The link (one of <paramref name="links"/>) that <paramref name="path"/> is at or under, or null.</summary>

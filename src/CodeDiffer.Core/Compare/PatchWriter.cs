@@ -207,9 +207,8 @@ public static class PatchWriter
                 }
                 // Shown as decoded text, a rename whose only edit is its encoding (a BOM, cp1252 -> UTF-8) would be a
                 // bare header, like a pure rename: the note says what changed.
-                if (!forGit && EncodingNote(Full(leftRoot, c.RenamedFrom!), Full(rightRoot, c.RelativePath), c.RenamedFrom!, c.RelativePath) is { } renNote)
-                    header += renNote;
-                WriteFile(w, c.RenamedFrom!, c.RelativePath, Full(leftRoot, c.RenamedFrom!), Full(rightRoot, c.RelativePath), header, opt, stats, forGit);
+                WriteFile(w, c.RenamedFrom!, c.RelativePath, Full(leftRoot, c.RenamedFrom!), Full(rightRoot, c.RelativePath), header, opt, stats, forGit,
+                    encodingNote: !forGit);
                 break;
             case ChangeStatus.Modified:
                 if (!opt.Literal && c.Reason is ChangeReason.Eol or ChangeReason.Encoding)
@@ -226,10 +225,8 @@ public static class PatchWriter
                     break;
                 }
                 // A shown diff is of decoded text: an encoding change under it would be invisible.
-                string? encNote = !forGit && c.Reason is ChangeReason.Whitespace or ChangeReason.Content
-                    ? EncodingNote(Full(leftRoot, c.RelativePath), Full(rightRoot, c.RelativePath), c.RelativePath, c.RelativePath)
-                    : null;
-                WriteFile(w, c.RelativePath, c.RelativePath, Full(leftRoot, c.RelativePath), Full(rightRoot, c.RelativePath), encNote, opt, stats, forGit);
+                WriteFile(w, c.RelativePath, c.RelativePath, Full(leftRoot, c.RelativePath), Full(rightRoot, c.RelativePath), null, opt, stats, forGit,
+                    encodingNote: !forGit && c.Reason is ChangeReason.Whitespace or ChangeReason.Content);
                 break;
         }
     }
@@ -253,8 +250,10 @@ public static class PatchWriter
         w.Write("# written with no context lines (-U 0): apply with `git apply --unidiff-zero`\n");
     }
 
+    /// <param name="encodingNote">Both sides present: add "Encoding differs too" to the header when their encodings
+    /// differ (named from the bytes read here, not by reading the files again).</param>
     private static void WriteFile(TextWriter w, string oldRel, string newRel, string? oldFull, string? newFull,
-        string? extraHeader, PatchOptions opt, PatchStats stats, bool forGit)
+        string? extraHeader, PatchOptions opt, PatchStats stats, bool forGit, bool encodingNote = false)
     {
         long oldLen = oldFull is null ? 0 : new FileInfo(oldFull).Length;
         long newLen = newFull is null ? 0 : new FileInfo(newFull).Length;
@@ -264,6 +263,8 @@ public static class PatchWriter
         // One open per side: small files are read whole once (sniff + decode from the same bytes).
         var oldBytes = oldFull is null ? null : giant ? TextInspector.ReadHead(oldFull) : TextInspector.ReadAll(oldFull);
         var newBytes = newFull is null ? null : giant ? TextInspector.ReadHead(newFull) : TextInspector.ReadAll(newFull);
+        if (encodingNote && EncodingNote(oldFull!, newFull!, giant ? null : oldBytes, giant ? null : newBytes, oldRel, newRel) is { } note)
+            extraHeader += note;
         // A small file is sniffed whole (a NUL past 8 KB is binary too: a text diff must never carry raw NULs).
         bool binary = (oldBytes is not null && TextInspector.LooksBinary(oldBytes)) || (newBytes is not null && TextInspector.LooksBinary(newBytes));
         if (binary)
@@ -315,6 +316,7 @@ public static class PatchWriter
         text = null;
         if (bytes is null) return true;
         if (bytes is [0xFF, 0xFE, ..] or [0xFE, 0xFF, ..] or [0x00, 0x00, 0xFE, 0xFF, ..]) return false; // UTF-16/32 BOM
+        if (!System.Text.Unicode.Utf8.IsValid(bytes)) return false;
         try { text = StrictUtf8.GetString(bytes); return true; }
         catch (DecoderFallbackException) { return false; }
     }
@@ -345,11 +347,33 @@ public static class PatchWriter
     }
 
     /// <summary>"Encoding differs too: …" when the two files' encodings differ, else null.</summary>
-    private static string? EncodingNote(string leftFull, string rightFull, string oldRel, string newRel)
+    /// <param name="leftBytes">The whole file when already read (else null: it is read here).</param>
+    private static string? EncodingNote(string leftFull, string rightFull, byte[]? leftBytes, byte[]? rightBytes, string oldRel, string newRel)
     {
-        var (l, r) = (Describe(leftFull).Enc, Describe(rightFull).Enc);
+        var (l, r) = (EncodingOf(leftFull, leftBytes), EncodingOf(rightFull, rightBytes));
         return l == r ? null : $"Encoding differs too: a/{oldRel} ({l}) b/{newRel} ({r})\n";
     }
+
+    /// <summary><see cref="Describe"/>'s encoding name, from the whole file's bytes when they are at hand (and within
+    /// the size it reads through).</summary>
+    private static string EncodingOf(string path, byte[]? whole)
+    {
+        if (whole is null || whole.Length > TextInspector.WholeSniffBytes) return Describe(path).Enc;
+        var (name, _, skip) = Bom(whole);
+        if (skip <= 3 && !System.Text.Unicode.Utf8.IsValid(whole.AsSpan(skip)))
+            name = skip == 3 ? "UTF-8 BOM before non-UTF-8 bytes" : "a legacy code page, not UTF-8";
+        return name;
+    }
+
+    private static (string Name, Encoding Enc, int Skip) Bom(ReadOnlySpan<byte> h) => h switch
+    {
+        [0xFF, 0xFE, 0x00, 0x00, ..] => ("UTF-32 LE", new UTF32Encoding(false, false), 4),
+        [0x00, 0x00, 0xFE, 0xFF, ..] => ("UTF-32 BE", new UTF32Encoding(true, false), 4),
+        [0xFF, 0xFE, ..] => ("UTF-16 LE", new UnicodeEncoding(false, false), 2),
+        [0xFE, 0xFF, ..] => ("UTF-16 BE", new UnicodeEncoding(true, false), 2),
+        [0xEF, 0xBB, 0xBF, ..] => ("UTF-8 BOM", Encoding.Latin1, 3),
+        _ => ("UTF-8/ASCII, no BOM", Encoding.Latin1, 0),
+    };
 
     private static string Name(FileChange c) => c.RenamedFrom is { } f ? $"{f} -> {c.RelativePath}" : c.RelativePath;
 
@@ -363,16 +387,7 @@ public static class PatchWriter
     /// CR LF is four bytes, never a lone 0x0A).</summary>
     private static (string Enc, string Eol) Describe(string path)
     {
-        var h = TextInspector.ReadHead(path, 4);
-        var (name, enc, skip) = h switch
-        {
-            [0xFF, 0xFE, 0x00, 0x00, ..] => ("UTF-32 LE", (Encoding)new UTF32Encoding(false, false), 4),
-            [0x00, 0x00, 0xFE, 0xFF, ..] => ("UTF-32 BE", new UTF32Encoding(true, false), 4),
-            [0xFF, 0xFE, ..] => ("UTF-16 LE", new UnicodeEncoding(false, false), 2),
-            [0xFE, 0xFF, ..] => ("UTF-16 BE", new UnicodeEncoding(true, false), 2),
-            [0xEF, 0xBB, 0xBF, ..] => ("UTF-8 BOM", Encoding.Latin1, 3),
-            _ => ("UTF-8/ASCII, no BOM", Encoding.Latin1, 0),
-        };
+        var (name, enc, skip) = Bom(TextInspector.ReadHead(path, 4));
         using var fs = TextInspector.OpenShared(path, 1);
         bool cut = fs.Length > TextInspector.WholeSniffBytes;
         long left = Math.Min(fs.Length, TextInspector.WholeSniffBytes) - skip;

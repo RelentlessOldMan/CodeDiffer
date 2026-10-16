@@ -51,25 +51,34 @@ internal static class CanonicalDigest
     private static void WriteSection(IncrementalHash dest, List<byte[]> records)
     {
         records.Sort(CompareBytesOrdinal);
+        // Records reach the hash 64 KB at a time: a hash call per record and per separator cost more than the hashing.
+        var stage = new byte[1 << 16];
+        int used = 0;
         byte[]? prev = null;
         foreach (var rec in records)
         {
             if (prev is not null && CompareBytesOrdinal(prev, rec) == 0) continue; // dedup identical records
-            dest.AppendData(rec);
-            dest.AppendData([RS]);
+            if (used + rec.Length + 1 > stage.Length)
+            {
+                dest.AppendData(stage, 0, used);
+                used = 0;
+            }
+            if (rec.Length + 1 > stage.Length)
+            {
+                dest.AppendData(rec);
+                dest.AppendData([RS]);
+            }
+            else
+            {
+                rec.CopyTo(stage, used);
+                stage[used + rec.Length] = RS;
+                used += rec.Length + 1;
+            }
             prev = rec;
         }
+        dest.AppendData(stage, 0, used);
     }
 
     /// <summary>Byte-wise (unsigned) lexicographic order; shorter-is-less on a shared prefix.</summary>
-    internal static int CompareBytesOrdinal(byte[] a, byte[] b)
-    {
-        int n = Math.Min(a.Length, b.Length);
-        for (int i = 0; i < n; i++)
-        {
-            int d = a[i].CompareTo(b[i]);
-            if (d != 0) return d;
-        }
-        return a.Length.CompareTo(b.Length);
-    }
+    internal static int CompareBytesOrdinal(byte[] a, byte[] b) => Math.Sign(a.AsSpan().SequenceCompareTo(b));
 }

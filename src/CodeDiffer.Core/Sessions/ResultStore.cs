@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Reflection;
 using System.Text.Encodings.Web;
@@ -640,15 +641,25 @@ public static class ResultStore
         var tmp = path + ".tmp";
         Replace(tmp, path, new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16), fs =>
         {
-            var w = new Utf8JsonWriter(fs, LineOptions);
+            // Lines gather in memory and reach the file 64 KB at a time: flushing the writer into the
+            // stream after every line cost about ten times the CPU of the JSON itself.
+            var buf = new ArrayBufferWriter<byte>(1 << 17);
+            var w = new Utf8JsonWriter(buf, LineOptions);
             foreach (var item in items)
             {
                 write(w, item);
                 w.Flush();
-                fs.WriteByte((byte)'\n');
-                w.Reset(fs);
+                buf.GetSpan(1)[0] = (byte)'\n';
+                buf.Advance(1);
+                w.Reset();
+                if (buf.WrittenCount >= 1 << 16)
+                {
+                    fs.Write(buf.WrittenSpan);
+                    buf.ResetWrittenCount();
+                }
             }
             w.Dispose();
+            fs.Write(buf.WrittenSpan);
         });
     }
 
@@ -730,7 +741,14 @@ public static class ResultStore
 
     // ---- tokens / helpers ----
 
-    internal static string Token(ChangeStatus s) => s.ToString().ToLowerInvariant();
+    private static readonly string[] StatusTokens =
+        Enum.GetValues<ChangeStatus>().Select(v => v.ToString().ToLowerInvariant()).ToArray();
+
+    private static readonly Dictionary<string, ChangeStatus> StatusByToken =
+        Enum.GetValues<ChangeStatus>().ToDictionary(v => v.ToString().ToLowerInvariant(), StringComparer.OrdinalIgnoreCase);
+
+    internal static string Token(ChangeStatus s)
+        => (uint)s < (uint)StatusTokens.Length ? StatusTokens[(int)s] : s.ToString().ToLowerInvariant();
 
     internal static string Token(Merge3Outcome o) => o switch
     {
@@ -745,8 +763,7 @@ public static class ResultStore
     /// take) is a corrupt file.</summary>
     private static ChangeStatus Status(string t)
     {
-        foreach (var v in Enum.GetValues<ChangeStatus>())
-            if (string.Equals(Token(v), t, StringComparison.OrdinalIgnoreCase)) return v;
+        if (StatusByToken.TryGetValue(t, out var v)) return v;
         throw new FormatException($"unknown status '{t}'");
     }
 
@@ -833,7 +850,20 @@ public static class ResultStore
     internal static bool IsSafeRelative(string p)
         => p.Length > 0 && !Path.IsPathRooted(p) && p.IndexOf('\0') < 0
            && !(OperatingSystem.IsWindows() && (p.Contains('\\') || p.Contains(':')))
-           && p.Split('/').All(s => s is not ("" or "." or ".."));
+           && NoEmptyOrDotSegment(p);
+
+    private static bool NoEmptyOrDotSegment(string p)
+    {
+        int start = 0;
+        while (true)
+        {
+            int slash = p.IndexOf('/', start);
+            var seg = p.AsSpan(start, (slash < 0 ? p.Length : slash) - start);
+            if (seg.Length == 0 || seg is "." or "..") return false;
+            if (slash < 0) return true;
+            start = slash + 1;
+        }
+    }
 
     internal static bool HasLoneSurrogate(string s)
     {

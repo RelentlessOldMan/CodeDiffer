@@ -280,7 +280,7 @@ public sealed class RenameDetector
                 // common ≤ the smaller line count, so the counts alone can rule a pair out: no need to score it.
                 int max = Math.Max(rl.Count, al.Count);
                 if (max > 0 && Milli(Math.Min(rl.Count, al.Count), max) < threshold) continue;
-                int milli = max == 0 ? 1000 : Milli(LineCounts.Common(rl, al), max);
+                int milli = max == 0 ? 1000 : Milli(LineCounts.Common(rl, al, NeedCommon(max, threshold)), max);
                 if (milli < threshold) continue;
                 var cand = (milli, ai);
                 if (row.Count == k && Order(ri, cand, row[^1]) >= 0) { truncated = true; continue; }
@@ -350,6 +350,19 @@ public sealed class RenameDetector
     /// <summary>round(common / max * 1000) in exact integers — the same formula as <see cref="Similarity.MilliFromLines"/>.</summary>
     private static int Milli(int common, int max) => (int)(((long)common * 1000 + max / 2) / max);
 
+    /// <summary>The fewest common lines that score at least the threshold against <paramref name="max"/> lines
+    /// (<see cref="Milli"/> rises with the common count).</summary>
+    private static int NeedCommon(int max, int threshold)
+    {
+        int lo = 0, hi = max;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (Milli(mid, max) >= threshold) hi = mid; else lo = mid + 1;
+        }
+        return lo;
+    }
+
     /// <summary>Each entry's line multiset, or null where the file is empty (or only a BOM), binary, past the read cap or unreadable.
     /// Read in parallel; lines are interned so a pair's common count is a merge of two sorted id arrays.</summary>
     private LineCounts?[] ReadLines(IReadOnlyList<FileEntry> entries, LineIds intern,
@@ -401,16 +414,23 @@ public sealed class RenameDetector
             return new LineCounts { _ids = ids, _counts = ids.Select(id => counts[id]).ToArray(), Count = lines.Length };
         }
 
-        /// <summary>Σ over shared lines of min(count in a, count in b) — the contract's multiset intersection.</summary>
-        public static int Common(LineCounts a, LineCounts b)
+        /// <summary>Σ over shared lines of min(count in a, count in b) — the contract's multiset intersection. Once
+        /// even the lines not yet merged could not lift it to <paramref name="need"/>, some count below that.</summary>
+        public static int Common(LineCounts a, LineCounts b, int need = 0)
         {
-            int i = 0, j = 0, common = 0;
+            int i = 0, j = 0, common = 0, restA = a.Count, restB = b.Count;
             while (i < a._ids.Length && j < b._ids.Length)
             {
+                if (common + Math.Min(restA, restB) < need) return common;
                 int c = a._ids[i].CompareTo(b._ids[j]);
-                if (c < 0) i++;
-                else if (c > 0) j++;
-                else common += Math.Min(a._counts[i++], b._counts[j++]);
+                if (c < 0) restA -= a._counts[i++];
+                else if (c > 0) restB -= b._counts[j++];
+                else
+                {
+                    common += Math.Min(a._counts[i], b._counts[j]);
+                    restA -= a._counts[i++];
+                    restB -= b._counts[j++];
+                }
             }
             return common;
         }

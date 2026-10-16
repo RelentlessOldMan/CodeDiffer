@@ -19,7 +19,13 @@ public sealed record FileHashes(string XxHash128, string Sha256, bool Stable, lo
 /// Outcome of comparing one same-path, same-size file pair. Hashes are present only when the pair was read
 /// to the end with hashing on.
 /// </summary>
-public readonly record struct PairResult(bool Equal, FileHashes? Left, FileHashes? Right);
+public readonly record struct PairResult(bool Equal, FileHashes? Left, FileHashes? Right)
+{
+    /// <summary>With <c>keepSmall</c>: both files' whole bytes, when they differ and each fit in one chunk (so the
+    /// reason can be found without reading them again).</summary>
+    public byte[]? LeftBytes { get; init; }
+    public byte[]? RightBytes { get; init; }
+}
 
 /// <summary>
 /// Decides whether two same-size files are byte-identical by reading BOTH at once, chunk by chunk
@@ -36,7 +42,7 @@ public static class PairComparer
     public const int ChunkBytes = 1 << 20;
 
     public static async Task<PairResult> CompareAsync(FileEntry left, FileEntry right, bool hashes, CancellationToken ct = default, Action<int, int>? onChunk = null,
-        IoMeter? meter = null)
+        IoMeter? meter = null, bool keepSmall = false)
     {
         long t0 = IoMeter.Now();
         using var lh = Open(left.FullPath);
@@ -52,6 +58,7 @@ public static class PairComparer
         var hr = hashes ? new Hasher() : null;
         var bufL = ArrayPool<byte>.Shared.Rent(ChunkBytes);
         var bufR = ArrayPool<byte>.Shared.Rent(ChunkBytes);
+        byte[]? keptL = null, keptR = null;
         try
         {
             bool equal = lenL == lenR;
@@ -72,7 +79,9 @@ public static class PairComparer
                 if (equal && (nl != nr || !bufL.AsSpan(0, nl).SequenceEqual(bufR.AsSpan(0, nr))))
                 {
                     equal = false;
-                    if (!hashes) return new PairResult(false, null, null);
+                    if (keepSmall && offL == 0 && offR == 0 && nl == lenL && nr == lenR)
+                        (keptL, keptR) = (bufL.AsSpan(0, nl).ToArray(), bufR.AsSpan(0, nr).ToArray());
+                    if (!hashes) return new PairResult(false, null, null) { LeftBytes = keptL, RightBytes = keptR };
                 }
                 hl?.Append(bufL.AsSpan(0, nl));
                 hr?.Append(bufR.AsSpan(0, nr));
@@ -83,7 +92,8 @@ public static class PairComparer
             if (!hashes) return new PairResult(equal, null, null);
             return new PairResult(equal,
                 hl!.Finish(Stable(beforeL, FileStat.Of(lh, left.FullPath), left), hashedAt),
-                hr!.Finish(Stable(beforeR, FileStat.Of(rh, right.FullPath), right), hashedAt));
+                hr!.Finish(Stable(beforeR, FileStat.Of(rh, right.FullPath), right), hashedAt))
+            { LeftBytes = keptL, RightBytes = keptR };
         }
         finally
         {

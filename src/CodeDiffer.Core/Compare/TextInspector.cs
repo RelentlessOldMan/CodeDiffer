@@ -83,12 +83,13 @@ internal static class TextInspector
         return ms.Length == ms.Capacity ? ms.GetBuffer() : ms.ToArray();
     }
 
-    /// <summary>Whether two files hold the same bytes, streamed (any size, a buffer's worth of memory).</summary>
-    public static bool SameBytes(string a, string b)
+    /// <summary>Whether two files hold the same bytes, streamed (any size, a buffer's worth of memory); stops at
+    /// the first difference, and a cancel is seen between chunks.</summary>
+    public static bool SameBytes(string a, string b, CancellationToken ct = default)
     {
         using var fa = OpenShared(a, 1);
         using var fb = OpenShared(b, 1);
-        return fa.Length == fb.Length && SameStream(fa, fb, fa.Length);
+        return fa.Length == fb.Length && SameStream(fa, fb, fa.Length, ct);
     }
 
     /// <summary>Whether a file holds exactly these bytes, streamed.</summary>
@@ -98,7 +99,7 @@ internal static class TextInspector
         return fs.Length == bytes.Length && SameStream(fs, new MemoryStream(bytes, writable: false), bytes.Length);
     }
 
-    private static bool SameStream(Stream a, Stream b, long length)
+    private static bool SameStream(Stream a, Stream b, long length, CancellationToken ct = default)
     {
         int size = (int)Math.Clamp(length, 1, 1 << 20);
         var pool = System.Buffers.ArrayPool<byte>.Shared; // up to 2 × 1 MB a file: pooled, not LOH garbage per call
@@ -108,6 +109,7 @@ internal static class TextInspector
         {
             while (true)
             {
+                ct.ThrowIfCancellationRequested();
                 int na = a.ReadAtLeast(ba.AsSpan(0, size), size, throwOnEndOfStream: false);
                 int nb = b.ReadAtLeast(bb.AsSpan(0, size), size, throwOnEndOfStream: false);
                 if (na != nb || !ba.AsSpan(0, na).SequenceEqual(bb.AsSpan(0, nb))) return false;
@@ -138,6 +140,8 @@ internal static class TextInspector
             [0xFE, 0xFF, ..] => (new UnicodeEncoding(true, false, true), 2),
             _ => (new UTF8Encoding(false, true), 0),
         };
+        // Not UTF-8 (a legacy code page): said without throwing first, which cost more than the decode.
+        if (skip is 0 or 3 && !System.Text.Unicode.Utf8.IsValid(bytes.AsSpan(skip))) return Encoding.Latin1.GetString(bytes, skip, bytes.Length - skip);
         try { return enc.GetString(bytes, skip, bytes.Length - skip); }
         // A UTF-8 BOM before legacy bytes is still a BOM (the streamed check skips it too): only the rest is Latin-1.
         catch (DecoderFallbackException) { int k = skip == 3 ? 3 : 0; return Encoding.Latin1.GetString(bytes, k, bytes.Length - k); }

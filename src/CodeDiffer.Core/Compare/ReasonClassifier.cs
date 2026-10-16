@@ -34,20 +34,42 @@ public sealed class ReasonClassifier
         bool large = leftLength > _maxClassifyBytes || rightLength > _maxClassifyBytes;
         var leftBytes = large ? TextInspector.ReadHead(leftPath) : TextInspector.ReadAll(leftPath);
         var rightBytes = large ? TextInspector.ReadHead(rightPath) : TextInspector.ReadAll(rightPath);
+        return large ? Large(leftPath, leftLength, leftBytes, rightPath, rightLength, rightBytes, ct) : Whole(leftPath, leftBytes, rightPath, rightBytes);
+    }
 
-        // Read whole, the whole file is sniffed: text that turns binary past 8 KB is binary, never a text diff with NULs.
+    /// <summary>The reason, from both files' whole bytes as just read (one open fewer per side); bytes past the
+    /// whole-read size are read again by path.</summary>
+    public ChangeReason Classify(string leftPath, byte[] leftBytes, string rightPath, byte[] rightBytes, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return leftBytes.Length > _maxClassifyBytes || rightBytes.Length > _maxClassifyBytes
+            ? Classify(leftPath, leftBytes.Length, rightPath, rightBytes.Length, ct)
+            : Whole(leftPath, leftBytes, rightPath, rightBytes);
+    }
+
+    /// <summary>A side past the whole-read size: only the heads are at hand.</summary>
+    private ChangeReason Large(string leftPath, long leftLength, byte[] leftBytes, string rightPath, long rightLength, byte[] rightBytes, CancellationToken ct)
+    {
         if (TextInspector.LooksBinary(leftBytes) || TextInspector.LooksBinary(rightBytes))
             return ChangeReason.Binary;
         // Read by its head but small enough for a patch to line-diff it whole: a NUL further in is binary there, so here.
-        if (large && Math.Max(leftLength, rightLength) <= TextInspector.WholeSniffBytes
+        if (Math.Max(leftLength, rightLength) <= TextInspector.WholeSniffBytes
                   && (TextInspector.NulPast(leftPath, leftBytes, ct) || TextInspector.NulPast(rightPath, rightBytes, ct)))
             return ChangeReason.Binary;
 
         // Strings are read as the files' language reads them: a backslash an escape or text (both ways if the two differ).
         var rules = TextInspector.RulesFor(leftPath, rightPath);
-        if (large)
-            return Math.Max(leftLength, rightLength) <= _maxStreamBytes ? Streamed(leftPath, leftBytes, rightPath, rightBytes, rules, ct) : ChangeReason.Content;
+        return Math.Max(leftLength, rightLength) <= _maxStreamBytes ? Streamed(leftPath, leftBytes, rightPath, rightBytes, rules, ct) : ChangeReason.Content;
+    }
 
+    /// <summary>Both files read whole.</summary>
+    private static ChangeReason Whole(string leftPath, byte[] leftBytes, string rightPath, byte[] rightBytes)
+    {
+        // Read whole, the whole file is sniffed: text that turns binary past 8 KB is binary, never a text diff with NULs.
+        if (TextInspector.LooksBinary(leftBytes) || TextInspector.LooksBinary(rightBytes))
+            return ChangeReason.Binary;
+        // Strings are read as the files' language reads them: a backslash an escape or text (both ways if the two differ).
+        var rules = TextInspector.RulesFor(leftPath, rightPath);
         var leftText = TextInspector.Decode(leftBytes);
         var rightText = TextInspector.Decode(rightBytes);
 

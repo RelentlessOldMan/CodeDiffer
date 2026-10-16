@@ -114,6 +114,7 @@ public static class HtmlReport
         for (int i = 0; i < items.Count; i++)
             if (items[i].Wants && budget > 0) { renderable[i] = true; budget--; }
 
+        var notIncluded = $"diff not included (report limit {opt.MaxDiffs:N0} files) — use get_file_diff or `codediffer report --max-diffs`";
         Parallel.For(0, items.Count, new ParallelOptions { MaxDegreeOfParallelism = s.Options.Parallelism }, i =>
         {
             var item = items[i];
@@ -130,7 +131,7 @@ public static class HtmlReport
                 }
                 if (!renderable[i])
                 {
-                    row["n"] = Join(row, $"diff not included (report limit {opt.MaxDiffs:N0} files) — use get_file_diff or `codediffer report --max-diffs`");
+                    row["n"] = Join(row, notIncluded);
                     Interlocked.Increment(ref skipped);
                     return;
                 }

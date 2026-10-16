@@ -107,6 +107,9 @@ public sealed class HashCache
     private readonly bool _strict;
     private readonly string _ownDir;
     private readonly LedgerSnapshot? _own;
+    // The own ledger on disk is exactly _own: a v2 base, already marked, no journal. A save that would keep every
+    // entry of it and add none can then leave it alone.
+    private bool _ownOnDiskAsLoaded;
     // Rehash: the old ledger, never trusted for a lookup. A cancelled rehash keeps it for the files it didn't get to;
     // a finished one keeps only entries hashed since the run began (compare3's base->v1 pass, which base->v2 reuses
     // without re-reading), never one from before it, whether or not this run read that file.
@@ -154,12 +157,14 @@ public sealed class HashCache
             return new HashCache(mode, strict, ownDir, null, null, "", t);
 
         var own = LedgerFormat.TryRead(ownDir);
-        if (own is not null && !File.Exists(Path.Combine(ownDir, RuleMarkerName)))
+        bool marked = own is not null && File.Exists(Path.Combine(ownDir, RuleMarkerName));
+        bool asLoaded = marked && own!.Version == LedgerFormat.WriteVersion && !File.Exists(Path.Combine(ownDir, LedgerFormat.JournalName));
+        if (own is not null && !marked)
             own = Rejudge(own, t);
         if (mode == CacheMode.Rehash)
             return new HashCache(mode, strict, ownDir, null, null, "", t) { _prior = own, _rehashSince = rehashSince > 0 ? rehashSince : DateTime.UtcNow.Ticks };
         var (cc, prefix) = FindCodeCompassLedger(rootFull, codeCompassBaseDir ?? DefaultBaseDir("CODECOMPASS_CACHE_DIR", "CodeCompass"));
-        return new HashCache(mode, strict, ownDir, own, cc, prefix, t);
+        return new HashCache(mode, strict, ownDir, own, cc, prefix, t) { _ownOnDiskAsLoaded = asLoaded };
     }
 
     /// <summary>The trusted cached content id for this walked file, or false (⇒ read it).</summary>
@@ -243,6 +248,9 @@ public sealed class HashCache
                          (_mode != CacheMode.Rehash || !finished || (o.HashedAtTicks >= _rehashSince && o.HashedAtTicks <= now)))
                     keep.Add(new(e.RelativePath, o));
             }
+            // Nothing hashed or carried in, nothing dropped: the rewrite would hold the very entries on disk. A warm
+            // compare of a big tree otherwise rewrites (and fsyncs) its whole ledger on every run.
+            if (_mode == CacheMode.On && _ownOnDiskAsLoaded && _fresh.IsEmpty && keep.Count == _own!.Entries.Count) return;
             LedgerFormat.Write(_ownDir, keep);
             File.WriteAllText(Path.Combine(_ownDir, RuleMarkerName), "record-time trust (first look + pending settle)\n");
         }

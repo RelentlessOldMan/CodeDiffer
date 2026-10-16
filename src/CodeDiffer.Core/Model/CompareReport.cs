@@ -86,10 +86,28 @@ public sealed class CompareReport
 
     public int Total => Changes.Count;
 
-    public int Count(ChangeStatus status) => Changes.Count(c => c.Status == status);
+    public int Count(ChangeStatus status) => (uint)status < Statuses ? Tally()[(int)status] : 0;
 
-    public int ReasonCount(ChangeReason reason) => Changes.Count(c => c.Reason == reason);
+    public int ReasonCount(ChangeReason reason) => (uint)reason < Reasons ? Tally()[Statuses + (int)reason] : 0;
 
     /// <summary>Paths a side of which could not be read: their verdict is unknown (see <see cref="FileChange.Unreadable"/>).</summary>
-    public int UnreadableFiles => Changes.Count(c => c.Unreadable is not null);
+    public int UnreadableFiles => Tally()[Statuses + Reasons];
+
+    private static readonly int Statuses = Enum.GetValues<ChangeStatus>().Length, Reasons = Enum.GetValues<ChangeReason>().Length;
+    private int[]? _tally;
+
+    /// <summary>The counts by status, by reason, and of unreadable paths, in one pass the first time one is asked
+    /// for (the changes never change): a summary asked for again and again counted a million rows a dozen times each.</summary>
+    private int[] Tally()
+    {
+        if (_tally is { } done) return done;
+        var t = new int[Statuses + Reasons + 1];
+        foreach (var c in Changes)
+        {
+            if ((uint)c.Status < Statuses) t[(int)c.Status]++;
+            if (c.Reason is { } why && (uint)why < Reasons) t[Statuses + (int)why]++;
+            if (c.Unreadable is not null) t[Statuses + Reasons]++;
+        }
+        return _tally = t;
+    }
 }

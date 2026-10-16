@@ -213,8 +213,9 @@ public static class TreeMerger
         };
         if (Math.Max(c1.RightSize, c2.RightSize) > maxText)
         {
-            // Never loaded whole: a same-size pair is hashed in chunks (a cancel is seen between them).
-            bool same = c1.RightSize == c2.RightSize && ContentHasher.HashFile(f1, ct) == ContentHasher.HashFile(f2, ct);
+            // Never loaded whole: a same-size pair is compared in chunks, up to its first difference (a cancel is seen
+            // between them). Two SHA-256 passes cost about 20 times the CPU and always read both to the end.
+            bool same = c1.RightSize == c2.RightSize && TextInspector.SameBytes(f1, f2, ct);
             return same ? new(path, c1, c2, Merge3Outcome.Agreed, null, 0, 0, dest, null)
                 : Whole() ?? Conflict("large", "both changed a large file differently — not merged line by line");
         }

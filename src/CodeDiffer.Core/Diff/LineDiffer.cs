@@ -88,6 +88,15 @@ public static class LineDiffer
     public static List<Hunk> Diff(IReadOnlyList<string> a, IReadOnlyList<string> b, int maxEditDistance, out bool coarse,
         long? maxWork = null, CancellationToken ct = default)
     {
+        // One side is the other's prefix (an added or removed file, an append): every exact pass ends in the same
+        // single hunk after the common lines, so skip them. Classic Myers was quadratic here.
+        int pre = 0;
+        while (pre < a.Count && pre < b.Count && a[pre] == b[pre]) pre++;
+        if (pre == a.Count || pre == b.Count)
+        {
+            coarse = false;
+            return CoarseHunks(a, b);
+        }
         // The edit distance is at least the difference in length: past the budget, the exact pass would fill its
         // trace (up to ~36 MB) only to give up.
         var moves = (Math.Abs(a.Count - b.Count) > maxEditDistance ? null : ShortestEdit(a, b, maxEditDistance, ct))
@@ -236,6 +245,17 @@ public static class LineDiffer
         return hunks;
     }
 
+    /// <summary>A lower bound on the edit distance: the sum over distinct lines of the difference in their counts.</summary>
+    private static long CountBound(IReadOnlyList<string> a, IReadOnlyList<string> b)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var l in a) counts[l] = counts.GetValueOrDefault(l) + 1;
+        foreach (var l in b) counts[l] = counts.GetValueOrDefault(l) - 1;
+        long bound = 0;
+        foreach (var c in counts.Values) bound += Math.Abs(c);
+        return bound;
+    }
+
     /// <summary>
     /// Myers O(ND) shortest edit script as a forward list of Equal/Delete/Insert moves, or null if the edit
     /// distance exceeds <paramref name="maxD"/>. The trace keeps only each step's live diagonals (k ∈ [-d, d],
@@ -255,6 +275,9 @@ public static class LineDiffer
         for (int d = 0; d <= max && !done; d++)
         {
             if (d > maxD) return null;
+            // Halfway through the budget, check the bound the line counts give: every line one side has more
+            // copies of than the other is a delete or an insert. Past the budget, the rest of the trace is waste.
+            if (d == maxD / 2 && maxD >= 64 && CountBound(a, b) > maxD) return null;
             ct.ThrowIfCancellationRequested();
             trace.Add(v.AsSpan(off - d - 1, 2 * d + 3).ToArray()); // diagonals -d-1..d+1 (state after step d-1)
             for (int k = -d; k <= d; k += 2)

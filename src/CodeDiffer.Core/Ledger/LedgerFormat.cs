@@ -120,7 +120,8 @@ public static class LedgerFormat
     public static void Write(string dir, IEnumerable<KeyValuePair<string, LedgerEntry>> entries)
     {
         Directory.CreateDirectory(dir);
-        var sorted = entries.OrderBy(e => e.Key, StringComparer.Ordinal).ToList();
+        var sorted = entries.ToList();
+        if (!SortedOrdinal(sorted)) sorted = sorted.OrderBy(e => e.Key, StringComparer.Ordinal).ToList(); // walked lists already are
         int next = NextBaseNumber(dir);
         var baseName = $"snapshot-{next:D8}.base";
         WriteBase(Path.Combine(dir, baseName), sorted);
@@ -134,6 +135,13 @@ public static class LedgerFormat
         foreach (var old in Directory.EnumerateFiles(dir, "snapshot-*.base"))
             if (!string.Equals(Path.GetFileName(old), baseName, StringComparison.OrdinalIgnoreCase))
                 TryDelete(old);
+    }
+
+    private static bool SortedOrdinal(List<KeyValuePair<string, LedgerEntry>> list)
+    {
+        for (int i = 1; i < list.Count; i++)
+            if (string.CompareOrdinal(list[i - 1].Key, list[i].Key) > 0) return false;
+        return true;
     }
 
     private static void WriteBase(string path, List<KeyValuePair<string, LedgerEntry>> sorted)
@@ -210,15 +218,19 @@ public static class LedgerFormat
             long o0 = I64(s, off[0] + (long)i * 8), o1 = I64(s, off[0] + (long)(i + 1) * 8);
             if (o0 < 0 || o1 < o0 || o1 > blobEnd - blobOff) return (null, 0); // never blobOff + o1: it can overflow
             var p = Encoding.UTF8.GetString(s.Slice((int)(blobOff + o0), (int)(o1 - o0)));
-            var xx = HashOrAbsent(Convert.ToHexString(s.Slice((int)(off[4] + (long)i * XxBytes), XxBytes)));
+            var xx = HexOrAbsent(s.Slice((int)(off[4] + (long)i * XxBytes), XxBytes));
             map[p] = version == 1
                 ? new LedgerEntry(I64(s, off[2] + (long)i * 8), I64(s, off[3] + (long)i * 8), xx)
                 : new LedgerEntry(I64(s, off[2] + (long)i * 8), I64(s, off[3] + (long)i * 8), xx,
                     I64(s, off[5] + (long)i * 8), I64(s, off[6] + (long)i * 8), I64(s, off[7] + (long)i * 8),
-                    HashOrAbsent(Convert.ToHexString(s.Slice((int)(off[8] + (long)i * ShaBytes), ShaBytes))));
+                    HexOrAbsent(s.Slice((int)(off[8] + (long)i * ShaBytes), ShaBytes)));
         }
         return (map, version);
     }
+
+    /// <summary><see cref="HashOrAbsent"/> of the bytes' hex, without making the hex of an absent one.</summary>
+    private static string HexOrAbsent(ReadOnlySpan<byte> b)
+        => b.IndexOfAnyExcept((byte)0) < 0 || b.IndexOfAnyExcept((byte)0xFF) < 0 ? "" : Convert.ToHexString(b);
 
     private static long I64(ReadOnlySpan<byte> s, long at) => BinaryPrimitives.ReadInt64LittleEndian(s[(int)at..]);
 

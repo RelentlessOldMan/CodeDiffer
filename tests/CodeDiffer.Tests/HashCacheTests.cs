@@ -78,6 +78,40 @@ public class HashCacheTests : IDisposable
     }
 
     [Fact]
+    public void LedgerFormat_Write_SameBytes_FromSortedOrShuffledInput()
+    {
+        var entries = Enumerable.Range(0, 200).Select(i => new KeyValuePair<string, LedgerEntry>(
+            $"d{i % 7}/f{i}.txt", new(i, 1000 + i, i % 5 == 0 ? "" : $"{i:X32}", 2000 + i, i, 3000 + i, i % 3 == 0 ? "" : $"{i:X64}"))).ToList();
+        var shuffled = entries.OrderBy(e => (e.Value.Size * 7919) % 211).ToList();
+        LedgerFormat.Write(Path.Combine(_dir, "sorted"), entries.OrderBy(e => e.Key, StringComparer.Ordinal));
+        LedgerFormat.Write(Path.Combine(_dir, "shuffled"), shuffled);
+        Assert.Equal(File.ReadAllBytes(Directory.GetFiles(Path.Combine(_dir, "sorted"), "*.base").Single()),
+                     File.ReadAllBytes(Directory.GetFiles(Path.Combine(_dir, "shuffled"), "*.base").Single()));
+    }
+
+    [Fact]
+    public void AWarmCompare_LeavesAnUnchangedLedgerAlone_AndARemovedFileStillPrunesIt()
+    {
+        MakeTrees();
+        Run(); // cold: hashes recorded
+        var ledgerDir = Path.Combine(CacheBase, LedgerFormat.RootKey(Path.Combine(_dir, "L")));
+        string BaseName() => File.ReadAllLines(Path.Combine(ledgerDir, "snapshot.manifest"))[0];
+        var first = BaseName();
+        var stamp = File.GetLastWriteTimeUtc(Path.Combine(ledgerDir, first));
+
+        var warm = Run();
+        Assert.Equal(20, warm.CacheHits);
+        Assert.Equal(first, BaseName()); // nothing new, nothing gone: not rewritten
+        Assert.Equal(stamp, File.GetLastWriteTimeUtc(Path.Combine(ledgerDir, first)));
+
+        File.Delete(Path.Combine(_dir, "L", "f5.txt"));
+        Run();
+        Assert.NotEqual(first, BaseName());
+        Assert.False(OwnLedger("L").Entries.ContainsKey("f5.txt"));
+        Assert.Equal(9, OwnLedger("L").Entries.Count);
+    }
+
+    [Fact]
     public void LedgerFormat_ReadsV1_AndTreatsZeroAndFFHashesAsAbsent()
     {
         var dir = Path.Combine(_dir, "v1");
