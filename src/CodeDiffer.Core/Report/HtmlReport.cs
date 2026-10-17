@@ -296,6 +296,7 @@ public static class HtmlReport
             };
             row["ft"] = FileTypes.Token(c.Type);
             if (c.ReasonLabel is { } rr) row["r"] = rr;
+            if (NoiseTokens.List(c.Noise) is { } nz) row["nz"] = nz;
             if (c.Unreadable is { } why) row["n"] = $"could not be read during the compare: {why}";
             if (c.RenamedFrom is { } f) row["f"] = Shown(f);
             if (c.SimilarityMilli is { } sim) row["sim"] = sim;

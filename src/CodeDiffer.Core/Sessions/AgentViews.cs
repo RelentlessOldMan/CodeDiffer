@@ -83,6 +83,9 @@ public static class AgentViews
         o.Append(ReopenedNote(s));
         o.Append($"  identical {r.Count(ChangeStatus.Identical),8:N0}    (hidden by default)\n");
         o.Append($"  modified  {r.Count(ChangeStatus.Modified),8:N0}    {Reasons(r)}\n");
+        if (r.ReasonCount(ChangeReason.Content) > 0)
+            o.Append($"  noise     {r.Changes.Count(c => c.Noise != ChangeNoise.None),8:N0}    {NoiseFilter.Line(r.Changes)}   " +
+                     "(content changes that are only that; list_files hide_noise=all leaves them out, and whitespace/eol/encoding)\n");
         o.Append($"  added     {r.Count(ChangeStatus.Added),8:N0}\n");
         o.Append($"  removed   {r.Count(ChangeStatus.Removed),8:N0}\n");
         int renamed = r.Count(ChangeStatus.Renamed);
@@ -183,8 +186,9 @@ public static class AgentViews
     /// <param name="status">"changed" (default: everything but identical), "all", or a comma list of
     /// added, removed, modified, renamed, identical.</param>
     /// <param name="type">A comma list of file types (<see cref="FileTypes"/>): code, build, docs, binary.</param>
+    /// <param name="hideNoise">The noise to leave out (<see cref="NoiseFilter.TryParse"/>): "all", or a comma list.</param>
     public static string ListFiles(CompareSession s, string? status = null, string? pathGlob = null, string? reason = null,
-        int page = 1, int pageSize = DefaultPageSize, bool lines = false, string? type = null)
+        int page = 1, int pageSize = DefaultPageSize, bool lines = false, string? type = null, string? hideNoise = null)
     {
         var o = new StringBuilder();
         // While running: the differences found so far, in the order found (so earlier pages don't shift).
@@ -203,10 +207,12 @@ public static class AgentViews
         if (!string.IsNullOrWhiteSpace(pathGlob) && !TryPathFilter(pathGlob, out glob, out err)) return $"error: {err}\n";
         HashSet<FileType>? types = null;
         if (!TryTypes(type, out types, out err)) return $"error: {err}\n";
+        if (!NoiseFilter.TryParse(hideNoise, out var noise, out err)) return $"error: {err}\n";
 
         var match = changes.Where(c => statuses.Contains(c.Status)
             && (unreadableOnly ? c.ReasonLabel == "unreadable" : reasonFilter is null || c.Reason == reasonFilter)
             && (types is null || types.Contains(c.Type))
+            && (noise is null || !noise.Hides(c))
             && (glob is null || glob(c.RelativePath, c.RenamedFrom))).ToList();
 
         pageSize = Math.Clamp(pageSize, 1, MaxPageSize);
@@ -226,7 +232,7 @@ public static class AgentViews
         foreach (var c in slice)
         {
             o.Append($"{Tag(c)} {Name(c)}");
-            if (c.ReasonLabel is { } rr) o.Append($"  [{rr}]");
+            if (c.ReasonLabel is { } rr) o.Append(c.NoiseLabel is { } nl ? $"  [{rr}, noise: {nl}]" : $"  [{rr}]");
             o.Append(c.Status switch
             {
                 ChangeStatus.Added => $"  {Bytes(c.RightSize)}",

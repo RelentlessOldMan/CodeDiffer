@@ -803,6 +803,8 @@ static void PrintSummary(TextWriter o, string left, string right, CompareReport 
         $"binary {r.ReasonCount(ChangeReason.Binary)}" +
         (r.ReasonCount(ChangeReason.Metadata) > 0 ? $" · metadata {r.ReasonCount(ChangeReason.Metadata)}" : "") +
         (r.UnreadableModified > 0 ? $" · unreadable {r.UnreadableModified}" : ""));
+    if (r.ReasonCount(ChangeReason.Content) > 0)
+        o.WriteLine($"  noise      {r.Changes.Count(c => c.Noise != ChangeNoise.None)}   {NoiseFilter.Line(r.Changes)}   (content changes that are only that)");
     if (r.Changes.Any(c => c.Status != ChangeStatus.Identical))
         o.WriteLine($"  by type    {AgentViews.TypeLine(r.Changes.Where(c => c.Status != ChangeStatus.Identical).Select(c => c.Type))}");
 }
@@ -821,7 +823,7 @@ static void PrintChanges(CompareReport r)
             ChangeStatus.Renamed => "R",
             _ => "?",
         };
-        var reason = c.ReasonLabel is { } rr ? $" [{rr}]" : "";
+        var reason = c.ReasonLabel is { } rr ? c.NoiseLabel is { } nl ? $" [{rr}, noise: {nl}]" : $" [{rr}]" : "";
         var from = c.RenamedFrom is { } f ? $"{f} -> " : "";
         // A rename says whether its bytes moved unchanged: "100% similar" alone (a file reordered) read as pure.
         var how = c.Status != ChangeStatus.Renamed ? ""

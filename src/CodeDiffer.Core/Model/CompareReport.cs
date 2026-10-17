@@ -16,6 +16,8 @@ namespace CodeDiffer.Core.Model;
 /// A name Windows can't open by path (a file, or a directory as one row) is such a row too, in a side or both.
 /// <see cref="RenameHeld"/>: a rename listed (the contract's metric) but too weak or too ambiguous to act on — shared
 /// boilerplate, a trivial file, a tie — and why. compare3 and apply take it as the remove and the add it may be.
+/// <see cref="Noise"/>: what a <c>content</c> change is only, when it is noise (stamps, numbers, comments): a filter,
+/// not a verdict, and not in the digest.
 /// </summary>
 public sealed record FileChange(
     string RelativePath,
@@ -28,10 +30,14 @@ public sealed record FileChange(
     string? Unreadable = null,
     bool EditedRename = false,
     bool BehindLink = false,
-    string? RenameHeld = null)
+    string? RenameHeld = null,
+    ChangeNoise Noise = ChangeNoise.None)
 {
     /// <summary>The reason token to show: the reason, "unreadable", or null.</summary>
     public string? ReasonLabel => Reason is { } r ? CanonicalTokens.Token(r) : Unreadable is not null ? "unreadable" : null;
+
+    /// <summary>The noise a content change is only ("stamps", "stamps+comments"), or null.</summary>
+    public string? NoiseLabel => NoiseTokens.List(Noise)?.Replace(',', '+');
 
     /// <summary>What kind of file it is (its path's; binary when its bytes were found so): a filter, not a verdict.</summary>
     public FileType Type => FileTypes.Of(RelativePath, Reason == ChangeReason.Binary);

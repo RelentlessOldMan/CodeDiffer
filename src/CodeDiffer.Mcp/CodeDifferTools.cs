@@ -94,6 +94,9 @@ public static class CodeDifferTools
         [Description("Paths to list: a glob over relative paths (src/**/*.c; one without '/' matches file names anywhere: *.h), or " +
                      "several split by ';' (*.c;*.cpp), '!' before one to leave it out (*.c;!test/**), /regex/ for a regex.")] string? path_glob = null,
         [Description("File types to list, a comma list: code, build (projects, makefiles, config), docs (other text), binary.")] string? type = null,
+        [Description("2-way only: noise to leave out: all, or a comma list of stamps (version-control $Id$/$Date$ keywords), numbers " +
+                     "(numbers, dates, IDs in a non-code file), comments, whitespace, eol, encoding. A file goes only when all its noise is " +
+                     "left out. type=code with hide_noise=all lists the real code changes.")] string? hide_noise = null,
         [Description("2-way only: files with this reason (modified, or renamed and edited): content, eol, whitespace, encoding, " +
                      "binary, metadata; or unreadable: the files of any status that couldn't be read.")] string? reason = null,
         [Description("1-based page number.")] int page = 1,
@@ -101,12 +104,12 @@ public static class CodeDifferTools
         [Description("2-way only: also count hunks and +/- lines for this page (reads those files).")] bool lines = false)
     {
         if (Find(compare_id, out var s) is { } err) return err;
-        if (s is Compare3Session && (reason is not null || lines))
-            return $"error: {(reason is not null ? "reason" : "lines")} is 2-way only; a 3-way listing has outcomes (status=conflict, merged, ...)\n";
+        if (s is Compare3Session && (reason is not null || lines || hide_noise is not null))
+            return $"error: {(reason is not null ? "reason" : lines ? "lines" : "hide_noise")} is 2-way only; a 3-way listing has outcomes (status=conflict, merged, ...)\n";
         return Safe(() => s switch
         {
             Compare3Session t => ThreeWayViews.ListFiles(t, status, path_glob, page, page_size, type),
-            CompareSession c => AgentViews.ListFiles(c, status, path_glob, reason, page, page_size, lines, type),
+            CompareSession c => AgentViews.ListFiles(c, status, path_glob, reason, page, page_size, lines, type, hide_noise),
             _ => "error: unknown compare kind",
         });
     }

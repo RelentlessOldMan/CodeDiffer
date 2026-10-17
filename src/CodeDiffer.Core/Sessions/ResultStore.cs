@@ -779,6 +779,7 @@ public static class ResultStore
         if (c.EditedRename) w.WriteBoolean("edited", true);
         if (c.BehindLink) w.WriteBoolean("behindLink", true);
         if (c.RenameHeld is { } h) w.WriteString("held", h);
+        if (NoiseTokens.List(c.Noise) is { } n) w.WriteString("noise", n);
         w.WriteEndObject();
     }
 
@@ -801,7 +802,8 @@ public static class ResultStore
         e.TryGetProperty("unreadable", out var u) ? u.GetString() : null,
         e.TryGetProperty("edited", out var ed) && ed.GetBoolean(),
         e.TryGetProperty("behindLink", out var bl) && bl.GetBoolean(),
-        e.TryGetProperty("held", out var h) ? h.GetString() : null); // absent (saved before 1.0.87): followed, as then
+        e.TryGetProperty("held", out var h) ? h.GetString() : null, // absent (saved before 1.0.87): followed, as then
+        NoiseTokens.ParseList(e.TryGetProperty("noise", out var n) ? n.GetString() : null)); // absent before 1.0.94: none found
 
     private static void WriteEntry(Utf8JsonWriter w, Merge3Entry e)
     {

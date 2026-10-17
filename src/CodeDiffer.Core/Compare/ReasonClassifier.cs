@@ -28,13 +28,19 @@ public sealed class ReasonClassifier
 
     /// <param name="ct">Checked per 64 KB read when streamed (up to three passes over 64 MB), and before reading.</param>
     public ChangeReason Classify(string leftPath, long leftLength, string rightPath, long rightLength, CancellationToken ct = default)
+        => Classify(leftPath, leftLength, rightPath, rightLength, out _, ct);
+
+    /// <param name="noise">What a <c>content</c> change is only, when it is noise (<see cref="NoiseFinder"/>): found for
+    /// a pair read whole, else none.</param>
+    public ChangeReason Classify(string leftPath, long leftLength, string rightPath, long rightLength, out ChangeNoise noise, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        noise = ChangeNoise.None;
         // One open per side: a small file is read whole (its head is a prefix of it); a large one only its head.
         bool large = leftLength > _maxClassifyBytes || rightLength > _maxClassifyBytes;
         var leftBytes = large ? TextInspector.ReadHead(leftPath) : TextInspector.ReadAll(leftPath);
         var rightBytes = large ? TextInspector.ReadHead(rightPath) : TextInspector.ReadAll(rightPath);
-        return large ? Large(leftPath, leftLength, leftBytes, rightPath, rightLength, rightBytes, ct) : Whole(leftPath, leftBytes, rightPath, rightBytes);
+        return large ? Large(leftPath, leftLength, leftBytes, rightPath, rightLength, rightBytes, ct) : Whole(leftPath, leftBytes, rightPath, rightBytes, out noise);
     }
 
     /// <summary>
@@ -44,14 +50,19 @@ public sealed class ReasonClassifier
     /// only when those agree. <paramref name="sameLength"/>: their length, when null.
     /// </summary>
     public ChangeReason? ClassifyResized(string leftPath, long leftLength, string rightPath, long rightLength, out long sameLength, CancellationToken ct = default)
+        => ClassifyResized(leftPath, leftLength, rightPath, rightLength, out sameLength, out _, ct);
+
+    public ChangeReason? ClassifyResized(string leftPath, long leftLength, string rightPath, long rightLength, out long sameLength, out ChangeNoise noise,
+        CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        noise = ChangeNoise.None;
         if (leftLength > _maxClassifyBytes || rightLength > _maxClassifyBytes)
-            return SameBytes(leftPath, rightPath, out sameLength, ct) ? null : Classify(leftPath, leftLength, rightPath, rightLength, ct);
+            return SameBytes(leftPath, rightPath, out sameLength, ct) ? null : Classify(leftPath, leftLength, rightPath, rightLength, out noise, ct);
         var leftBytes = TextInspector.ReadAll(leftPath);
         var rightBytes = TextInspector.ReadAll(rightPath);
         sameLength = leftBytes.Length;
-        return leftBytes.AsSpan().SequenceEqual(rightBytes) ? null : Classify(leftPath, leftBytes, rightPath, rightBytes, ct);
+        return leftBytes.AsSpan().SequenceEqual(rightBytes) ? null : Classify(leftPath, leftBytes, rightPath, rightBytes, out noise, ct);
     }
 
     /// <summary>Whether two files hold the same bytes, by their handles' lengths and then their bytes.</summary>
@@ -74,11 +85,15 @@ public sealed class ReasonClassifier
     /// <summary>The reason, from both files' whole bytes as just read (one open fewer per side); bytes past the
     /// whole-read size are read again by path.</summary>
     public ChangeReason Classify(string leftPath, byte[] leftBytes, string rightPath, byte[] rightBytes, CancellationToken ct = default)
+        => Classify(leftPath, leftBytes, rightPath, rightBytes, out _, ct);
+
+    public ChangeReason Classify(string leftPath, byte[] leftBytes, string rightPath, byte[] rightBytes, out ChangeNoise noise, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        noise = ChangeNoise.None;
         return leftBytes.Length > _maxClassifyBytes || rightBytes.Length > _maxClassifyBytes
-            ? Classify(leftPath, leftBytes.Length, rightPath, rightBytes.Length, ct)
-            : Whole(leftPath, leftBytes, rightPath, rightBytes);
+            ? Classify(leftPath, leftBytes.Length, rightPath, rightBytes.Length, out noise, ct)
+            : Whole(leftPath, leftBytes, rightPath, rightBytes, out noise);
     }
 
     /// <summary>A side past the whole-read size: only the heads are at hand.</summary>
@@ -97,8 +112,9 @@ public sealed class ReasonClassifier
     }
 
     /// <summary>Both files read whole.</summary>
-    private static ChangeReason Whole(string leftPath, byte[] leftBytes, string rightPath, byte[] rightBytes)
+    private static ChangeReason Whole(string leftPath, byte[] leftBytes, string rightPath, byte[] rightBytes, out ChangeNoise noise)
     {
+        noise = ChangeNoise.None;
         // Read whole, the whole file is sniffed: text that turns binary past 8 KB is binary, never a text diff with NULs.
         if (TextInspector.LooksBinary(leftBytes) || TextInspector.LooksBinary(rightBytes))
             return ChangeReason.Binary;
@@ -120,6 +136,7 @@ public sealed class ReasonClassifier
         if (TextInspector.SameButWhitespace(leftEol, rightEol, rules) && TextInspector.EndsInBlankLine(leftEol) == TextInspector.EndsInBlankLine(rightEol))
             return ChangeReason.Whitespace;
 
+        noise = NoiseFinder.Find(leftPath, rightPath, leftEol, rightEol, rules);
         return ChangeReason.Content;
     }
 

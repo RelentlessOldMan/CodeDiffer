@@ -65,7 +65,7 @@ changed bytes ≈ 2.1 GB across 12 giant headers + 1,612 source files
 top movers: regmap_block0.h (52k hunks), src_9214.c (310), …
 ```
 
-`list_files(status, path_glob, reason, type, page)` — paged, filtered, **diffs not included**: path · status ·
+`list_files(status, path_glob, reason, type, hide_noise, page)` — paged, filtered, **diffs not included**: path · status ·
 reason · hunk count · ±lines. Hides identical by default (mostly noise on big trees).
 
 - `path_glob`: a glob (`src/**/*.c`; one without `/` matches file names anywhere: `*.h`), or several split by `;`
@@ -77,6 +77,21 @@ reason · hunk count · ±lines. Hides identical by default (mostly noise on big
   `.vcxproj .sln .json .xml .ini` build; `.txt .md .log .csv` and any extension not known, docs), and binary when
   the bytes are (a modified file's reason) or the extension says so. A view only: it never changes a status, a
   reason or the delta contract. The summary counts the changed files by type.
+- `hide_noise` (2-way): `all`, or a comma list of `stamps · numbers · comments · whitespace · eol · encoding`,
+  leaves out the modified files that are only that. The last three are reasons. The first three are a tag on a
+  `content` change (`noise` in the result, never a reason, so the delta contract and its digest don't see it): with
+  that kind taken out of both sides, and blank lines and spacing aside, the two are the same. The tag names the fewest
+  kinds that make them so: `stamps,comments` is a file hidden only when both are.
+  - **stamps**: RCS / CVS / Subversion / Perforce keywords (`$Id: … $`, `$Revision: 7 $`, `$Date$`), expanded or not.
+  - **numbers**: a word with a digit in it, and any joined to it by `. : / -` (a build number, a date, a time, a
+    version, a hash), in a file that isn't code. In code, a changed number is a real change.
+  - **comments**: by the file's language, from its name or extension (C-like `//` `/* */`, `#`, `--`, `;`, `%`, `'`,
+    `REM` / `::`, `<!-- -->`, PowerShell `<# #>`), with a marker inside a string not taken as one. Prose, JSON
+    and kinds not known have none.
+
+  It is worked out only for a pair read whole (each side up to 8 MB, the same limit as the reason's), and only for
+  2-way. A file renamed to another language isn't checked for comments. The summary has a `noise` line, and
+  `list_files` shows a file as `[content, noise: comments]`.
 
 `get_file_diff(path, context=3, max_lines=2000)` — one file, hard cap, `"capped: summary only, N hunks
 total"` fallback for the pathological ones. Diffs inline when small, by reference (a `.patch` handle)
@@ -92,7 +107,7 @@ Change-porting tools: `export_changeset(A→B)` and `apply_changeset(onto=C)` dr
 `applied | fuzzy | conflict`.
 
 **Built so far** (`CodeDiffer.Mcp.exe`, views in `CodeDiffer.Core/Sessions`): `start_compare` (background,
-returns an id, optional wait), `get_summary`, `list_files` (`status`/`path_glob`/`reason`/`type`/page, `lines=true`
+returns an id, optional wait), `get_summary`, `list_files` (`status`/`path_glob`/`reason`/`type`/`hide_noise`/page, `lines=true`
 renders ±lines for just that page), `get_file_diff` (cap `max_lines` and 256 KB, lines over 2,000 characters cut,
 page with `start_line`; overflow written whole to `diffs\<path>.patch` in the result directory — the path
 mirrored, so two files never share a name; one asked for with other context under `diffs-U<n>\`; a side gone or locked since the compare is said in one line), `get_stats`, `export_changeset` (to a file, `literal` for a byte-exact `git apply`).
@@ -305,7 +320,9 @@ folders. Such a file is cached with no id (above).
 Self-contained shell + a sidecar data dir in the result store. Summary tiles; a tree view with folder
 roll-ups; **identical hidden by default**; status/reason filter toggles; file-type chips (code · build · docs ·
 binary, each with its count: a click hides or shows that type); a path filter box (text, `*.c; *.h`, `!test/**`,
-`/regex/`, as `path_glob`). Each file's
+`/regex/`, as `path_glob`); noise chips (2-way: stamps · numbers · comments · whitespace · eol · encoding, as
+`hide_noise`: a file is hidden when all of its noise is), and two presets, **Code changes** (code files, noise hidden)
+and **Everything**. A noise file's row says so: `content (noise: stamps)`. Each file's
 diff is **loaded on expand** from the store (not embedded), so a 90 GB compare is a small page plus data
 loaded on demand. Side-by-side and inline modes; intra-line + syntax highlighting; huge per-file diffs
 virtualize or link to the `.patch`. **Everything is escaped** (the prototype's injection bug). Written

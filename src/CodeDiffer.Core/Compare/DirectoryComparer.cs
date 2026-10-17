@@ -321,7 +321,8 @@ public sealed class DirectoryComparer
                 var verdict = equal
                     ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
                     : readL is not null && readR is not null
-                        ? new FileChange(le.RelativePath, ChangeStatus.Modified, classifier.Classify(le.FullPath, readL, re.FullPath, readR, ct), le.Length, re.Length)
+                        ? new FileChange(le.RelativePath, ChangeStatus.Modified, classifier.Classify(le.FullPath, readL, re.FullPath, readR, out var noise, ct),
+                            le.Length, re.Length, Noise: noise)
                         : Modified(classifier, le, re, ct);
                 return (verdict, hasL, hasR);
             }
@@ -441,8 +442,8 @@ public sealed class DirectoryComparer
     /// <summary>A pair the listing says changed size: modified, with its reason — or identical, when the bytes say a
     /// directory entry's size was stale.</summary>
     private static FileChange Modified(ReasonClassifier classifier, FileEntry le, FileEntry re, CancellationToken ct)
-        => classifier.ClassifyResized(le.FullPath, le.Length, re.FullPath, re.Length, out long same, ct) is { } reason
-            ? new(le.RelativePath, ChangeStatus.Modified, reason, le.Length, re.Length)
+        => classifier.ClassifyResized(le.FullPath, le.Length, re.FullPath, re.Length, out long same, out var noise, ct) is { } reason
+            ? new(le.RelativePath, ChangeStatus.Modified, reason, le.Length, re.Length, Noise: noise)
             : new(le.RelativePath, ChangeStatus.Identical, null, same, same);
 
     /// <summary>A pair that could not be read: modified with no reason, and why.</summary>

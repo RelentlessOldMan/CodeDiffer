@@ -53,6 +53,8 @@ h1 { font-size: 20px; margin: 0 0 6px; font-weight: 600; }
 .types button { padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel); color: var(--muted); font: inherit; cursor: pointer; }
 .types button.on { border-color: var(--accent); color: var(--fg); box-shadow: inset 0 0 0 1px var(--accent); }
 .types button b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.types .gap { width: 10px; }
+.types button.preset { border-radius: 6px; }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: sticky; top: 0; background: var(--bg); padding: 8px 0; z-index: 2; border-bottom: 1px solid var(--border); }
 .controls input[type=search] { flex: 1 1 260px; min-width: 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; }
 .controls select, .controls button { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; cursor: pointer; }
@@ -144,8 +146,10 @@ footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
 // Every value from the data files is inserted with textContent / DOM properties — never as HTML.
 var CD = (function () {
   var meta = null, L = null, diffs = {}, waiting = {};
-  var state = { tags: new Set(), types: new Set(), q: "", reason: "", mode: "inline" };
+  var state = { tags: new Set(), types: new Set(), noise: new Set(), q: "", reason: "", mode: "inline" };
   var TYPES = [["code", "code"], ["build", "build"], ["docs", "docs"], ["binary", "binary"]];
+  // Noise: a content change that is only stamps, numbers or comments (its "nz"), or a whitespace, eol or encoding reason.
+  var NOISE = ["stamps", "numbers", "comments", "whitespace", "eol", "encoding"], NZ_REASON = { whitespace: 1, eol: 1, encoding: 1 };
   var TAGS2 = [["M", "modified", "modified"], ["A", "added", "added"], ["D", "removed", "removed"], ["R", "renamed", "renamed"], ["=", "identical", "identical"]];
   var TAGS3 = [["CF", "conflict", "conflict"], ["MG", "merged", "merged cleanly"], ["AG", "agreed", "agreed"], ["v1", "v1only", "v1 only"], ["v2", "v2only", "v2 only"]];
   var COLOR = { "M": "--t-M", "A": "--t-A", "D": "--t-D", "R": "--t-R", "=": "--t-eq", "CF": "--t-CF", "MG": "--t-MG", "AG": "--t-AG", "v1": "--t-v1", "v2": "--t-v2" };
@@ -185,7 +189,7 @@ var CD = (function () {
     var tags = meta.kind === "compare3" ? TAGS3 : TAGS2;
     tags.forEach(function (t) { if (t[0] !== "=") state.tags.add(t[0]); });
     var m = store("codediffer.mode"); if (m === "split" || m === "inline") state.mode = m;
-    header(); tiles(); types(); controls(); setupTree(); render();
+    header(); tiles(); controls(); setupTree(); types(); render(); // types: after the tree, which tags each row
   }
 
   function decode(j) {
@@ -275,26 +279,75 @@ var CD = (function () {
     });
   }
 
-  // File type chips (code · build · docs · binary), each with its listed count: a click shows or hides that type.
+  // The noise a row is: its "nz" kinds for content, its reason for whitespace/eol/encoding; null when it is a real change.
+  function noiseOf(i) {
+    if (T[tagOf[i]] !== "M") return null;
+    var r = val("r", i);
+    if (NZ_REASON[r]) return [r];
+    var z = r === "content" ? val("nz", i) : undefined;
+    return z ? String(z).split(",") : null;
+  }
+
+  // File type chips (code · build · docs · binary) and noise chips, each with its listed count: a click shows or hides
+  // those files. A noise file is hidden only when all of its kinds are. Two presets set them all at once.
   function types() {
-    var box = $("types"), n = {};
+    var box = $("types"), n = {}, chips = [];
     TYPES.forEach(function (t) { n[t[0]] = 0; state.types.add(t[0]); });
-    if (!L.keys.some(function (k) { return k === "ft"; })) return; // a report from before file types
-    for (var i = 0; i < L.n; i++) { var t = val("ft", i); if (t in n) n[t]++; }
+    NOISE.forEach(function (k) { n[k] = 0; state.noise.add(k); });
+    var hasTypes = L.keys.some(function (k) { return k === "ft"; }); // a report from before file types has none
+    var hasNoise = meta.kind !== "compare3";
+    if (!hasTypes && !hasNoise) return;
+    for (var i = 0; i < L.n; i++) {
+      if (hasTypes) { var t = val("ft", i); if (t in n) n[t]++; }
+      if (hasNoise) (noiseOf(i) || []).forEach(function (k) { if (k in n) n[k]++; });
+    }
     box.hidden = false;
-    box.appendChild(el("span", null, "File type:"));
-    TYPES.forEach(function (t) {
-      var b = el("button", "on"); b.type = "button";
-      b.appendChild(document.createTextNode(t[1] + " ")); b.appendChild(el("b", null, fmt(n[t[0]])));
-      b.title = { code: "Source code", build: "Projects, makefiles, configuration (CMakeLists.txt, .vcxproj, .json, .xml…)",
-        docs: "Other text: notes, logs, tables, text of a kind not known", binary: "Images, libraries, archives, other binary files" }[t[0]];
+    function chip(set, key, label, title) {
+      var b = el("button", "on"); b.type = "button"; b.title = title;
+      b.appendChild(document.createTextNode(label + " ")); b.appendChild(el("b", null, fmt(n[key])));
       b.addEventListener("click", function () {
-        if (state.types.has(t[0])) state.types.delete(t[0]); else state.types.add(t[0]);
-        b.classList.toggle("on", state.types.has(t[0]));
+        if (set.has(key)) set.delete(key); else set.add(key);
+        b.classList.toggle("on", set.has(key));
+        render();
+      });
+      chips.push({ b: b, set: set, key: key });
+      box.appendChild(b);
+    }
+    function preset(label, title, types, noise) {
+      var b = el("button", "preset", label); b.type = "button"; b.title = title;
+      b.addEventListener("click", function () {
+        // In place: each chip holds its set.
+        state.types.clear(); types.forEach(function (t) { state.types.add(t); });
+        state.noise.clear(); noise.forEach(function (k) { state.noise.add(k); });
+        chips.forEach(function (c) { c.b.classList.toggle("on", c.set.has(c.key)); });
         render();
       });
       box.appendChild(b);
-    });
+    }
+    var allTypes = TYPES.map(function (t) { return t[0]; });
+    if (hasTypes && hasNoise) {
+      preset("Code changes", "Code files only, noise hidden", ["code"], []);
+      preset("Everything", "Every file type, noise shown", allTypes, NOISE);
+      box.appendChild(el("span", "gap"));
+    }
+    if (hasTypes) {
+      box.appendChild(el("span", null, "File type:"));
+      TYPES.forEach(function (t) {
+        chip(state.types, t[0], t[1], { code: "Source code", build: "Projects, makefiles, configuration (CMakeLists.txt, .vcxproj, .json, .xml…)",
+          docs: "Other text: notes, logs, tables, text of a kind not known", binary: "Images, libraries, archives, other binary files" }[t[0]]);
+      });
+    }
+    if (hasNoise) {
+      if (hasTypes) box.appendChild(el("span", "gap"));
+      box.appendChild(el("span", null, "Noise:"));
+      NOISE.forEach(function (k) {
+        chip(state.noise, k, k, {
+          stamps: "Only version-control keyword stamps changed ($Id$, $Date$, $Revision$…)",
+          numbers: "A file that isn't code where only numbers, dates or IDs changed",
+          comments: "Only comments changed",
+          whitespace: "Only whitespace changed", eol: "Only line endings changed", encoding: "Only the encoding changed (same text)" }[k]);
+      });
+    }
   }
 
   function controls() {
@@ -427,7 +480,7 @@ var CD = (function () {
   // Which rows pass the filters, and per folder how many (by tag, for the badges; direct, for merging chains).
   function filterRows() {
     var n = L.n, nd = L.dp.length, m = matcher(), on = T.map(function (t) { return state.tags.has(t); });
-    var allTypes = state.types.size === TYPES.length;
+    var allTypes = state.types.size === TYPES.length, allNoise = state.noise.size === NOISE.length;
     var reason = -2;
     if (state.reason) reason = L.str.r ? L.S.indexOf(state.reason) : state.reason;
     pass = new Uint8Array(n); cnt = new Int32Array(nd * NT); direct = new Int32Array(nd); total = new Int32Array(nd); nPass = 0;
@@ -435,6 +488,7 @@ var CD = (function () {
       var t = tagOf[i];
       if (!on[t]) continue;
       if (!allTypes && !state.types.has(val("ft", i))) continue;
+      if (!allNoise) { var z = noiseOf(i); if (z && z.every(function (k) { return !state.noise.has(k); })) continue; }
       if (reason !== -2 && raw("r", i) !== reason) continue;
       if (m && !m(i)) continue;
       pass[i] = 1; nPass++;
@@ -605,7 +659,7 @@ var CD = (function () {
       if (f.ck && f.ck !== "content") bits.push(f.ck); // "content" is already implied by the two sides
       if (f.c !== undefined) bits.push(f.c + " conflict / " + f.cl + " clean");
     } else {
-      if (f.r) bits.push(f.r);
+      if (f.r) bits.push(f.nz ? f.r + " (noise: " + String(f.nz).replace(/,/g, ", ") + ")" : f.r);
       if (f.a !== undefined) bits.push("+" + fmt(f.a) + " −" + fmt(f.x) + (f.co ? " (coarse)" : ""));
       else if (f.k && f.k !== "text") bits.push(f.k);
       if (f.sim !== undefined) bits.push(Math.floor(f.sim / 10) + "% similar" + (f.ed && f.sim >= 995 ? " (but edited)" : ""));
