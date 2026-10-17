@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using CodeDiffer.Core.Compare;
 
 namespace CodeDiffer.Core.Sessions;
 
@@ -56,6 +57,15 @@ public static class RunSummary
                                   (Num(x, "pauses") > 0 ? $" · trees stopped answering {Num(x, "pauses"):0} time(s), paused {Clock(Num(x, "pausedSeconds"))} in all" +
                                                           (x.TryGetProperty("pausedNow", out var pn) && pn.GetBoolean() ? " (paused now)" : "") +
                                                           $" · last cause Windows error {Num(x, "pauseErrorCode"):0}" : ""));
+                if (x.TryGetProperty("reads", out var reads))
+                {
+                    sb.AppendLine($"            failed reads by cause: {AgentViews.FailureLine(ResultStore.ReadReadFailures(reads))}");
+                    var spans = ResultStore.ReadPauseLog(reads);
+                    if (spans.Count > 0)
+                        sb.AppendLine("            pauses: " + string.Join(" · ", spans.Select(s =>
+                            $"at {Clock(s.AtSeconds)} for {(s.Seconds < 0 ? "(still paused)" : Clock(s.Seconds))}, " +
+                            $"{new ReadFailures(s.Cause, 0, 0, 0, 0).Label}{(s.Seconds >= 0 && !s.Resumed ? ", stopped" : "")}")));
+                }
                 var ph = x.GetProperty("phaseSeconds").EnumerateObject().Select(q => $"{q.Name} {Clock(q.Value.GetDouble())}");
                 sb.AppendLine($"            time: {string.Join(" · ", ph)}");
                 var io = x.GetProperty("contentWorkerSeconds");

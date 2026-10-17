@@ -9,6 +9,71 @@ namespace CodeDiffer.Core.Compare;
 /// </summary>
 public sealed class ShareUnavailableException(string message, Exception inner) : Exception(message, inner);
 
+/// <summary>Failed reads of one cause (a Windows error code, or the exception's type when there is none): every failed
+/// try, the reads that then worked, the reads given up on (listed unreadable), and the pauses it began.</summary>
+public sealed record ReadFailures(string Cause, int Failed, int Recovered, int GaveUp, int Pauses)
+{
+    /// <summary>"Windows error 64", or the type name.</summary>
+    public string Label => int.TryParse(Cause, out _) ? $"Windows error {Cause}" : Cause;
+}
+
+/// <summary>One pause: when it began (seconds into the compare), how long it lasted, its cause, and whether the trees
+/// answered again (false: the compare stopped).</summary>
+public sealed record PauseSpan(double AtSeconds, double Seconds, string Cause, bool Resumed);
+
+/// <summary>
+/// The read failures of one compare, by cause, and its pauses: counts and codes only (no paths or messages), so they
+/// can be shown and shared as they are. Filled by <see cref="ShareGuard"/>; read live (the run record) and at the end
+/// (the report).
+/// </summary>
+public sealed class ReadTally
+{
+    private const int MaxPauses = 100;
+    private readonly object _gate = new();
+    private readonly Dictionary<string, int[]> _by = new(StringComparer.Ordinal); // failed, recovered, gave up, pauses
+    private readonly List<PauseSpan> _pauses = [];
+
+    private void Add(string cause, int what)
+    {
+        lock (_gate)
+        {
+            if (!_by.TryGetValue(cause, out var n)) _by[cause] = n = new int[4];
+            n[what]++;
+        }
+    }
+
+    internal void Failed(string cause) => Add(cause, 0);
+    internal void Recovered(string cause) => Add(cause, 1);
+    internal void GaveUp(string cause) => Add(cause, 2);
+
+    internal void PauseBegan(string cause, double at)
+    {
+        Add(cause, 3);
+        lock (_gate)
+            if (_pauses.Count < MaxPauses) _pauses.Add(new PauseSpan(at, -1, cause, false));
+    }
+
+    internal void PauseEnded(double seconds, bool resumed)
+    {
+        lock (_gate)
+            if (_pauses.Count > 0 && _pauses[^1].Seconds < 0) _pauses[^1] = _pauses[^1] with { Seconds = seconds, Resumed = resumed };
+    }
+
+    /// <summary>Causes, most failed tries first.</summary>
+    public IReadOnlyList<ReadFailures> ByCause()
+    {
+        lock (_gate)
+            return [.. _by.Select(kv => new ReadFailures(kv.Key, kv.Value[0], kv.Value[1], kv.Value[2], kv.Value[3]))
+                          .OrderByDescending(f => f.Failed).ThenBy(f => f.Cause, StringComparer.Ordinal)];
+    }
+
+    /// <summary>The pauses in order (the first 100); one still going has Seconds -1.</summary>
+    public IReadOnlyList<PauseSpan> Pauses()
+    {
+        lock (_gate) return [.. _pauses];
+    }
+}
+
 /// <summary>
 /// Every read of a compare goes through this, so a failure is told apart: one file that can't be read (locked,
 /// vanished, denied) or the trees as a whole that can't (a share gone quiet, a dropped session, this process unable
@@ -30,6 +95,7 @@ internal sealed class ShareGuard
     private readonly IReadOnlyList<TimeSpan> _probeDelays;
     private readonly CompareProgress? _progress;
     private readonly Func<bool> _answers;
+    private readonly ReadTally _tally;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly object _gate = new();
     private readonly string?[] _good = new string?[4]; // files read this run, the newest few: one must still open
@@ -48,7 +114,11 @@ internal sealed class ShareGuard
         _probeDelays = options.ProbeDelays ?? DefaultProbeDelays;
         _progress = progress;
         _answers = answers ?? Answers;
+        _tally = progress?.Reads ?? new ReadTally();
     }
+
+    /// <summary>The read failures by cause and the pauses so far.</summary>
+    public ReadTally Tally => _tally;
 
     /// <summary>Times the trees stopped answering and the compare paused, and for how long in all.</summary>
     public int Pauses => Volatile.Read(ref _pauses);
@@ -66,7 +136,7 @@ internal sealed class ShareGuard
     /// </summary>
     public async Task<T> RunAsync<T>(string path, Func<Task<T>> read, CancellationToken ct)
     {
-        bool failed = false;
+        string? failed = null; // the cause of the last failed try
         for (int retry = 0; ; )
         {
             await WaitOutPause(ct).ConfigureAwait(false);
@@ -74,20 +144,29 @@ internal sealed class ShareGuard
             {
                 var result = await read().ConfigureAwait(false);
                 Good(path);
-                if (failed) Interlocked.Increment(ref _retried);
+                if (failed is not null)
+                {
+                    Interlocked.Increment(ref _retried);
+                    _tally.Recovered(failed);
+                }
                 return result;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 ct.ThrowIfCancellationRequested();
-                failed = true;
+                failed = Cause(ex);
+                _tally.Failed(failed);
                 if (!Probe())
                 {
                     Pause(ex);
                     continue; // a pause doesn't count as a retry: the read starts over once the trees answer
                 }
                 // The trees answer, so it's this file: a vanished one won't come back; a locked one may, shortly.
-                if (ex is FileNotFoundException or DirectoryNotFoundException || retry >= _retryDelays.Count) throw;
+                if (ex is FileNotFoundException or DirectoryNotFoundException || retry >= _retryDelays.Count)
+                {
+                    _tally.GaveUp(failed);
+                    throw;
+                }
                 await Task.Delay(_retryDelays[retry++], ct).ConfigureAwait(false);
             }
         }
@@ -143,6 +222,7 @@ internal sealed class ShareGuard
             var since = _clock.Elapsed;
             var why = Describe(ex);
             _progress?.SharePaused(why, WindowsCode(ex), _maxWait);
+            _tally.PauseBegan(Cause(ex), Math.Round(since.TotalSeconds, 1));
             _pause = Task.Run(() => WaitForTrees(since, why, ex));
         }
     }
@@ -161,6 +241,7 @@ internal sealed class ShareGuard
                     "again once the share answers, and it reads only the rest (a new run also opens the share afresh, " +
                     "in case only this process lost it).", first);
                 _progress?.ShareLost(waited);
+                _tally.PauseEnded(Math.Round(waited.TotalSeconds, 1), resumed: false);
                 lock (_gate) _lost = lost;
                 return;
             }
@@ -177,6 +258,7 @@ internal sealed class ShareGuard
                     _pause = null;
                 }
                 _progress?.ShareResumed(took);
+                _tally.PauseEnded(Math.Round(took.TotalSeconds, 1), resumed: true);
                 return;
             }
         }
@@ -201,6 +283,9 @@ internal sealed class ShareGuard
     /// from a timeout or a denial).</summary>
     internal static string Describe(Exception ex)
         => WindowsCode(ex) is > 0 and var code ? $"{ex.Message.TrimEnd()} [Windows error {code}]" : ex.Message.TrimEnd();
+
+    /// <summary>A failure's cause as tallied: its Windows error code, else its type's name.</summary>
+    internal static string Cause(Exception ex) => WindowsCode(ex) is > 0 and var code ? code.ToString(System.Globalization.CultureInfo.InvariantCulture) : ex.GetType().Name;
 
     internal static int WindowsCode(Exception ex) => (ex.HResult & 0xFFFF0000) == 0x80070000 ? ex.HResult & 0xFFFF : 0;
 }

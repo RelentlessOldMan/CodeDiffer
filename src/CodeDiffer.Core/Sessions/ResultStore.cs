@@ -252,6 +252,47 @@ public static class ResultStore
 
     /// <summary>A saved compare's dropped directories and unreadable files. Results saved before 2026-10-16 have no
     /// totals: their dropped directories are read from the per-compare stats, their unreadable files are unknown (0).</summary>
+    /// <summary>Failed reads by cause and the pauses, as "readFailures" and "pauses" (the run record writes the same).</summary>
+    internal static void WriteReadFailures(Utf8JsonWriter w, IReadOnlyList<ReadFailures> causes, IReadOnlyList<PauseSpan> pauses)
+    {
+        w.WriteStartArray("readFailures");
+        foreach (var f in causes)
+        {
+            w.WriteStartObject();
+            w.WriteString("cause", f.Cause);
+            w.WriteNumber("failed", f.Failed);
+            w.WriteNumber("recovered", f.Recovered);
+            w.WriteNumber("gaveUp", f.GaveUp);
+            w.WriteNumber("pauses", f.Pauses);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        if (pauses.Count == 0) return;
+        w.WriteStartArray("pauses");
+        foreach (var p in pauses)
+        {
+            w.WriteStartObject();
+            w.WriteNumber("at", p.AtSeconds);
+            w.WriteNumber("seconds", p.Seconds);
+            w.WriteString("cause", p.Cause);
+            w.WriteBoolean("resumed", p.Resumed);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    internal static IReadOnlyList<ReadFailures> ReadReadFailures(JsonElement e)
+        => e.TryGetProperty("readFailures", out var a) && a.ValueKind == JsonValueKind.Array
+            ? [.. a.EnumerateArray().Select(f => new ReadFailures(f.GetProperty("cause").GetString() ?? "", f.GetProperty("failed").GetInt32(),
+                  f.GetProperty("recovered").GetInt32(), f.GetProperty("gaveUp").GetInt32(), f.GetProperty("pauses").GetInt32()))]
+            : [];
+
+    internal static IReadOnlyList<PauseSpan> ReadPauseLog(JsonElement e)
+        => e.TryGetProperty("pauses", out var a) && a.ValueKind == JsonValueKind.Array
+            ? [.. a.EnumerateArray().Select(p => new PauseSpan(p.GetProperty("at").GetDouble(), p.GetProperty("seconds").GetDouble(),
+                  p.GetProperty("cause").GetString() ?? "", p.GetProperty("resumed").GetBoolean()))]
+            : [];
+
     private static (int Dropped, int Unreadable) Unknowns(JsonElement m)
     {
         static int Int(JsonElement e, string name) => e.TryGetProperty(name, out var v) ? v.GetInt32() : 0;
@@ -596,6 +637,7 @@ public static class ResultStore
         if (r.SharePauses > 0) w.WriteNumber("sharePauses", r.SharePauses);
         if (r.SharePauses > 0) w.WriteNumber("sharePausedSeconds", Math.Round(r.SharePaused.TotalSeconds, 1));
         if (r.RetriedReads > 0) w.WriteNumber("retriedReads", r.RetriedReads);
+        if (r.ReadFailures.Count > 0) WriteReadFailures(w, r.ReadFailures, r.PauseLog);
         w.WriteNumber("pendingFiles", r.PendingFiles);
         w.WriteNumber("bytesRead", r.BytesRead);
         w.WriteNumber("leftDroppedDirectories", r.LeftDroppedDirectories);
@@ -667,6 +709,8 @@ public static class ResultStore
             SharePauses = stats.TryGetProperty("sharePauses", out var sp) ? sp.GetInt32() : 0,
             SharePaused = stats.TryGetProperty("sharePausedSeconds", out var sps) ? TimeSpan.FromSeconds(sps.GetDouble()) : TimeSpan.Zero,
             RetriedReads = stats.TryGetProperty("retriedReads", out var rr) ? rr.GetInt32() : 0,
+            ReadFailures = ReadReadFailures(stats),
+            PauseLog = ReadPauseLog(stats),
             PendingFiles = stats.GetProperty("pendingFiles").GetInt32(),
             BytesRead = stats.GetProperty("bytesRead").GetInt64(),
             SkippedLinks = stats.TryGetProperty("skippedLinks", out var links) ? links.GetInt32() : 0, // absent before 2026-10-07

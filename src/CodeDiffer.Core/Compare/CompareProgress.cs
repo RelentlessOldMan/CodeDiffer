@@ -27,6 +27,9 @@ public sealed class CompareProgress
     private readonly TimeSpan[] _phaseTimes = new TimeSpan[Enum.GetValues<ComparePhase>().Length];
     private long _checkpoints, _checkpointTicks, _lastCheckpointUtc;
 
+    /// <summary>Read failures by cause, and the pauses (see <see cref="ShareGuard"/>).</summary>
+    public ReadTally Reads { get; } = new();
+
     /// <summary>Where the content phase's worker time goes (opening, waiting for bytes, comparing/hashing).</summary>
     public IoMeter Io { get; } = new();
 

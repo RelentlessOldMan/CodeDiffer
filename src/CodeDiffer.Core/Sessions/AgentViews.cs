@@ -679,6 +679,11 @@ public static class AgentViews
     /// path, files that changed while read, a hash cache that couldn't be saved. Shared by every view (2-way, 3-way per
     /// side, HTML, CLI) so none of them leaves one out.
     /// </summary>
+    /// <summary>"Windows error 64: 120 failed tries, 118 then worked, 2 given up, 1 pause; …" — codes and counts only.</summary>
+    public static string FailureLine(IEnumerable<Compare.ReadFailures> causes)
+        => string.Join("; ", causes.Select(f => $"{f.Label}: {f.Failed:N0} failed tr{(f.Failed == 1 ? "y" : "ies")}, {f.Recovered:N0} then worked, " +
+                                                 $"{f.GaveUp:N0} given up" + (f.Pauses > 0 ? $", {f.Pauses:N0} pause(s)" : "")));
+
     public static IEnumerable<string> Notes(CompareReport r, string? side = null)
     {
         var pre = side is null ? "" : side + ": ";
@@ -695,6 +700,7 @@ public static class AgentViews
             yield return $"{pre}the trees stopped answering {r.SharePauses:N0} time(s), {ProgressView.Clock(r.SharePaused)} in all: the compare paused " +
                          "until they answered again, then carried on (nothing was marked unreadable for it).";
         if (r.RetriedReads > 0) yield return $"{pre}{r.RetriedReads:N0} read(s) failed and then worked when tried again.";
+        if (r.ReadFailures.Count > 0) yield return $"{pre}failed reads by cause: {FailureLine(r.ReadFailures)}.";
         if (r.UnstableNoChangeTime > 0) yield return $"{pre}{r.UnstableNoChangeTime:N0} file(s) on a server that gives no change time — compared as read, not cached.";
         if (r.SkippedLinks > 0)
             yield return $"{pre}{r.SkippedLinks:N0} symlink(s)/junction(s) not followed — nothing behind them is compared" +

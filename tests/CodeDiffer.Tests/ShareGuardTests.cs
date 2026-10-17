@@ -80,6 +80,40 @@ public sealed class ShareGuardTests : IDisposable
         Assert.Contains(notices, n => n.StartsWith("resumed:", StringComparison.Ordinal));
         Assert.Null(progress.PausedSinceUtc);
         Assert.Equal(1, progress.Pauses);
+
+        // Counted by cause, codes and counts only: the failed tries, the reads that then worked, the pause.
+        var cause = Assert.Single(r.ReadFailures, f => f.Pauses == 1);
+        Assert.True(cause.Failed >= 1 && cause.Recovered >= 1 && cause.GaveUp == 0, cause.ToString());
+        var pause = Assert.Single(r.PauseLog);
+        Assert.True(pause.Resumed && pause.Seconds >= 1 && pause.AtSeconds >= 0, pause.ToString());
+        Assert.Equal(pause.Cause, cause.Cause);
+    }
+
+    [Fact]
+    public void TheTally_IsSavedWithTheResult()
+    {
+        var store = new CodeDiffer.Core.Sessions.SessionStore(resultsRoot: P("results"));
+        var opts = Opts();
+        var s = store.Start(P("L"), P("R"), new CompareOptions
+        {
+            Cache = opts.Cache, Parallelism = 1, CacheBaseDir = opts.CacheBaseDir, CodeCompassBaseDir = opts.CodeCompassBaseDir,
+            Timing = opts.Timing, ShareWait = opts.ShareWait, RetryDelays = opts.RetryDelays, ProbeDelays = opts.ProbeDelays,
+            AfterPairChecked = n =>
+            {
+                if (n != 10) return;
+                Directory.Move(P("R"), P("R.away"));
+                _ = Task.Delay(1000).ContinueWith(_ => Directory.Move(P("R.away"), P("R")));
+            },
+        });
+        Assert.True(s.Wait(TimeSpan.FromMinutes(1)));
+        Assert.Null(s.Error);
+        var live = s.Report!;
+        var loaded = ((CodeDiffer.Core.Sessions.CompareSession)CodeDiffer.Core.Sessions.ResultStore.Load(s.ResultDir!)).Report!;
+        Assert.Equal(1, loaded.SharePauses);
+        Assert.Equal(live.RetriedReads, loaded.RetriedReads);
+        Assert.Equal(live.ReadFailures, loaded.ReadFailures);
+        Assert.Equal(live.PauseLog, loaded.PauseLog);
+        Assert.Contains(CodeDiffer.Core.Sessions.AgentViews.Notes(loaded), n => n.StartsWith("failed reads by cause: ", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -91,6 +125,9 @@ public sealed class ShareGuardTests : IDisposable
         Assert.Contains("did not come back", ex.Message);
         Assert.Contains(progress.Notices(), n => n.StartsWith("stopping:", StringComparison.Ordinal));
         Assert.Equal(0, progress.UnreadableSoFar); // nothing was listed unreadable for it
+        var stopped = Assert.Single(progress.Reads.Pauses());
+        Assert.False(stopped.Resumed);
+        Assert.True(stopped.Seconds >= 1);
 
         // Back again: the ten pairs read before the stop come from the cache, the rest are read.
         Directory.Move(P("R.away"), P("R"));
@@ -108,6 +145,13 @@ public sealed class ShareGuardTests : IDisposable
             var r = new DirectoryComparer(Opts()).Compare(P("L"), P("R"));
             Assert.Equal(1, r.UnreadableFiles);
             Assert.Equal(0, r.SharePauses);
+            if (OperatingSystem.IsWindows())
+            {
+                var locked = Assert.Single(r.ReadFailures);
+                Assert.Equal("Windows error 32", locked.Label); // a sharing violation
+                // Tried three times in the pass, three more at the end; given up both times.
+                Assert.Equal((6, 0, 2, 0), (locked.Failed, locked.Recovered, locked.GaveUp, locked.Pauses));
+            }
             Assert.Equal(Files - 1, r.Changes.Count(c => c.Status == ChangeStatus.Identical));
         }
     }

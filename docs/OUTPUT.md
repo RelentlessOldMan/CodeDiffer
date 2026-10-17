@@ -337,8 +337,13 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   don't answer within `--share-wait` minutes (default 30; the MCP server waits 30), the compare stops with exit 3
   and says so. What it read is in the hash cache (saved every minute as it reads, and on the way out), so the same
   compare run again reads only the rest. Every pair still unreadable when the rest is done is tried once more
-  before the result is written. `runs` shows the unreadable count so far, the pauses and the last cause's
-  Windows error code while a compare runs.
+  before the result is written. Every failed read is counted by cause (its Windows error code, or the exception's
+  type when there is none): the failed tries, how many then worked, how many were given up on (listed
+  unreadable), and the pauses it began; and each pause is logged with when it began, how long it lasted and
+  whether the trees came back. That is codes and counts only, no paths, so it can be shared as it is: the summary's
+  note `failed reads by cause: Windows error 64: 120 failed tries, 118 then worked, 2 given up, 1 pause(s)`, the
+  saved result (`readFailures`, `pauses`), and `runs`, which shows it while the compare is still running, with
+  the unreadable count so far.
 - Files are what is compared: a directory added or removed with no files in it doesn't show. A directory named
   `.git` (anywhere below the root, in any case) is never walked, on any side and by every command (compare, compare3, apply,
   statcheck): a repository's object store isn't the tree's content, and its packs would swamp the answer. A `.git`

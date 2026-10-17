@@ -128,6 +128,12 @@ internal sealed class RunRecord : IDisposable
                         w.WriteBoolean("pausedNow", p.PausedSinceUtc is not null);
                         w.WriteNumber("pauseErrorCode", p.PauseCode);
                     }
+                    if (p.Reads.ByCause() is { Count: > 0 } causes)
+                    {
+                        w.WriteStartObject("reads");
+                        ResultStore.WriteReadFailures(w, causes, p.Reads.Pauses());
+                        w.WriteEndObject();
+                    }
                     w.WriteStartObject("phaseSeconds");
                     foreach (var (ph, t) in p.PhaseTimes()) w.WriteNumber(ph.ToString().ToLowerInvariant(), Math.Round(t.TotalSeconds, 1));
                     w.WriteEndObject();

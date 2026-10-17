@@ -112,6 +112,9 @@ public sealed class CompareReport
     public TimeSpan SharePaused { get; init; }
     /// <summary>Reads that failed and then worked when tried again (after a pause, a retry, or at the end).</summary>
     public int RetriedReads { get; init; }
+    /// <summary>Failed reads by cause (Windows error code), and each pause: counts and codes only.</summary>
+    public IReadOnlyList<Compare.ReadFailures> ReadFailures { get; init; } = [];
+    public IReadOnlyList<Compare.PauseSpan> PauseLog { get; init; } = [];
     /// <summary>Content bytes read to reach the verdicts (an upper bound when early exit applies).</summary>
     public long BytesRead { get; init; }
     /// <summary>Wall time per compare phase, in order (for --timings).</summary>

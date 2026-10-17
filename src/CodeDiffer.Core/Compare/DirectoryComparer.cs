@@ -378,6 +378,8 @@ public sealed class DirectoryComparer
             SharePauses = guard.Pauses,
             SharePaused = guard.Paused,
             RetriedReads = guard.Retried + retriedAtEnd,
+            ReadFailures = guard.Tally.ByCause(),
+            PauseLog = guard.Tally.Pauses(),
             ComparedPairs = sameSize.Count,
             BytesRead = bytesRead,
             Timings = timings,
