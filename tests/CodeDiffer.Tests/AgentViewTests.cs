@@ -98,6 +98,25 @@ public class AgentViewTests : IDisposable
     }
 
     [Fact]
+    public void ListFiles_FiltersByFileType_AndBySeveralPatterns()
+    {
+        var s = Run(new SessionStore(save: false));
+        Assert.Contains("changed by file type: code 62 · build 0 · docs 2 · binary 0", AgentViews.Summary(s)); // 60 .c + 2 .h; 2 .txt
+        Assert.Contains("62 file(s) match", AgentViews.ListFiles(s, type: "code"));
+        Assert.Contains("2 file(s) match", AgentViews.ListFiles(s, type: "docs"));
+        Assert.Contains("64 file(s) match", AgentViews.ListFiles(s, type: "Code, docs"));
+        Assert.StartsWith("error: unknown file type 'source'", AgentViews.ListFiles(s, type: "source"));
+
+        // Several globs, any of them; '!' leaves paths out; /regex/ over the whole path.
+        Assert.Contains("4 file(s) match", AgentViews.ListFiles(s, pathGlob: "*.h; *.txt"));
+        Assert.Contains("55 file(s) match", AgentViews.ListFiles(s, pathGlob: "*.c;!src/f00*")); // the 5 odd ones of f000-f009 left out
+        Assert.Contains("4 file(s) match", AgentViews.ListFiles(s, pathGlob: "!src/**"));
+        Assert.Contains("10 file(s) match", AgentViews.ListFiles(s, pathGlob: "/^src/f0[01]\\d\\.c$/"));
+        Assert.Contains("2 file(s) match", AgentViews.ListFiles(s, pathGlob: "*.h", type: "code"));
+        Assert.StartsWith("error: bad regex /(/", AgentViews.ListFiles(s, pathGlob: "/(/"));
+    }
+
+    [Fact]
     public void FileDiff_SmallIsInline_LargeIsCappedToAPatchFile()
     {
         var s = Run(new SessionStore(save: false));

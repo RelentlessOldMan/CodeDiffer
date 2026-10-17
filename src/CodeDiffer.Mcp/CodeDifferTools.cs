@@ -91,7 +91,9 @@ public static class CodeDifferTools
         [Description("Compare id (default: the most recent).")] string? compare_id = null,
         [Description("2-way: changed (default), all, or a comma list of added, removed, modified, renamed, identical. " +
                      "3-way: changed (default), both, or a comma list of conflict, merged, agreed, v1, v2.")] string? status = null,
-        [Description("Glob over relative paths, e.g. src/**/*.c; a pattern without '/' matches file names anywhere (*.h).")] string? path_glob = null,
+        [Description("Paths to list: a glob over relative paths (src/**/*.c; one without '/' matches file names anywhere: *.h), or " +
+                     "several split by ';' (*.c;*.cpp), '!' before one to leave it out (*.c;!test/**), /regex/ for a regex.")] string? path_glob = null,
+        [Description("File types to list, a comma list: code, build (projects, makefiles, config), docs (other text), binary.")] string? type = null,
         [Description("2-way only: files with this reason (modified, or renamed and edited): content, eol, whitespace, encoding, " +
                      "binary, metadata; or unreadable: the files of any status that couldn't be read.")] string? reason = null,
         [Description("1-based page number.")] int page = 1,
@@ -103,8 +105,8 @@ public static class CodeDifferTools
             return $"error: {(reason is not null ? "reason" : "lines")} is 2-way only; a 3-way listing has outcomes (status=conflict, merged, ...)\n";
         return Safe(() => s switch
         {
-            Compare3Session t => ThreeWayViews.ListFiles(t, status, path_glob, page, page_size),
-            CompareSession c => AgentViews.ListFiles(c, status, path_glob, reason, page, page_size, lines),
+            Compare3Session t => ThreeWayViews.ListFiles(t, status, path_glob, page, page_size, type),
+            CompareSession c => AgentViews.ListFiles(c, status, path_glob, reason, page, page_size, lines, type),
             _ => "error: unknown compare kind",
         });
     }

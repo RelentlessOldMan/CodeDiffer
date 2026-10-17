@@ -33,6 +33,7 @@ public static class ThreeWayViews
         o.Append('\n');
         int regions = r.Entries.Sum(e => e.ConflictRegions);
         if (regions > 0) o.Append($"conflict regions: {regions:N0} (in content/add-add conflicts)\n");
+        if (r.Entries.Count > 0) o.Append($"touched by file type: {AgentViews.TypeLine(r.Entries.Select(e => e.Type))}\n");
         o.Append($"per side: v1 {SideCounts(r.V1Report)} · v2 {SideCounts(r.V2Report)}\n");
         if (r.DroppedDirectories > 0)
             o.Append($"WARNING: incomplete walk — {r.DroppedDirectories} director(ies) could not be listed" +
@@ -82,14 +83,17 @@ public static class ThreeWayViews
     /// <param name="status">changed (default: every touched path), both (agreed+merged+conflict), or a
     /// comma list of conflict, merged, agreed, v1, v2.</param>
     public static string ListFiles(Compare3Session s, string? status = null, string? pathGlob = null,
-        int page = 1, int pageSize = AgentViews.DefaultPageSize)
+        int page = 1, int pageSize = AgentViews.DefaultPageSize, string? type = null)
     {
         if (Pending(s) is { } pending) return $"compare3 {s.Id}: {pending}";
         var r = s.Report!;
         if (!TryOutcomes(status, out var want, out var err)) return $"error: {err}\n";
-        var glob = string.IsNullOrWhiteSpace(pathGlob) ? null : AgentViews.Glob(pathGlob);
+        Func<string, string?, bool>? glob = null;
+        if (!string.IsNullOrWhiteSpace(pathGlob) && !AgentViews.TryPathFilter(pathGlob, out glob, out err)) return $"error: {err}\n";
+        if (!AgentViews.TryTypes(type, out var types, out err)) return $"error: {err}\n";
         var match = r.Entries.Where(e => want.Contains(e.Outcome)
-            && (glob is null || glob(e.Path) || (e.MergedPath is { } m && glob(m)))).ToList();
+            && (types is null || types.Contains(e.Type))
+            && (glob is null || glob(e.Path, e.MergedPath))).ToList();
 
         pageSize = Math.Clamp(pageSize, 1, AgentViews.MaxPageSize);
         int pages = Math.Max(1, (match.Count + pageSize - 1) / pageSize);

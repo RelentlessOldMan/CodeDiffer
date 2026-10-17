@@ -803,6 +803,8 @@ static void PrintSummary(TextWriter o, string left, string right, CompareReport 
         $"binary {r.ReasonCount(ChangeReason.Binary)}" +
         (r.ReasonCount(ChangeReason.Metadata) > 0 ? $" · metadata {r.ReasonCount(ChangeReason.Metadata)}" : "") +
         (r.UnreadableModified > 0 ? $" · unreadable {r.UnreadableModified}" : ""));
+    if (r.Changes.Any(c => c.Status != ChangeStatus.Identical))
+        o.WriteLine($"  by type    {AgentViews.TypeLine(r.Changes.Where(c => c.Status != ChangeStatus.Identical).Select(c => c.Type))}");
 }
 
 /// <summary>The per-file change list (non-patch mode): one line per non-identical path.</summary>

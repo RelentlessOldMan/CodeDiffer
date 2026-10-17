@@ -90,6 +90,7 @@ public static class AgentViews
         o.Append($"  renamed   {renamed,8:N0}    ({pure:N0} pure, {renamed - pure:N0} rename+edit)\n");
 
         var changed = r.Changes.Where(c => c.Status != ChangeStatus.Identical).ToList();
+        if (changed.Count > 0) o.Append($"changed by file type: {TypeLine(changed.Select(c => c.Type))}   (list_files type=code)\n");
         o.Append($"changed bytes: {Bytes(changed.Sum(c => c.LeftSize))} left · {Bytes(changed.Sum(c => c.RightSize))} right\n");
         var movers = changed.OrderByDescending(c => Math.Abs(c.RightSize - c.LeftSize)).ThenBy(c => c.RelativePath, StringComparer.Ordinal).Take(5).ToList();
         if (movers.Count > 0)
@@ -181,8 +182,9 @@ public static class AgentViews
     /// </summary>
     /// <param name="status">"changed" (default: everything but identical), "all", or a comma list of
     /// added, removed, modified, renamed, identical.</param>
+    /// <param name="type">A comma list of file types (<see cref="FileTypes"/>): code, build, docs, binary.</param>
     public static string ListFiles(CompareSession s, string? status = null, string? pathGlob = null, string? reason = null,
-        int page = 1, int pageSize = DefaultPageSize, bool lines = false)
+        int page = 1, int pageSize = DefaultPageSize, bool lines = false, string? type = null)
     {
         var o = new StringBuilder();
         // While running: the differences found so far, in the order found (so earlier pages don't shift).
@@ -197,11 +199,15 @@ public static class AgentViews
         ChangeReason? reasonFilter = null;
         if (!TryStatuses(status, out var statuses, out var err) || (!unreadableOnly && !TryReason(reason, out reasonFilter, out err)))
             return $"error: {err}\n";
-        var glob = string.IsNullOrWhiteSpace(pathGlob) ? null : Glob(pathGlob);
+        Func<string, string?, bool>? glob = null;
+        if (!string.IsNullOrWhiteSpace(pathGlob) && !TryPathFilter(pathGlob, out glob, out err)) return $"error: {err}\n";
+        HashSet<FileType>? types = null;
+        if (!TryTypes(type, out types, out err)) return $"error: {err}\n";
 
         var match = changes.Where(c => statuses.Contains(c.Status)
             && (unreadableOnly ? c.ReasonLabel == "unreadable" : reasonFilter is null || c.Reason == reasonFilter)
-            && (glob is null || glob(c.RelativePath) || (c.RenamedFrom is { } f && glob(f)))).ToList();
+            && (types is null || types.Contains(c.Type))
+            && (glob is null || glob(c.RelativePath, c.RenamedFrom))).ToList();
 
         pageSize = Math.Clamp(pageSize, 1, MaxPageSize);
         int pages = Math.Max(1, (match.Count + pageSize - 1) / pageSize);
@@ -679,6 +685,14 @@ public static class AgentViews
     /// path, files that changed while read, a hash cache that couldn't be saved. Shared by every view (2-way, 3-way per
     /// side, HTML, CLI) so none of them leaves one out.
     /// </summary>
+    /// <summary>"code 1,180 · build 140 · docs 260 · binary 227": every type, in order, zeros too.</summary>
+    public static string TypeLine(IEnumerable<FileType> types)
+    {
+        var n = new int[Enum.GetValues<FileType>().Length];
+        foreach (var t in types) n[(int)t]++;
+        return string.Join(" · ", Enum.GetValues<FileType>().Select(t => $"{FileTypes.Token(t)} {n[(int)t]:N0}"));
+    }
+
     /// <summary>"Windows error 64: 120 failed tries, 118 then worked, 2 given up, 1 pause; …" — codes and counts only.</summary>
     public static string FailureLine(IEnumerable<Compare.ReadFailures> causes)
         => string.Join("; ", causes.Select(f => $"{f.Label}: {f.Failed:N0} failed tr{(f.Failed == 1 ? "y" : "ies")}, {f.Recovered:N0} then worked, " +
@@ -758,6 +772,21 @@ public static class AgentViews
         return true;
     }
 
+    /// <summary>A comma list of file types, or null (any type) when none is given.</summary>
+    internal static bool TryTypes(string? list, out HashSet<FileType>? types, out string error)
+    {
+        types = null;
+        error = "";
+        if (string.IsNullOrWhiteSpace(list)) return true;
+        types = [];
+        foreach (var part in list.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!FileTypes.TryParse(part, out var t)) { error = $"unknown file type '{part}' (use code, build, docs, binary)"; return false; }
+            types.Add(t);
+        }
+        return true;
+    }
+
     private static bool TryReason(string? reason, out ChangeReason? value, out string error)
     {
         value = null;
@@ -768,6 +797,42 @@ public static class AgentViews
             if (CanonicalTokens.Token(x) == token) { value = x; return true; }
         error = $"unknown reason '{reason}' (use content, eol, whitespace, encoding, binary, metadata, unreadable)";
         return false;
+    }
+
+    /// <summary>
+    /// A path filter, as list_files' path_glob and the HTML report's box take one: terms split on ';' or ',', each a
+    /// <see cref="Glob"/>, a <c>/regex/</c> (case-insensitive, over the whole path), or after a '!' a path to leave out
+    /// (<c>*.c; *.h; !third_party/**</c>). A path passes when it matches a term kept (any path, when all are '!') and no
+    /// term left out; a rename passes on either of its paths. One term alone is the glob it always was, spaces and all.
+    /// </summary>
+    internal static bool TryPathFilter(string pattern, out Func<string, string?, bool> filter, out string error)
+    {
+        filter = (_, _) => true;
+        error = "";
+        bool many = pattern.IndexOfAny([';', ',']) >= 0;
+        var keep = new List<Func<string, bool>>();
+        var drop = new List<Func<string, bool>>();
+        foreach (var part in many ? pattern.Split([';', ',']) : [pattern])
+        {
+            var term = many ? part.Trim() : part;
+            bool not = term.StartsWith('!');
+            if (not) term = term[1..].TrimStart();
+            if (term.Length == 0) continue;
+            Func<string, bool> test;
+            if (term.Length > 2 && term[0] == '/' && term[^1] == '/')
+            {
+                Regex re;
+                try { re = new Regex(term[1..^1], RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)); }
+                catch (ArgumentException ex) { error = $"bad regex {term}: {ex.Message}"; return false; }
+                test = p => re.IsMatch(p);
+            }
+            else test = Glob(term);
+            (not ? drop : keep).Add(test);
+        }
+        if (keep.Count == 0 && drop.Count == 0) return true;
+        bool Any(List<Func<string, bool>> tests, string path, string? other) => tests.Any(t => t(path) || (other is not null && t(other)));
+        filter = (path, other) => (keep.Count == 0 || Any(keep, path, other)) && !Any(drop, path, other);
+        return true;
     }
 
     /// <summary>

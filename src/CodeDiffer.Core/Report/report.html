@@ -49,6 +49,10 @@ h1 { font-size: 20px; margin: 0 0 6px; font-weight: 600; }
 .tile.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .tile:disabled { cursor: default; opacity: .6; }
 .tile.info { cursor: default; }
+.types { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 10px; font-size: 12.5px; color: var(--muted); }
+.types button { padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel); color: var(--muted); font: inherit; cursor: pointer; }
+.types button.on { border-color: var(--accent); color: var(--fg); box-shadow: inset 0 0 0 1px var(--accent); }
+.types button b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: sticky; top: 0; background: var(--bg); padding: 8px 0; z-index: 2; border-bottom: 1px solid var(--border); }
 .controls input[type=search] { flex: 1 1 260px; min-width: 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; }
 .controls select, .controls button { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; cursor: pointer; }
@@ -121,8 +125,9 @@ footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
     <ul class="notes" id="notes"></ul>
   </header>
   <div class="tiles" id="tiles"></div>
+  <div class="types" id="types" hidden></div>
   <div class="controls">
-    <input type="search" id="q" placeholder="Filter paths: text, or a glob like src/**/*.c" aria-label="Filter paths">
+    <input type="search" id="q" placeholder="Filter paths: text, *.c; *.cpp, !test/**, or /regex/" title="Text to look for, or globs split by ; (*.c; *.h). A ! before one leaves those out (!third_party/**). /…/ is a regex over the whole path." aria-label="Filter paths">
     <select id="reason" aria-label="Reason" hidden></select>
     <span class="seg" role="group" aria-label="Diff layout">
       <button type="button" id="m-inline" class="on">Inline</button><button type="button" id="m-split">Side by side</button>
@@ -139,7 +144,8 @@ footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
 // Every value from the data files is inserted with textContent / DOM properties — never as HTML.
 var CD = (function () {
   var meta = null, L = null, diffs = {}, waiting = {};
-  var state = { tags: new Set(), q: "", reason: "", mode: "inline" };
+  var state = { tags: new Set(), types: new Set(), q: "", reason: "", mode: "inline" };
+  var TYPES = [["code", "code"], ["build", "build"], ["docs", "docs"], ["binary", "binary"]];
   var TAGS2 = [["M", "modified", "modified"], ["A", "added", "added"], ["D", "removed", "removed"], ["R", "renamed", "renamed"], ["=", "identical", "identical"]];
   var TAGS3 = [["CF", "conflict", "conflict"], ["MG", "merged", "merged cleanly"], ["AG", "agreed", "agreed"], ["v1", "v1only", "v1 only"], ["v2", "v2only", "v2 only"]];
   var COLOR = { "M": "--t-M", "A": "--t-A", "D": "--t-D", "R": "--t-R", "=": "--t-eq", "CF": "--t-CF", "MG": "--t-MG", "AG": "--t-AG", "v1": "--t-v1", "v2": "--t-v2" };
@@ -179,7 +185,7 @@ var CD = (function () {
     var tags = meta.kind === "compare3" ? TAGS3 : TAGS2;
     tags.forEach(function (t) { if (t[0] !== "=") state.tags.add(t[0]); });
     var m = store("codediffer.mode"); if (m === "split" || m === "inline") state.mode = m;
-    header(); tiles(); controls(); setupTree(); render();
+    header(); tiles(); types(); controls(); setupTree(); render();
   }
 
   function decode(j) {
@@ -269,6 +275,28 @@ var CD = (function () {
     });
   }
 
+  // File type chips (code · build · docs · binary), each with its listed count: a click shows or hides that type.
+  function types() {
+    var box = $("types"), n = {};
+    TYPES.forEach(function (t) { n[t[0]] = 0; state.types.add(t[0]); });
+    if (!L.keys.some(function (k) { return k === "ft"; })) return; // a report from before file types
+    for (var i = 0; i < L.n; i++) { var t = val("ft", i); if (t in n) n[t]++; }
+    box.hidden = false;
+    box.appendChild(el("span", null, "File type:"));
+    TYPES.forEach(function (t) {
+      var b = el("button", "on"); b.type = "button";
+      b.appendChild(document.createTextNode(t[1] + " ")); b.appendChild(el("b", null, fmt(n[t[0]])));
+      b.title = { code: "Source code", build: "Projects, makefiles, configuration (CMakeLists.txt, .vcxproj, .json, .xml…)",
+        docs: "Other text: notes, logs, tables, text of a kind not known", binary: "Images, libraries, archives, other binary files" }[t[0]];
+      b.addEventListener("click", function () {
+        if (state.types.has(t[0])) state.types.delete(t[0]); else state.types.add(t[0]);
+        b.classList.toggle("on", state.types.has(t[0]));
+        render();
+      });
+      box.appendChild(b);
+    });
+  }
+
   function controls() {
     var q = $("q"), timer = null;
     q.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(function () { state.q = q.value.trim(); render(); }, 150); });
@@ -310,11 +338,36 @@ var CD = (function () {
     return nameOnly ? function (s) { return re.test(s.slice(s.lastIndexOf("/") + 1)); } : function (s) { return re.test(s); };
   }
 
-  // A test of row i against the filter box, or null. A plain text without "/" can't span a "/", so it is looked
-  // for in the folder's path (once per folder) and the file name, never in a million joined paths.
+  // A test of row i against the filter box, or null: terms split by ";" or ",", each a text, a glob or a /regex/,
+  // and with a "!" before it one to leave out. A row passes on a term kept (any, when all are "!") and none left out.
   function matcher() {
-    var q = state.q.replace(/\\/g, "/");
+    var q = state.q;
     if (!q) return null;
+    var keep = [], drop = [];
+    (/[;,]/.test(q) ? q.split(/[;,]/) : [q]).forEach(function (part) {
+      var t = part.trim(), not = t.charAt(0) === "!";
+      if (not) t = t.slice(1).trim();
+      if (!t) return;
+      var test = term(t);
+      if (test) (not ? drop : keep).push(test);
+    });
+    if (!keep.length && !drop.length) return null;
+    return function (i) {
+      for (var x = 0; x < drop.length; x++) if (drop[x](i)) return false;
+      if (!keep.length) return true;
+      for (x = 0; x < keep.length; x++) if (keep[x](i)) return true;
+      return false;
+    };
+  }
+
+  // One term's test of row i. A plain text without "/" can't span a "/", so it is looked for in the folder's path
+  // (once per folder) and the file name, never in a million joined paths. A bad /regex/ matches nothing.
+  function term(q) {
+    if (q.length > 2 && q.charAt(0) === "/" && q.charAt(q.length - 1) === "/") {
+      var re; try { re = new RegExp(q.slice(1, -1), "i"); } catch (e) { return function () { return false; }; }
+      return function (i) { var from = val("f", i); return re.test(path(i)) || (from !== undefined && re.test(from)); };
+    }
+    q = q.replace(/\\/g, "/");
     var slash = q.indexOf("/") >= 0, test;
     if (/[*?]/.test(q)) test = globRe(q);
     else { var low = q.toLowerCase(); test = function (s) { return s.toLowerCase().indexOf(low) >= 0; }; }
@@ -374,12 +427,14 @@ var CD = (function () {
   // Which rows pass the filters, and per folder how many (by tag, for the badges; direct, for merging chains).
   function filterRows() {
     var n = L.n, nd = L.dp.length, m = matcher(), on = T.map(function (t) { return state.tags.has(t); });
+    var allTypes = state.types.size === TYPES.length;
     var reason = -2;
     if (state.reason) reason = L.str.r ? L.S.indexOf(state.reason) : state.reason;
     pass = new Uint8Array(n); cnt = new Int32Array(nd * NT); direct = new Int32Array(nd); total = new Int32Array(nd); nPass = 0;
     for (var i = 0; i < n; i++) {
       var t = tagOf[i];
       if (!on[t]) continue;
+      if (!allTypes && !state.types.has(val("ft", i))) continue;
       if (reason !== -2 && raw("r", i) !== reason) continue;
       if (m && !m(i)) continue;
       pass[i] = 1; nPass++;

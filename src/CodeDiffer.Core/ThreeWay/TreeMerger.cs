@@ -37,7 +37,11 @@ public sealed record Merge3Entry(
     int ConflictRegions,
     int CleanRegions,
     string? MergedPath,
-    string? Note);
+    string? Note)
+{
+    /// <summary>What kind of file it is (<see cref="FileChange.Type"/>): binary when either side's bytes were found so.</summary>
+    public FileType Type => FileTypes.Of(Path, V1?.Reason == ChangeReason.Binary || V2?.Reason == ChangeReason.Binary);
+}
 
 public sealed class ThreeWayReport
 {

@@ -33,6 +33,9 @@ public sealed record FileChange(
     /// <summary>The reason token to show: the reason, "unreadable", or null.</summary>
     public string? ReasonLabel => Reason is { } r ? CanonicalTokens.Token(r) : Unreadable is not null ? "unreadable" : null;
 
+    /// <summary>What kind of file it is (its path's; binary when its bytes were found so): a filter, not a verdict.</summary>
+    public FileType Type => FileTypes.Of(RelativePath, Reason == ChangeReason.Binary);
+
     /// <summary>A byte-identical rename: the header alone moves it, nothing to diff.</summary>
     public bool PureRename => Status == ChangeStatus.Renamed && SimilarityMilli == 1000 && !EditedRename;
 

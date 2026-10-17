@@ -294,6 +294,7 @@ public static class HtmlReport
                 ["ls"] = c.LeftSize,
                 ["rs"] = c.RightSize,
             };
+            row["ft"] = FileTypes.Token(c.Type);
             if (c.ReasonLabel is { } rr) row["r"] = rr;
             if (c.Unreadable is { } why) row["n"] = $"could not be read during the compare: {why}";
             if (c.RenamedFrom is { } f) row["f"] = Shown(f);
@@ -329,6 +330,7 @@ public static class HtmlReport
             var row = new Row
             {
                 ["p"] = Shown(e.MergedPath ?? e.Path),
+                ["ft"] = FileTypes.Token(e.Type),
                 ["t"] = e.Outcome switch
                 {
                     Merge3Outcome.V1Only => "v1", Merge3Outcome.V2Only => "v2", Merge3Outcome.Agreed => "AG",
