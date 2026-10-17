@@ -3,6 +3,7 @@ using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Sessions;
+using CodeDiffer.Core.ThreeWay;
 using Xunit;
 
 namespace CodeDiffer.Tests;
@@ -153,5 +154,50 @@ public class NoiseTests : IDisposable
         Assert.Contains("2 file(s) match", AgentViews.ListFiles(back, hideNoise: "stamps, eol"));   // c.c, build.txt
         Assert.Contains("1 file(s) match", AgentViews.ListFiles(back, type: "code", hideNoise: "all"));
         Assert.StartsWith("error: unknown noise 'x'", AgentViews.ListFiles(back, hideNoise: "x"));
+    }
+
+    [Fact]
+    public void ThreeWay_APathIsNoise_WhenEverySideThatTouchedItIs()
+    {
+        Put("B/src/a.c", "/* $Revision: 1 $ */\nint a;\n");
+        Put("V1/src/a.c", "/* $Revision: 2 $ */\nint a;\n");                // v1 only: stamps
+        Put("V2/src/a.c", "/* $Revision: 1 $ */\nint a;\n");
+        Put("B/src/b.c", "int b; // one\nint x;\nint y;\nint z;\n");
+        Put("V1/src/b.c", "int b; // uno\nint x;\nint y;\nint z;\n");      // both: comments, merged
+        Put("V2/src/b.c", "int b; // one\nint x;\nint y;\nint z; // last\n");
+        Put("B/src/c.c", "int c; // one\n");
+        Put("V1/src/c.c", "int c; // uno\n");                              // both, the same line: a conflict
+        Put("V2/src/c.c", "int c; // eins\n");
+        Put("B/src/d.c", "int d = 1;\n");
+        Put("V1/src/d.c", "int d = 1;\r\n");                               // v1 eol, v2 a real change
+        Put("V2/src/d.c", "int d = 2;\n");
+
+        var s = new SessionStore(resultsRoot: Path.Combine(_dir, "results"))
+            .Start3(Path.Combine(_dir, "B"), Path.Combine(_dir, "V1"), Path.Combine(_dir, "V2"), new CompareOptions { Cache = CacheMode.Off });
+        Assert.True(s.Wait(TimeSpan.FromSeconds(60)));
+        Assert.Null(s.Error);
+        var e = s.Report!.Entries.ToDictionary(x => x.Path);
+        Assert.Equal(["stamps"], e["src/a.c"].Noise);
+        Assert.Equal(["comments"], e["src/b.c"].Noise);
+        Assert.Equal(Merge3Outcome.Conflict, e["src/c.c"].Outcome);
+        Assert.Null(e["src/c.c"].Noise);                                   // a conflict is never noise
+        Assert.Null(e["src/d.c"].Noise);
+
+        Assert.Contains("noise: 2 path(s) every side changed only in stamps 1 · numbers 0 · comments 1 · whitespace 0 · eol 0 · encoding 0",
+            ThreeWayViews.Summary(s));
+        var all = ThreeWayViews.ListFiles(s, hideNoise: "all");
+        Assert.Contains("2 path(s) match", all);                           // c.c and d.c
+        Assert.Contains("1 path(s) match", ThreeWayViews.ListFiles(s, hideNoise: "comments, stamps", status: "merged"));
+        Assert.Contains("3 path(s) match", ThreeWayViews.ListFiles(s, hideNoise: "comments"));
+        Assert.Contains("v1 content (noise: stamps)", ThreeWayViews.ListFiles(s));
+
+        // The report's rows carry it for its noise chips.
+        var rep = CodeDiffer.Core.Report.HtmlReport.Write(s);
+        var (_, files) = CodeDiffer.Core.Report.HtmlReport.ReadIndex(Path.Combine(Path.GetDirectoryName(rep.IndexPath)!, "data", "index.js"));
+        var nz = files.ToDictionary(f => f.GetProperty("p").GetString()!, f => f.TryGetProperty("nz", out var z) ? z.GetString() : null);
+        Assert.Equal("stamps", nz["src/a.c"]);
+        Assert.Equal("comments", nz["src/b.c"]);
+        Assert.Null(nz["src/c.c"]);
+        Assert.Null(nz["src/d.c"]);
     }
 }

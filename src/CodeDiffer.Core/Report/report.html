@@ -281,6 +281,7 @@ var CD = (function () {
 
   // The noise a row is: its "nz" kinds for content, its reason for whitespace/eol/encoding; null when it is a real change.
   function noiseOf(i) {
+    if (meta.kind === "compare3") { var z3 = val("nz", i); return z3 ? String(z3).split(",") : null; } // every side's, joined
     if (T[tagOf[i]] !== "M") return null;
     var r = val("r", i);
     if (NZ_REASON[r]) return [r];
@@ -289,17 +290,16 @@ var CD = (function () {
   }
 
   // File type chips (code · build · docs · binary) and noise chips, each with its listed count: a click shows or hides
-  // those files. A noise file is hidden only when all of its kinds are. Two presets set them all at once.
+  // those files. A noise file is hidden only when all of its kinds are (3-way: a path every side changed only in noise;
+  // a conflict never). Two presets set them all at once.
   function types() {
     var box = $("types"), n = {}, chips = [];
     TYPES.forEach(function (t) { n[t[0]] = 0; state.types.add(t[0]); });
     NOISE.forEach(function (k) { n[k] = 0; state.noise.add(k); });
     var hasTypes = L.keys.some(function (k) { return k === "ft"; }); // a report from before file types has none
-    var hasNoise = meta.kind !== "compare3";
-    if (!hasTypes && !hasNoise) return;
     for (var i = 0; i < L.n; i++) {
       if (hasTypes) { var t = val("ft", i); if (t in n) n[t]++; }
-      if (hasNoise) (noiseOf(i) || []).forEach(function (k) { if (k in n) n[k]++; });
+      (noiseOf(i) || []).forEach(function (k) { if (k in n) n[k]++; });
     }
     box.hidden = false;
     function chip(set, key, label, title) {
@@ -325,7 +325,7 @@ var CD = (function () {
       box.appendChild(b);
     }
     var allTypes = TYPES.map(function (t) { return t[0]; });
-    if (hasTypes && hasNoise) {
+    if (hasTypes) {
       preset("Code changes", "Code files only, noise hidden", ["code"], []);
       preset("Everything", "Every file type, noise shown", allTypes, NOISE);
       box.appendChild(el("span", "gap"));
@@ -337,17 +337,15 @@ var CD = (function () {
           docs: "Other text: notes, logs, tables, text of a kind not known", binary: "Images, libraries, archives, other binary files" }[t[0]]);
       });
     }
-    if (hasNoise) {
-      if (hasTypes) box.appendChild(el("span", "gap"));
-      box.appendChild(el("span", null, "Noise:"));
-      NOISE.forEach(function (k) {
-        chip(state.noise, k, k, {
-          stamps: "Only version-control keyword stamps changed ($Id$, $Date$, $Revision$…)",
-          numbers: "A file that isn't code where only numbers, dates or IDs changed",
-          comments: "Only comments changed",
-          whitespace: "Only whitespace changed", eol: "Only line endings changed", encoding: "Only the encoding changed (same text)" }[k]);
-      });
-    }
+    if (hasTypes) box.appendChild(el("span", "gap"));
+    box.appendChild(el("span", null, "Noise:"));
+    NOISE.forEach(function (k) {
+      chip(state.noise, k, k, {
+        stamps: "Only version-control keyword stamps changed ($Id$, $Date$, $Revision$…)",
+        numbers: "A file that isn't code where only numbers, dates or IDs changed",
+        comments: "Only comments changed",
+        whitespace: "Only whitespace changed", eol: "Only line endings changed", encoding: "Only the encoding changed (same text)" }[k]);
+    });
   }
 
   function controls() {
@@ -657,6 +655,7 @@ var CD = (function () {
     if (meta.kind === "compare3") {
       bits.push("v1 " + f.s1 + " · v2 " + f.s2);
       if (f.ck && f.ck !== "content") bits.push(f.ck); // "content" is already implied by the two sides
+      if (f.nz) bits.push("noise: " + String(f.nz).replace(/,/g, ", "));
       if (f.c !== undefined) bits.push(f.c + " conflict / " + f.cl + " clean");
     } else {
       if (f.r) bits.push(f.nz ? f.r + " (noise: " + String(f.nz).replace(/,/g, ", ") + ")" : f.r);

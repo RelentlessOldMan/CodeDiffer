@@ -77,7 +77,7 @@ reason · hunk count · ±lines. Hides identical by default (mostly noise on big
   `.vcxproj .sln .json .xml .ini` build; `.txt .md .log .csv` and any extension not known, docs), and binary when
   the bytes are (a modified file's reason) or the extension says so. A view only: it never changes a status, a
   reason or the delta contract. The summary counts the changed files by type.
-- `hide_noise` (2-way): `all`, or a comma list of `stamps · numbers · comments · whitespace · eol · encoding`,
+- `hide_noise`: `all`, or a comma list of `stamps · numbers · comments · whitespace · eol · encoding`,
   leaves out the modified files that are only that. The last three are reasons. The first three are a tag on a
   `content` change (`noise` in the result, never a reason, so the delta contract and its digest don't see it): with
   that kind taken out of both sides, and blank lines and spacing aside, the two are the same. The tag names the fewest
@@ -89,9 +89,13 @@ reason · hunk count · ±lines. Hides identical by default (mostly noise on big
     `REM` / `::`, `<!-- -->`, PowerShell `<# #>`), with a marker inside a string not taken as one. Prose, JSON
     and kinds not known have none.
 
-  It is worked out only for a pair read whole (each side up to 8 MB, the same limit as the reason's), and only for
-  2-way. A file renamed to another language isn't checked for comments. The summary has a `noise` line, and
-  `list_files` shows a file as `[content, noise: comments]`.
+  It is worked out only for a pair read whole (each side up to 8 MB, the same limit as the reason's). A file renamed
+  to another language isn't checked for comments. The summary has a `noise` line, and `list_files` shows a file as
+  `[content, noise: comments]`.
+
+  3-way, it is each side's 2-way tag: a path is noise when every side that touched it changed it only in noise (v1
+  stamps only, or both only comments that merge), and `hide_noise` leaves it out when it leaves out each side's. A
+  conflict is never noise: it needs deciding whatever it is. A side shows as `v1 content (noise: stamps)`.
 
 `get_file_diff(path, context=3, max_lines=2000)` — one file, hard cap, `"capped: summary only, N hunks
 total"` fallback for the pathological ones. Diffs inline when small, by reference (a `.patch` handle)
@@ -320,7 +324,7 @@ folders. Such a file is cached with no id (above).
 Self-contained shell + a sidecar data dir in the result store. Summary tiles; a tree view with folder
 roll-ups; **identical hidden by default**; status/reason filter toggles; file-type chips (code · build · docs ·
 binary, each with its count: a click hides or shows that type); a path filter box (text, `*.c; *.h`, `!test/**`,
-`/regex/`, as `path_glob`); noise chips (2-way: stamps · numbers · comments · whitespace · eol · encoding, as
+`/regex/`, as `path_glob`); noise chips (stamps · numbers · comments · whitespace · eol · encoding, as
 `hide_noise`: a file is hidden when all of its noise is), and two presets, **Code changes** (code files, noise hidden)
 and **Everything**. A noise file's row says so: `content (noise: stamps)`. Each file's
 diff is **loaded on expand** from the store (not embedded), so a 90 GB compare is a small page plus data

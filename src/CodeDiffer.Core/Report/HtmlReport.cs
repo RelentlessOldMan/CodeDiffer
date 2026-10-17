@@ -342,6 +342,7 @@ public static class HtmlReport
             };
             if (e.MergedPath is { } m && m != e.Path) row["f"] = Shown(e.Path);
             if (e.ConflictKind is { } k) row["ck"] = k;
+            if (e.Noise is { } nz) row["nz"] = string.Join(",", nz);
             if (e.ConflictRegions > 0 || e.Outcome == Merge3Outcome.Merged) { row["c"] = e.ConflictRegions; row["cl"] = e.CleanRegions; }
             if (e.Note is { } n) row["n"] = n;
             long size = Math.Max(Size(e.V1), Size(e.V2));

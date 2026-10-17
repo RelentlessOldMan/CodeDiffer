@@ -15,9 +15,10 @@ files over 1 GB, locally or on a network share, and every answer is bounded so t
 - **get_summary**: constant-size counts; while running, progress and the differences found so far.
 - **list_files**: the changed files, paged and filtered by status, reason, file type (`type=code` for source
   only; also build, docs, binary) or path (`path_glob="*.c;*.h;!test/**"`, `/regex/` too). `hide_noise=all`
-  (2-way) leaves out the files that changed only in version-control stamps, numbers (outside code), comments,
+  leaves out the files that changed only in version-control stamps, numbers (outside code), comments,
   whitespace, line endings or encoding; name some instead (`hide_noise=stamps,comments`). It is checked for files up
-  to 8 MB a side; a larger one is never tagged. A rename marked "not
+  to 8 MB a side; a larger one is never tagged. On compare3, a path goes when every side that touched it is noise;
+  a conflict never. A rename marked "not
   followed by compare3 or apply" is a guess (alike only in boilerplate, a trivial file, or tied with
   another file): the 3-way merge and apply treat it as a remove and an add, so an edit to it is a conflict.
 - **get_file_diff**: one file's diff (2-way) or its merge with diff3 conflict markers (3-way), capped.

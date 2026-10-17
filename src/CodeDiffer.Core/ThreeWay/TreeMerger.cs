@@ -41,6 +41,23 @@ public sealed record Merge3Entry(
 {
     /// <summary>What kind of file it is (<see cref="FileChange.Type"/>): binary when either side's bytes were found so.</summary>
     public FileType Type => FileTypes.Of(Path, V1?.Reason == ChangeReason.Binary || V2?.Reason == ChangeReason.Binary);
+
+    /// <summary>The noise the entry is only (stamps, numbers, comments, whitespace, eol, encoding: each side's, joined),
+    /// when every side that touched it changed it only that way (<see cref="NoiseFilter.Kind"/>); null when a side's
+    /// change is real, and for a conflict, which needs deciding whatever it is.</summary>
+    public IReadOnlyList<string>? Noise
+    {
+        get
+        {
+            if (Outcome == Merge3Outcome.Conflict || V1 is null && V2 is null) return null;
+            if (V1 is not null && NoiseFilter.Kind(V1) is null || V2 is not null && NoiseFilter.Kind(V2) is null) return null;
+            return [.. NoiseFilter.Tokens.Where(t => NoiseFilter.Kind(V1)?.Contains(t) == true || NoiseFilter.Kind(V2)?.Contains(t) == true)];
+        }
+    }
+
+    /// <summary>Whether <paramref name="filter"/> leaves the entry out: every side that touched it is noise it hides.</summary>
+    public bool HiddenBy(NoiseFilter filter)
+        => Noise is not null && (V1 is null || filter.Hides(V1)) && (V2 is null || filter.Hides(V2));
 }
 
 public sealed class ThreeWayReport

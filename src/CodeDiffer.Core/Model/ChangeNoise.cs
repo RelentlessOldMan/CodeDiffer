@@ -32,6 +32,16 @@ public sealed record NoiseFilter(ChangeNoise Kinds, IReadOnlySet<ChangeReason> R
     public bool Hides(FileChange c) => c.Status == ChangeStatus.Modified && c.Reason is { } r
         && (Reasons.Contains(r) || r == ChangeReason.Content && c.Noise != ChangeNoise.None && (c.Noise & ~Kinds) == ChangeNoise.None);
 
+    /// <summary>Every noise token, in the order they're listed: the kinds, then the reasons.</summary>
+    public static readonly string[] Tokens = [.. NoiseTokens.All.Select(NoiseTokens.Token), .. NoiseReasons.Select(CanonicalTokens.Token)];
+
+    /// <summary>The noise a change is only, as tokens (its kinds, or its whitespace/eol/encoding reason); null when it is
+    /// a real change (or not a modification).</summary>
+    public static string[]? Kind(FileChange? c)
+        => c is not { Status: ChangeStatus.Modified, Reason: { } r } ? null
+            : NoiseReasons.Contains(r) ? [CanonicalTokens.Token(r)]
+            : r == ChangeReason.Content && NoiseTokens.List(c.Noise) is { } l ? l.Split(',') : null;
+
     public const string Help = "all, or a comma list of stamps, numbers, comments, whitespace, eol, encoding";
 
     /// <summary>"all" or a comma list of noise kinds and noise reasons; null (hide nothing) when none is given.</summary>

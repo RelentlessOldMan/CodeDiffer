@@ -34,6 +34,11 @@ public static class ThreeWayViews
         int regions = r.Entries.Sum(e => e.ConflictRegions);
         if (regions > 0) o.Append($"conflict regions: {regions:N0} (in content/add-add conflicts)\n");
         if (r.Entries.Count > 0) o.Append($"touched by file type: {AgentViews.TypeLine(r.Entries.Select(e => e.Type))}\n");
+        var noise = r.Entries.Select(e => e.Noise).OfType<IReadOnlyList<string>>().ToList();
+        if (noise.Count > 0)
+            o.Append($"noise: {noise.Count:N0} path(s) every side changed only in " +
+                     string.Join(" · ", NoiseFilter.Tokens.Select(t => $"{t} {noise.Count(n => n.Contains(t)):N0}")) +
+                     " (list_files hide_noise=all leaves them out; conflicts never)\n");
         o.Append($"per side: v1 {SideCounts(r.V1Report)} · v2 {SideCounts(r.V2Report)}\n");
         if (r.DroppedDirectories > 0)
             o.Append($"WARNING: incomplete walk — {r.DroppedDirectories} director(ies) could not be listed" +
@@ -83,7 +88,7 @@ public static class ThreeWayViews
     /// <param name="status">changed (default: every touched path), both (agreed+merged+conflict), or a
     /// comma list of conflict, merged, agreed, v1, v2.</param>
     public static string ListFiles(Compare3Session s, string? status = null, string? pathGlob = null,
-        int page = 1, int pageSize = AgentViews.DefaultPageSize, string? type = null)
+        int page = 1, int pageSize = AgentViews.DefaultPageSize, string? type = null, string? hideNoise = null)
     {
         if (Pending(s) is { } pending) return $"compare3 {s.Id}: {pending}";
         var r = s.Report!;
@@ -91,8 +96,10 @@ public static class ThreeWayViews
         Func<string, string?, bool>? glob = null;
         if (!string.IsNullOrWhiteSpace(pathGlob) && !AgentViews.TryPathFilter(pathGlob, out glob, out err)) return $"error: {err}\n";
         if (!AgentViews.TryTypes(type, out var types, out err)) return $"error: {err}\n";
+        if (!NoiseFilter.TryParse(hideNoise, out var noise, out err)) return $"error: {err}\n";
         var match = r.Entries.Where(e => want.Contains(e.Outcome)
             && (types is null || types.Contains(e.Type))
+            && (noise is null || !e.HiddenBy(noise))
             && (glob is null || glob(e.Path, e.MergedPath))).ToList();
 
         pageSize = Math.Clamp(pageSize, 1, AgentViews.MaxPageSize);
@@ -225,7 +232,7 @@ public static class ThreeWayViews
             ChangeStatus.Added => "added",
             ChangeStatus.Removed => "deleted",
             ChangeStatus.Renamed => $"renamed->{c.RelativePath}",
-            _ => c.ReasonLabel ?? "modified",
+            _ => (c.ReasonLabel ?? "modified") + (c.NoiseLabel is { } nz ? $" (noise: {nz})" : ""),
         };
         var o = new StringBuilder($"{tag} {e.Path}  [v1 {Side(e.V1)} · v2 {Side(e.V2)}]");
         if (e.Outcome == Merge3Outcome.Conflict) o.Append($"  {e.ConflictKind}");
