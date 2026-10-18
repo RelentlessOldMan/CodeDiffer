@@ -373,7 +373,7 @@ public static class ChangePorter
         bool reencode = a.Kind != b.Kind && t.Kind == a.Kind; // the change's re-encoding, not yet in the target
         bool nothing = hunks.All(h => h.Outcome == HunkOutcome.Already) && c.Status != ChangeStatus.Renamed && !reencode && !converts;
         if (nothing)
-            return (new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Already, "none", hunks, null), null);
+            return (new PortFile(c.RelativePath, c.RenamedFrom, PortStatus.Already, "none", hunks, stamps ? StampsResolved : null), null);
 
         var text = merged.ToString();
         if (normalize && outEol == "CRLF") text = text.Replace("\n", "\r\n");

@@ -270,6 +270,17 @@ public class NoiseTests : IDisposable
         var again = ChangePorter.Run(report, l, r, c, write: false, resolveStamps: true).Files.ToDictionary(x => x.Path);
         Assert.Equal(PortStatus.Already, again["a.c"].Status);
         Assert.Equal(PortStatus.Already, again["d.c"].Status);
+        // A file whose only change was a stamp the target changed too: nothing to apply, and still said.
+        Put("L/s.c", "// $Id: s.c 1 $\nint s;\n");
+        Put("R/s.c", "// $Id: s.c 2 $\nint s;\n");
+        Put("C/s.c", "// $Id: s.c 9 $\nint s;\n");
+        report = new DirectoryComparer(new CompareOptions { Cache = CacheMode.Off }).Compare(l, r);
+        var run = ChangePorter.Run(report, l, r, c, write: false, resolveStamps: true);
+        var s = run.Files.Single(x => x.Path == "s.c");
+        Assert.Equal(PortStatus.Already, s.Status);
+        Assert.Equal(ChangePorter.StampsResolved, s.Note);
+        Assert.Contains("stamps resolved: 3 file(s) where only keyword stamps collided · 0 would apply · 3 already there",
+            AgentViews.PortText(run, "test", null));
     }
 
     [Fact]

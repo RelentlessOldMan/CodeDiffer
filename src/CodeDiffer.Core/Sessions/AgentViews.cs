@@ -568,6 +568,11 @@ public static class AgentViews
             o.Append("  every file written is whole; the rest are untouched — run the same apply again to finish (what is done comes out \"already\")\n");
         o.Append($"hunks: {r.Count(HunkOutcome.Applied):N0} applied · {r.Count(HunkOutcome.Fuzzy):N0} fuzzy (shifted) · " +
                  $"{r.Count(HunkOutcome.Already):N0} already · {r.Count(HunkOutcome.Conflict):N0} conflict\n");
+        var stamped = r.Files.Where(f => f.Note?.StartsWith(ChangePorter.StampsResolved, StringComparison.Ordinal) == true).ToList();
+        if (stamped.Count > 0)
+            o.Append($"stamps resolved: {stamped.Count:N0} file(s) where only keyword stamps collided · " +
+                     $"{stamped.Count(f => f.Status == PortStatus.Clean):N0} {(r.Written ? "written" : "would apply")} · " +
+                     $"{stamped.Count(f => f.Status == PortStatus.Already):N0} already there (the target's stamps kept)\n");
 
         var conflicts = r.Files.Where(f => f.Status == PortStatus.Conflict).ToList();
         var fuzzy = r.Files.Where(f => f.Status == PortStatus.Clean && f.Hunks.Any(h => h.Outcome == HunkOutcome.Fuzzy)).ToList();
