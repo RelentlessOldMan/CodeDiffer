@@ -170,6 +170,7 @@ static int Compare(string[] args)
     info.WriteLine($"  elapsed    {ProgressView.Clock(session.Elapsed)}  (threads {options.Parallelism}, cache {options.CacheLabel})");
     info.WriteLine($"  content    {report.ComparedPairs} same-size pair(s) · {report.CacheHits} side(s) from hash cache" +
         (report.CodeCompassHits > 0 ? $" ({report.CodeCompassHits} via CodeCompass)" : "") +
+        (report.VerdictHits > 0 ? $" · {report.VerdictHits} modified pair(s) classified before" : "") +
         $" · {report.BytesRead / (1024.0 * 1024 * 1024):F1} GB read" +
         (report.PendingFiles > 0 ? $" · {report.PendingFiles} too recently modified to cache yet" : ""));
     foreach (var n in AgentViews.Notes(report)) Console.Error.WriteLine("note: " + n);

@@ -146,6 +146,10 @@ public sealed class DirectoryComparer
             sharedLeft?.StartedUtcTicks ?? 0);
         var rightCache = HashCache.Open(right, _options.CacheFor(right), _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing);
         var guard = new ShareGuard([left, right], _options, progress);
+        // A modified pair's verdict, by both sides' content: trusted only when both ledgers are (a rehash re-classifies).
+        bool trustVerdicts = _options.CacheFor(left) == CacheMode.On && _options.CacheFor(right) == CacheMode.On;
+        var verdictStore = VerdictStore.Open(_options.CacheBaseDir, _options.MaxClassifyBytes, lookup: trustVerdicts,
+            off: _options.Cache == CacheMode.Off);
         long bytesRead = 0;
         int retriedAtEnd = 0;
 
@@ -222,7 +226,7 @@ public sealed class DirectoryComparer
             Parallel.For(0, sizeChanged.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism, CancellationToken = ct }, i =>
             {
                 var (le, re) = (leftFiles[sizeChanged[i].L], rightFiles[sizeChanged[i].R]);
-                try { classified[i] = guard.Run(le.FullPath, () => Modified(classifier, le, re, ct), ct); }
+                try { classified[i] = guard.Run(le.FullPath, () => Resized(le, re), ct); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     classified[i] = Unknown(le, re, ex); // modified for sure; why is unknown
@@ -230,6 +234,24 @@ public sealed class DirectoryComparer
                 progress?.Add(classified[i]);
             });
             changes.AddRange(classified);
+
+            // A size-changed pair: its verdict from the store when both sides' content is known (the ledgers, or a
+            // small file hashed now so the next run can find it), else classified from the bytes.
+            FileChange Resized(FileEntry le, FileEntry re)
+            {
+                // A rehash reads what it reads anyway (a size-changed file isn't hashed): nothing to look up, nothing to key.
+                if (verdictStore is null || !trustVerdicts) return Modified(classifier, le, re, null, null, null, ct);
+                ContentId? Id(FileEntry e, HashCache cache)
+                {
+                    if (cache.TryGet(e, out var id, count: false)) return id;
+                    if (e.Length > _options.MaxClassifyBytes) return null; // a big file is only read in part to classify
+                    var h = PairComparer.HashAsync(e, ct).GetAwaiter().GetResult();
+                    cache.Record(e, h);
+                    Interlocked.Add(ref bytesRead, e.Length);
+                    return h.Stable ? new ContentId(h.XxHash128, h.Sha256) : null;
+                }
+                return Modified(classifier, le, re, Id(le, leftCache), Id(re, rightCache), verdictStore, ct);
+            }
 
             // Same-size pairs: the only place bytes cross the wire. Biggest first so a 1.5 GB header starts
             // early instead of becoming the lone straggler at the end (top 2% of files ≈ 80% of the bytes).
@@ -287,6 +309,7 @@ public sealed class DirectoryComparer
                 bool hasL = shared || leftCache.TryGet(le, out cl);
                 bool hasR = rightCache.TryGet(re, out var cr);
                 ContentId? provenL = hasL ? cl : null; // the left id this run established, passed on via shareIds
+                ContentId? idR = hasR ? cr : null;
                 bool? cached = hasL && hasR ? ContentId.Same(cl, cr) : null;
                 if (cached is { } same)
                 {
@@ -307,6 +330,7 @@ public sealed class DirectoryComparer
                     cache.Record(e, h);
                     equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
                     if (!hasL && h.Stable) provenL = new ContentId(h.XxHash128, h.Sha256);
+                    if (!hasR && h.Stable) idR = new ContentId(h.XxHash128, h.Sha256);
                     read = e.Length;
                 }
                 else
@@ -318,6 +342,7 @@ public sealed class DirectoryComparer
                     equal = r.Equal;
                     (readL, readR) = (r.LeftBytes, r.RightBytes);
                     if (r.Left!.Stable) provenL = new ContentId(r.Left.XxHash128, r.Left.Sha256);
+                    if (r.Right!.Stable) idR = new ContentId(r.Right.XxHash128, r.Right.Sha256);
                     read = 2 * le.Length;
                 }
                 if (shareIds is not null && provenL is { } id) shareIds[le.RelativePath] = id;
@@ -325,10 +350,17 @@ public sealed class DirectoryComparer
                 var verdict = equal
                     ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
                     : readL is not null && readR is not null
-                        ? new FileChange(le.RelativePath, ChangeStatus.Modified, classifier.Classify(le.FullPath, readL, re.FullPath, readR, out var noise, ct),
-                            le.Length, re.Length, Noise: noise)
-                        : Modified(classifier, le, re, ct);
+                        ? FromBytes(le, readL, re, readR, provenL, idR)
+                        : Modified(classifier, le, re, provenL, idR, verdictStore, ct);
                 return (verdict, hasL, hasR);
+            }
+
+            // A small differing pair just read whole: classified from those bytes, and remembered.
+            FileChange FromBytes(FileEntry le, byte[] readL, FileEntry re, byte[] readR, ContentId? idL, ContentId? idR)
+            {
+                var reason = classifier.Classify(le.FullPath, readL, re.FullPath, readR, out var noise, ct);
+                if (idL is { } l && idR is { } r) verdictStore?.Record(l, le.RelativePath, r, re.RelativePath, reason, noise);
+                return new FileChange(le.RelativePath, ChangeStatus.Modified, reason, le.Length, re.Length, Noise: noise);
             }
 
             Phase("same-size content");
@@ -344,7 +376,7 @@ public sealed class DirectoryComparer
             // Keep what was read: every hash recorded so far goes into the ledgers, so re-running a cancelled (or
             // failed) cold compare only reads what this one didn't get to.
             checkpoint?.Stop();
-            try { leftCache.Save(lw.Files, finished: false); rightCache.Save(rw.Files, finished: false); }
+            try { leftCache.Save(lw.Files, finished: false); rightCache.Save(rw.Files, finished: false); verdictStore?.Save(); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             throw;
         }
@@ -361,6 +393,9 @@ public sealed class DirectoryComparer
             rightCache.Save(rw.Files);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { saveError = ex.Message; }
+        // Only a shortcut: one that can't be saved costs the next run a re-read of the modified files, no more.
+        try { verdictStore?.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         Phase("ledger save");
         progress?.SetPhase(ComparePhase.Done);
 
@@ -372,6 +407,7 @@ public sealed class DirectoryComparer
             CacheSaveError = saveError,
             RenameLimit = renameLimit,
             CacheHits = leftCache.Hits + rightCache.Hits,
+            VerdictHits = verdictStore?.Hits ?? 0,
             CodeCompassHits = leftCache.CodeCompassHits + rightCache.CodeCompassHits,
             ReusedLeftFiles = reusedFiles,
             UnstableFiles = Unstable(leftCache, rightCache, null),
@@ -445,10 +481,19 @@ public sealed class DirectoryComparer
 
     /// <summary>A pair the listing says changed size: modified, with its reason — or identical, when the bytes say a
     /// directory entry's size was stale.</summary>
-    private static FileChange Modified(ReasonClassifier classifier, FileEntry le, FileEntry re, CancellationToken ct)
-        => classifier.ClassifyResized(le.FullPath, le.Length, re.FullPath, re.Length, out long same, out var noise, ct) is { } reason
-            ? new(le.RelativePath, ChangeStatus.Modified, reason, le.Length, re.Length, Noise: noise)
-            : new(le.RelativePath, ChangeStatus.Identical, null, same, same);
+    /// <summary>A pair the listing or the ledgers say differs: its verdict from <paramref name="verdicts"/> when both
+    /// sides' content is known and was classified before, else from the bytes (and then remembered).</summary>
+    private static FileChange Modified(ReasonClassifier classifier, FileEntry le, FileEntry re, ContentId? idL, ContentId? idR,
+        VerdictStore? verdicts, CancellationToken ct)
+    {
+        bool known = verdicts is not null && idL is not null && idR is not null;
+        if (known && verdicts!.TryGet(idL!.Value, le.RelativePath, idR!.Value, re.RelativePath, out var was, out var wasNoise))
+            return new(le.RelativePath, ChangeStatus.Modified, was, le.Length, re.Length, Noise: wasNoise);
+        if (classifier.ClassifyResized(le.FullPath, le.Length, re.FullPath, re.Length, out long same, out var noise, ct) is not { } reason)
+            return new(le.RelativePath, ChangeStatus.Identical, null, same, same);
+        if (known) verdicts!.Record(idL!.Value, le.RelativePath, idR!.Value, re.RelativePath, reason, noise);
+        return new(le.RelativePath, ChangeStatus.Modified, reason, le.Length, re.Length, Noise: noise);
+    }
 
     /// <summary>A pair that could not be read: modified with no reason, and why.</summary>
     private static FileChange Unknown(FileEntry le, FileEntry re, Exception ex)

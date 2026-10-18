@@ -173,8 +173,9 @@ public sealed class HashCache
         return new HashCache(mode, strict, ownDir, own, cc, prefix, t) { _ownOnDiskAsLoaded = asLoaded };
     }
 
-    /// <summary>The trusted cached content id for this walked file, or false (⇒ read it).</summary>
-    public bool TryGet(FileEntry e, out ContentId id)
+    /// <summary>The trusted cached content id for this walked file, or false (⇒ read it). <paramref name="count"/> false:
+    /// a lookup that saves no read of its own (a size-changed file's id, for its verdict), not one of <see cref="Hits"/>.</summary>
+    public bool TryGet(FileEntry e, out ContentId id, bool count = true)
     {
         id = default;
         if (_mode != CacheMode.On) return false;
@@ -193,9 +194,9 @@ public sealed class HashCache
         {
             _fresh[e.RelativePath] = c; // carry into our own ledger
             Interlocked.Increment(ref _recorded);
-            Interlocked.Increment(ref _ccHits);
+            if (count) Interlocked.Increment(ref _ccHits);
         }
-        Interlocked.Increment(ref _hits);
+        if (count) Interlocked.Increment(ref _hits);
         return true;
     }
 
@@ -331,7 +332,7 @@ public sealed class HashCache
         return (null, "");
     }
 
-    private static string DefaultBaseDir(string envVar, string name)
+    internal static string DefaultBaseDir(string envVar, string name)
         => Environment.GetEnvironmentVariable(envVar) is { Length: > 0 } o
             ? o
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), name);

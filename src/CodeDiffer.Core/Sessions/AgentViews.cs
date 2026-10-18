@@ -171,6 +171,7 @@ public static class AgentViews
 
         o.Append($"read cost: {r.ComparedPairs:N0} same-size pair(s) · {r.CacheHits:N0} side(s) from hash cache" +
                  (r.CodeCompassHits > 0 ? $" ({r.CodeCompassHits:N0} via CodeCompass)" : "") +
+                 (r.VerdictHits > 0 ? $" · {r.VerdictHits:N0} modified pair(s) classified before" : "") +
                  (r.PendingFiles > 0 ? $" · {r.PendingFiles:N0} too recently modified to cache yet" : "") +
                  $" · {Bytes(r.BytesRead)} read · {Clock(s.Elapsed)} · threads {s.Options.Parallelism} · cache {s.Options.CacheLabel}\n");
         if (r.Timings.Count > 0)
