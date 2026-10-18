@@ -291,7 +291,7 @@ var CD = (function () {
 
   // File type chips (code · build · docs · binary) and noise chips, each with its listed count: a click shows or hides
   // those files. A noise file is hidden only when all of its kinds are (3-way: a path every side changed only in noise;
-  // a conflict never). Two presets set them all at once.
+  // a conflict never, but a "stamps" one whose sides changed only stamps). Two presets set them all at once.
   function types() {
     var box = $("types"), n = {}, chips = [];
     TYPES.forEach(function (t) { n[t[0]] = 0; state.types.add(t[0]); });

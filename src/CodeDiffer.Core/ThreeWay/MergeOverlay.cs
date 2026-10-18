@@ -113,7 +113,7 @@ public static class MergeOverlay
                     writes.Add((e.MergedPath!, whole, e, inV1 != e.MergedPath ? inV1 : null));
                     break;
                 default:
-                    if (e.ConflictKind is "content" or "add/add" && e.MergedPath is not null)
+                    if (TreeMerger.HasMarkers(e.ConflictKind) && e.MergedPath is not null)
                     {
                         writes.Add((e.MergedPath, Kind.Markers, e, inV1 != e.MergedPath ? inV1 : null));
                     }

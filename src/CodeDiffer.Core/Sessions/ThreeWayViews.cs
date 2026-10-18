@@ -32,7 +32,7 @@ public static class ThreeWayViews
         if (kinds.Count > 0) o.Append("    ").Append(string.Join(" · ", kinds));
         o.Append('\n');
         int regions = r.Entries.Sum(e => e.ConflictRegions);
-        if (regions > 0) o.Append($"conflict regions: {regions:N0} (in content/add-add conflicts)\n");
+        if (regions > 0) o.Append($"conflict regions: {regions:N0} (in content, add/add and stamps conflicts)\n");
         if (r.Entries.Count > 0) o.Append($"touched by file type: {AgentViews.TypeLine(r.Entries.Select(e => e.Type))}\n");
         var noise = r.Entries.Select(e => e.Noise).OfType<IReadOnlyList<string>>().ToList();
         if (noise.Count > 0)

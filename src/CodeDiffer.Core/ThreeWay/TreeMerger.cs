@@ -44,12 +44,13 @@ public sealed record Merge3Entry(
 
     /// <summary>The noise the entry is only (stamps, numbers, comments, whitespace, eol, encoding: each side's, joined),
     /// when every side that touched it changed it only that way (<see cref="NoiseFilter.Kind"/>); null when a side's
-    /// change is real, and for a conflict, which needs deciding whatever it is.</summary>
+    /// change is real, and for a conflict, which needs deciding whatever it is — but a "stamps" one (only keyword stamps
+    /// collide), whose sides changed nothing else, is noise.</summary>
     public IReadOnlyList<string>? Noise
     {
         get
         {
-            if (Outcome == Merge3Outcome.Conflict || V1 is null && V2 is null) return null;
+            if (Outcome == Merge3Outcome.Conflict && ConflictKind != TreeMerger.StampsConflict || V1 is null && V2 is null) return null;
             if (V1 is not null && NoiseFilter.Kind(V1) is null || V2 is not null && NoiseFilter.Kind(V2) is null) return null;
             return [.. NoiseFilter.Tokens.Where(t => NoiseFilter.Kind(V1)?.Contains(t) == true || NoiseFilter.Kind(V2)?.Contains(t) == true)];
         }
@@ -181,6 +182,13 @@ public static class TreeMerger
             : c2 is { Status: ChangeStatus.Renamed, PureRename: true } && c1.Status == ChangeStatus.Modified ? 1
             : c1 is { Status: ChangeStatus.Renamed, PureRename: true } && c2.Status == ChangeStatus.Modified ? 2 : 0;
 
+    /// <summary>The conflict kind of a text file whose colliding lines differ only in keyword stamps (<c>$Id: … $</c>): with
+    /// the stamps bare, it merges cleanly. Still a conflict (someone picks a stamp), written with markers like "content".</summary>
+    public const string StampsConflict = "stamps";
+
+    /// <summary>The conflict kinds written as one file with diff3 markers.</summary>
+    internal static bool HasMarkers(string? kind) => kind is "content" or "add/add" or StampsConflict;
+
     /// <summary>How destination paths are told apart: ignoring case where the file system does.</summary>
     internal static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
@@ -285,12 +293,25 @@ public static class TreeMerger
         // Conflicting lines are written with markers; a conflict in the encoding or line endings too must not vanish
         // behind them — the note says so, and that the markers file is written in v1's form.
         if (conflicts > 0)
-            return new(path, c1, c2, Merge3Outcome.Conflict, added ? "add/add" : "content", conflicts, clean, dest,
-                form.Conflict is { } also ? $"{also} conflict too ({form.Note}): the markers file is written in v1's" : form.Note);
+        {
+            var ck = OnlyStampsCollide(lb, l1, l2, ct) ? StampsConflict : added ? "add/add" : "content";
+            var why = ck == StampsConflict ? "only keyword stamps collide; the rest merges cleanly" : null;
+            var also = form.Conflict is { } more ? $"{more} conflict too ({form.Note}): the markers file is written in v1's" : form.Note;
+            return new(path, c1, c2, Merge3Outcome.Conflict, ck, conflicts, clean, dest, why is null ? also : also is null ? why : $"{why}; {also}");
+        }
         // The lines merge, but both sides changed the encoding or the line endings differently: someone has to pick.
         if (form.Conflict is { } kind)
             return new(path, c1, c2, Merge3Outcome.Conflict, kind, 0, clean, dest, form.Note);
         return new(path, c1, c2, Merge3Outcome.Merged, null, 0, clean, dest, form.Note);
+    }
+
+    /// <summary>Whether a merge that conflicts merges cleanly once each keyword stamp is bare (<c>$Id$</c>).</summary>
+    private static bool OnlyStampsCollide(List<string> lb, List<string> l1, List<string> l2, CancellationToken ct)
+    {
+        static bool Any(List<string> l) => l.Exists(s => s.Contains('$'));
+        if (!Any(l1) && !Any(l2)) return false;
+        static List<string> Bare(List<string> l) => l.ConvertAll(NoiseFinder.Stamps);
+        return !ThreeWayMerger.Regions(Bare(lb), Bare(l1), Bare(l2), ct).Any(r => r.Kind == RegionKind.Conflict);
     }
 
     /// <summary>
@@ -335,7 +356,7 @@ public static class TreeMerger
     private static (List<string> Base, string Merged, Form Form, int Conflicts)? Compose(Merge3Entry e, string b, string v1, string v2,
         CancellationToken ct)
     {
-        if (e.V1 is null || e.V2 is null || e.ConflictKind is not (null or "content" or "add/add") || e.Outcome == Merge3Outcome.Agreed) return null;
+        if (e.V1 is null || e.V2 is null || !(e.ConflictKind is null || HasMarkers(e.ConflictKind)) || e.Outcome == Merge3Outcome.Agreed) return null;
         ct.ThrowIfCancellationRequested(); // before three files are read whole
         // Taken whole from one side (it may be binary or large): no line merge to show, and the file is never read whole.
         if (e.Outcome == Merge3Outcome.Merged && e.CleanRegions == 0 && e.ConflictRegions == 0 && WholeFrom(e.V1, e.V2) != 0) return null;

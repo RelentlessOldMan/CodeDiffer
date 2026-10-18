@@ -18,7 +18,7 @@ files over 1 GB, locally or on a network share, and every answer is bounded so t
   leaves out the files that changed only in version-control stamps, numbers (outside code), comments,
   whitespace, line endings or encoding; name some instead (`hide_noise=stamps,comments`). It is checked for files up
   to 8 MB a side; a larger one is never tagged. On compare3, a path goes when every side that touched it is noise;
-  a conflict never. A rename marked "not
+  a conflict never, except a "stamps" one (only keyword stamps collide) whose sides changed only stamps. A rename marked "not
   followed by compare3 or apply" is a guess (alike only in boilerplate, a trivial file, or tied with
   another file): the 3-way merge and apply treat it as a remove and an add, so an edit to it is a conflict.
 - **get_file_diff**: one file's diff (2-way) or its merge with diff3 conflict markers (3-way), capped.

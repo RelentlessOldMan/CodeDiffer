@@ -45,7 +45,7 @@ public static class CodeDifferTools
     [McpServerTool(Name = "start_compare3")]
     [Description("3-way compare: two variants (v1, v2) of a common base. Classifies every path either side touched: " +
                  "v1 only, v2 only, agreed (identical change), merged (both changed, merges cleanly) or conflict " +
-                 "(content, modify/delete, add/add, rename/rename...). Background, returns a compare_id like start_compare.")]
+                 "(content, stamps, modify/delete, add/add, rename/rename...). Background, returns a compare_id like start_compare.")]
     public static async Task<string> StartCompare3(
         [Description("The common base directory.")] string @base,
         [Description("First variant directory.")] string v1,
@@ -96,7 +96,7 @@ public static class CodeDifferTools
         [Description("File types to list, a comma list: code, build (projects, makefiles, config), docs (other text), binary.")] string? type = null,
         [Description("Noise to leave out: all, or a comma list of stamps (version-control $Id$/$Date$ keywords), numbers " +
                      "(numbers, dates, IDs in a non-code file), comments, whitespace, eol, encoding. A file goes only when all its noise is " +
-                     "left out; 3-way, a path goes when every side that touched it is (a conflict never). type=code with " +
+                     "left out; 3-way, a path goes when every side that touched it is (a conflict never, but a stamps one whose sides only stamped it). type=code with " +
                      "hide_noise=all lists the real code changes.")] string? hide_noise = null,
         [Description("2-way only: files with this reason (modified, or renamed and edited): content, eol, whitespace, encoding, " +
                      "binary, metadata; or unreadable: the files of any status that couldn't be read.")] string? reason = null,

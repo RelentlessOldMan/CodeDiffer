@@ -64,7 +64,9 @@ public static class NoiseFinder
     public static string Stamps(string text) => text.Contains('$') ? Stamp.Replace(text, "$$$1$$") : text;
 
     /// <summary>Each number, date, time, version or ID (a word with a digit in it, and any more such words it is joined to
-    /// by one <c>. : / -</c>) as <c>#</c>.</summary>
+    /// by one <c>. : / -</c>) as <c>#</c>, followed by the letters of its words that aren't hex: <c>v1.2.3</c> is <c>#v</c>,
+    /// an ID <c>7f3a9c2</c> is <c>#</c>, and <c>agent07</c> is <c>#agent</c> — so a word swapped for another
+    /// (<c>agent07</c> → <c>robot07</c>) is a change, not a number.</summary>
     public static string Numbers(string text)
     {
         var o = new StringBuilder(text.Length);
@@ -82,6 +84,14 @@ public static class NoiseFinder
                 end = next;
             }
             o.Append('#');
+            for (int s = i; s < end; s++)
+            {
+                int e = WordEnd(text, s);
+                if (!AllHex(text, s, e))
+                    for (int k = s; k < e; k++)
+                        if (text[k] is not (>= '0' and <= '9')) o.Append(text[k]);
+                s = e; // then past its one separator
+            }
             i = end;
         }
         return o.ToString();
@@ -100,6 +110,13 @@ public static class NoiseFinder
         for (int i = from; i < to; i++)
             if (s[i] is >= '0' and <= '9') return true;
         return false;
+    }
+
+    private static bool AllHex(string s, int from, int to)
+    {
+        for (int i = from; i < to; i++)
+            if (!char.IsAsciiHexDigit(s[i])) return false;
+        return true;
     }
 
     private static string DropBlankLines(string text)

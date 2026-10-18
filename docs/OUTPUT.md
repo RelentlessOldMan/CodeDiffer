@@ -84,7 +84,8 @@ reason · hunk count · ±lines. Hides identical by default (mostly noise on big
   kinds that make them so: `stamps,comments` is a file hidden only when both are.
   - **stamps**: RCS / CVS / Subversion / Perforce keywords (`$Id: … $`, `$Revision: 7 $`, `$Date$`), expanded or not.
   - **numbers**: a word with a digit in it, and any joined to it by `. : / -` (a build number, a date, a time, a
-    version, a hash), in a file that isn't code. In code, a changed number is a real change.
+    version, a hash), in a file that isn't code. Only the digits are the number: the letters of a word in it (but a
+    hex ID's) still count, so `agent07` → `agent12` is numbers and `agent07` → `robot07` a real change. In code, a changed number is a real change.
   - **comments**: by the file's language, from its name or extension (C-like `//` `/* */`, `#`, `--`, `;`, `%`, `'`,
     `REM` / `::`, `<!-- -->`, PowerShell `<# #>`), with a marker inside a string not taken as one. Prose, JSON
     and kinds not known have none.
@@ -95,7 +96,8 @@ reason · hunk count · ±lines. Hides identical by default (mostly noise on big
 
   3-way, it is each side's 2-way tag: a path is noise when every side that touched it changed it only in noise (v1
   stamps only, or both only comments that merge), and `hide_noise` leaves it out when it leaves out each side's. A
-  conflict is never noise: it needs deciding whatever it is. A side shows as `v1 content (noise: stamps)`.
+  conflict is never noise (it needs deciding whatever it is), but a `stamps` conflict whose sides changed only
+  stamps is. A side shows as `v1 content (noise: stamps)`.
 
 `get_file_diff(path, context=3, max_lines=2000)` — one file, hard cap, `"capped: summary only, N hunks
 total"` fallback for the pathological ones. Diffs inline when small, by reference (a `.patch` handle)
@@ -214,8 +216,9 @@ their text, it is skipped and a note says so — those files are listed as added
 `start_compare3(base, v1, v2)` (CLI `compare3`): base→v1 then base→v2, sequential, and the second reuses
 the first's base listing and the base hashes it proved (no re-listing, no re-reading, not even a per-file
 stat of the base; both compares judge the same snapshot of it), then every touched path is
-v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content, modify/delete,
-add/add, rename/rename, path collision, file/directory clash (one side has a file where the other has a
+v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content, stamps (a content conflict whose colliding lines
+differ only in version-control keyword stamps, `$Id: … $`: with the stamps bare it merges cleanly; written with
+markers, a stamp to pick), modify/delete, add/add, rename/rename, path collision, file/directory clash (one side has a file where the other has a
 directory: v2 turns `D/` into a file `D` while v1 adds `D/z.txt`), binary, large (a side over the text limit, or
 the base when both sides cut a large file down: no file that big is read whole to merge it), behind a link and
 unopenable name (whether the path changed is unknown: never merged). Both sides cutting (or adding) copies of a run

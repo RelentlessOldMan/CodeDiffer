@@ -52,6 +52,11 @@ public class NoiseTests : IDisposable
         Assert.Equal(ChangeNoise.Numbers, Find("cfg/app.json", "{ \"build\": 41 }\n", "{ \"build\": 42 }\n"));
         Assert.Equal(ChangeNoise.None, Find("src/a.c", "int n = 1;\n", "int n = 2;\n"));
         Assert.Equal(ChangeNoise.None, Find("docs/notes.txt", "built by sam 101\n", "built by kim 101\n"));
+        // A word with a digit in it is a number only in its digits: a word swapped beside them is a change.
+        Assert.Equal(ChangeNoise.Numbers, Find("cfg/ws.txt", "out D:/ws/agent07/bin\n", "out D:/ws/agent12/bin\n"));
+        Assert.Equal(ChangeNoise.None, Find("cfg/ws.txt", "out D:/ws/agent07/bin\n", "out D:/ws/robot07/bin\n"));
+        Assert.Equal(ChangeNoise.None, Find("cfg/ws.txt", "path=build2/x64-ship\n", "path=build2/x64-test\n"));
+        Assert.Equal(ChangeNoise.None, Find("cfg/ws.txt", "root lane7.main\n", "root lane7.side\n"));
     }
 
     [Theory]
@@ -154,6 +159,50 @@ public class NoiseTests : IDisposable
         Assert.Contains("2 file(s) match", AgentViews.ListFiles(back, hideNoise: "stamps, eol"));   // c.c, build.txt
         Assert.Contains("1 file(s) match", AgentViews.ListFiles(back, type: "code", hideNoise: "all"));
         Assert.StartsWith("error: unknown noise 'x'", AgentViews.ListFiles(back, hideNoise: "x"));
+    }
+
+    [Fact]
+    public void ThreeWay_AConflictOnlyInStamps_IsKindStamps()
+    {
+        // Both stamp the header, and each makes a real change far from it: only the stamps collide.
+        Put("B/src/a.c", "/* $Revision: 1 $ */\nint a;\nint b;\nint c;\nint d;\nint e;\n");
+        Put("V1/src/a.c", "/* $Revision: 2 $ */\nint a;\nint b = 1;\nint c;\nint d;\nint e;\n");
+        Put("V2/src/a.c", "/* $Revision: 3 $ */\nint a;\nint b;\nint c;\nint d;\nint e = 2;\n");
+        // Both only stamp it: a stamps conflict that is noise.
+        Put("B/src/b.c", "// $Id: b.c 1 $\nint b;\n");
+        Put("V1/src/b.c", "// $Id: b.c 2 sam $\nint b;\n");
+        Put("V2/src/b.c", "// $Id: b.c 3 kim $\nint b;\n");
+        // The stamp line also changed beyond its stamp: a content conflict.
+        Put("B/src/c.c", "// $Revision: 1 $ old\nint c;\n");
+        Put("V1/src/c.c", "// $Revision: 2 $ new\nint c;\n");
+        Put("V2/src/c.c", "// $Revision: 3 $ other\nint c;\n");
+
+        var s = new SessionStore(resultsRoot: Path.Combine(_dir, "results"))
+            .Start3(Path.Combine(_dir, "B"), Path.Combine(_dir, "V1"), Path.Combine(_dir, "V2"), new CompareOptions { Cache = CacheMode.Off });
+        Assert.True(s.Wait(TimeSpan.FromSeconds(60)));
+        Assert.Null(s.Error);
+        var e = s.Report!.Entries.ToDictionary(x => x.Path);
+        Assert.All(e.Values, x => Assert.Equal(Merge3Outcome.Conflict, x.Outcome));
+        Assert.Equal("stamps", e["src/a.c"].ConflictKind);
+        Assert.Equal(1, e["src/a.c"].ConflictRegions);
+        Assert.Contains("only keyword stamps collide", e["src/a.c"].Note);
+        Assert.Null(e["src/a.c"].Noise);                                   // real changes beside: not noise
+        Assert.Equal("stamps", e["src/b.c"].ConflictKind);
+        Assert.Equal(["stamps"], e["src/b.c"].Noise);
+        Assert.Equal("content", e["src/c.c"].ConflictKind);
+        Assert.Null(e["src/c.c"].Noise);
+
+        Assert.Contains("CONFLICT         3    stamps 2 · content 1", ThreeWayViews.Summary(s));
+        Assert.Contains("2 path(s) match", ThreeWayViews.ListFiles(s, hideNoise: "stamps"));
+        // Written with markers, like a content conflict.
+        var merged = TreeMerger.MergedText(e["src/a.c"], Path.Combine(_dir, "B"), Path.Combine(_dir, "V1"), Path.Combine(_dir, "V2"))!;
+        Assert.Contains("<<<<<<< v1", merged);
+        Assert.Contains("int b = 1;", merged);
+        Assert.Contains("int e = 2;", merged);
+
+        // Saved and read back with its kind, so it stays noise.
+        var back = Assert.IsType<Compare3Session>(new SessionStore(resultsRoot: Path.Combine(_dir, "results")).Get(s.Id));
+        Assert.Equal(["stamps"], back.Report!.Entries.Single(x => x.Path == "src/b.c").Noise);
     }
 
     [Fact]
