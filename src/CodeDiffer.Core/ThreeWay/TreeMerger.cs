@@ -122,7 +122,7 @@ public static class TreeMerger
             side2.TryGetValue(k, out var c2);
             try
             {
-                var e = Classify(k.Path, c1, c2, baseDir, v1Dir, v2Dir, opt.MaxClassifyBytes, ct);
+                var e = Classify(k.Path, c1, c2, baseDir, v1Dir, v2Dir, opt.MaxClassifyBytes, opt.ResolveStamps, ct);
                 // A held rename, merged as its remove and its add: the entry says why it wasn't followed.
                 var held = (c1?.RenameHeld is { } h1 ? $"v1: {h1}" : null) is { } n1 && c2?.RenameHeld is { } h2 ? $"{n1}; v2: {h2}"
                          : c1?.RenameHeld is { } only1 ? $"v1: {only1}" : c2?.RenameHeld is { } only2 ? $"v2: {only2}" : null;
@@ -219,7 +219,8 @@ public static class TreeMerger
         return e.V1 is null ? e.Path : e.V1.Status == ChangeStatus.Removed ? null : e.V1.RelativePath;
     }
 
-    private static Merge3Entry Classify(string path, FileChange? c1, FileChange? c2, string b, string v1, string v2, long maxText, CancellationToken ct)
+    private static Merge3Entry Classify(string path, FileChange? c1, FileChange? c2, string b, string v1, string v2, long maxText,
+        bool resolveStamps, CancellationToken ct)
     {
         // Behind a link one tree has in its place (not followed), under a directory one tree could not list, or a name
         // Windows can't open by path: whether it changed there is unknown — never merged.
@@ -294,7 +295,10 @@ public static class TreeMerger
         // behind them — the note says so, and that the markers file is written in v1's form.
         if (conflicts > 0)
         {
-            var ck = OnlyStampsCollide(lb, l1, l2, ct) ? StampsConflict : added ? "add/add" : "content";
+            var bare = StampsMerge(lb, l1, l2, ct);
+            if (bare is not null && resolveStamps && form.Conflict is null && !(form.Normalize && form.Eol == "mixed"))
+                return new(path, c1, c2, Merge3Outcome.Merged, null, 0, bare.Count, dest, form.Note is { } n ? $"{StampsResolved}; {n}" : StampsResolved);
+            var ck = bare is not null ? StampsConflict : added ? "add/add" : "content";
             var why = ck == StampsConflict ? "only keyword stamps collide; the rest merges cleanly" : null;
             var also = form.Conflict is { } more ? $"{more} conflict too ({form.Note}): the markers file is written in v1's" : form.Note;
             return new(path, c1, c2, Merge3Outcome.Conflict, ck, conflicts, clean, dest, why is null ? also : also is null ? why : $"{why}; {also}");
@@ -305,13 +309,18 @@ public static class TreeMerger
         return new(path, c1, c2, Merge3Outcome.Merged, null, 0, clean, dest, form.Note);
     }
 
-    /// <summary>Whether a merge that conflicts merges cleanly once each keyword stamp is bare (<c>$Id$</c>).</summary>
-    private static bool OnlyStampsCollide(List<string> lb, List<string> l1, List<string> l2, CancellationToken ct)
+    /// <summary>The note of a file merged by <see cref="CompareOptions.ResolveStamps"/>.</summary>
+    public const string StampsResolved = "only keyword stamps collided: each taken from the side that changed it, v2's where both did";
+
+    /// <summary>The regions of a merge that conflicts, merged again with each keyword stamp bare (<c>$Id$</c>): null unless
+    /// that merge is clean. A stamp never spans lines, so the bare lines are the same lines, numbered alike.</summary>
+    internal static List<MergeRegion>? StampsMerge(List<string> lb, List<string> l1, List<string> l2, CancellationToken ct)
     {
         static bool Any(List<string> l) => l.Exists(s => s.Contains('$'));
-        if (!Any(l1) && !Any(l2)) return false;
+        if (!Any(l1) && !Any(l2)) return null;
         static List<string> Bare(List<string> l) => l.ConvertAll(NoiseFinder.Stamps);
-        return !ThreeWayMerger.Regions(Bare(lb), Bare(l1), Bare(l2), ct).Any(r => r.Kind == RegionKind.Conflict);
+        var regions = ThreeWayMerger.Regions(Bare(lb), Bare(l1), Bare(l2), ct);
+        return regions.Exists(r => r.Kind == RegionKind.Conflict) ? null : regions;
     }
 
     /// <summary>
@@ -369,6 +378,11 @@ public static class TreeMerger
         var l1 = Split(t1.Content, form.Normalize);
         var l2 = Split(t2.Content, form.Normalize);
         var regions = ThreeWayMerger.Regions(lb, l1, l2, ct);
+        // Merged though its lines conflict: only keyword stamps collide (--resolve-stamps). Merged on the bare stamps, each
+        // unchanged line taken from the side that changed its stamp (v2's where both did), and an agreed region from v2.
+        bool stamps = false;
+        if (e.Outcome == Merge3Outcome.Merged && regions.Exists(r => r.Kind == RegionKind.Conflict) && StampsMerge(lb, l1, l2, ct) is { } bare)
+            (regions, stamps) = (bare, true);
 
         // A "mixed" result has no one line ending to convert to: emit each side's own lines as they are (only CRLF was
         // collapsed to compare them, so the line numbers match), the unchanged ones from the side whose style won.
@@ -384,6 +398,10 @@ public static class TreeMerger
             for (int k = 0; k < count; k++) o.Append(lines[start + k]);
         }
         void EmitGap(int from, int to, int shift) => Emit(gap, from + shift, to - from); // unchanged base lines, from the gap source
+        void EmitStampGap(int from, int to, int s1, int s2) // the same, but a side may have changed a stamp in them
+        {
+            for (int i = from; i < to; i++) o.Append(o2[i + s2] != ob[i] ? o2[i + s2] : o1[i + s1]);
+        }
         int Shift(MergeRegion r) => form.GapSide switch { 1 when raw => r.V1Start0 - r.BaseStart0, 2 when raw => r.V2Start0 - r.BaseStart0, _ => 0 };
         void Marker(string text)
         {
@@ -392,7 +410,8 @@ public static class TreeMerger
         }
         foreach (var r in regions)
         {
-            EmitGap(cursor, r.BaseStart0, Shift(r));
+            if (stamps) EmitStampGap(cursor, r.BaseStart0, r.V1Start0 - r.BaseStart0, r.V2Start0 - r.BaseStart0);
+            else EmitGap(cursor, r.BaseStart0, Shift(r));
             cursor = r.BaseStart0 + r.BaseLines;
             switch (r.Kind)
             {
@@ -407,12 +426,13 @@ public static class TreeMerger
                     Emit(o2, r.V2Start0, r.V2Lines);
                     Marker($">>>>>>> v2 ({e.V2.RelativePath}:{r.V2Start0 + 1})");
                     break;
-                case RegionKind.Agreed when form.GapSide == 2 && raw: Emit(o2, r.V2Start0, r.V2Lines); break;
+                case RegionKind.Agreed when stamps || form.GapSide == 2 && raw: Emit(o2, r.V2Start0, r.V2Lines); break;
                 default: Emit(o1, r.V1Start0, r.V1Lines); break; // V1Only or Agreed
             }
         }
         int tail = form.GapSide switch { 1 when raw => o1.Count - ob.Count, 2 when raw => o2.Count - ob.Count, _ => 0 };
-        EmitGap(cursor, lb.Count, tail);
+        if (stamps) EmitStampGap(cursor, ob.Count, o1.Count - ob.Count, o2.Count - ob.Count);
+        else EmitGap(cursor, lb.Count, tail);
         return (ob, o.ToString(), form, conflicts);
     }
 

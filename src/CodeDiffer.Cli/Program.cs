@@ -896,8 +896,8 @@ static string Version()
 /// <summary>apply: port left->right onto a third tree (dry run unless --write). Exit 1 when anything conflicts.</summary>
 static int Apply(string[] args)
 {
-    const string applyUsage = "usage: codediffer apply <left> <right> <target> [--write] [--threads N] [--no-cache]";
-    if (args.Length < 4 || !ArgsOk(args, 3, applyUsage, ["--write", "--no-cache"], ["--threads"]))
+    const string applyUsage = "usage: codediffer apply <left> <right> <target> [--write] [--resolve-stamps] [--threads N] [--no-cache]";
+    if (args.Length < 4 || !ArgsOk(args, 3, applyUsage, ["--write", "--no-cache", "--resolve-stamps"], ["--threads"]))
     {
         if (args.Length < 4) Console.Error.WriteLine(applyUsage);
         return 64;
@@ -930,7 +930,8 @@ static int Apply(string[] args)
         bool write = args.Contains("--write");
         report = report.WithoutIdentical(); // a row per unchanged file is not held through the port
         var port = new PortProgress();
-        result = WithProgress(() => ChangePorter.Run(report, args[1], args[2], args[3], write, parallelism: threads, ct: stop.Token, progress: port),
+        result = WithProgress(() => ChangePorter.Run(report, args[1], args[2], args[3], write, parallelism: threads, ct: stop.Token, progress: port,
+                resolveStamps: args.Contains("--resolve-stamps")),
             () => $"{(write ? "applying" : "checking")}: {port.Done:N0} / {port.Total:N0} changed files", stop.Cancel);
     }
     catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
@@ -1021,9 +1022,9 @@ static bool RehashSides(string[] args, string[] names, string[] roots, out IRead
 static int Compare3(string[] args)
 {
     const string compare3Usage = "usage: codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache | --rehash-side base|v1|v2[,...]] [--share-wait MIN] [--merge-out DIR] [--no-save] " +
-                                 "[--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]";
+                                 "[--resolve-stamps] [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]";
     if (args.Length < 4 || !ArgsOk(args, 3, compare3Usage,
-            ["--all", "--no-cache", "--no-save", "--html", "--large", "--include-identical"], ["--threads", "--merge-out", "--max-diffs", "--out", "--rehash-side", "--share-wait"]))
+            ["--all", "--no-cache", "--no-save", "--html", "--large", "--include-identical", "--resolve-stamps"], ["--threads", "--merge-out", "--max-diffs", "--out", "--rehash-side", "--share-wait"]))
     {
         if (args.Length < 4) Console.Error.WriteLine(compare3Usage);
         return 64;
@@ -1037,7 +1038,8 @@ static int Compare3(string[] args)
     if (!RehashSides(args, ["base", "v1", "v2"], [args[1], args[2], args[3]], out var rehashRoots, out var rehashSides)) return 64;
     if (!ShareWait(args, 3, out var shareWait)) return 64;
     var options = new CompareOptions { Parallelism = threads, Cache = args.Contains("--no-cache") ? CacheMode.Off : CacheMode.On,
-                                       RehashRoots = rehashRoots, RehashSides = rehashSides, ShareWait = shareWait };
+                                       RehashRoots = rehashRoots, RehashSides = rehashSides, ShareWait = shareWait,
+                                       ResolveStamps = args.Contains("--resolve-stamps") };
     if (!HtmlOptionsOk(args, args[1], args[2], args[3])) return 64;
     var store = new SessionStore(save: !args.Contains("--no-save"));
     var outDir = FlagValue(args, "--merge-out", from: 4);
@@ -1228,7 +1230,7 @@ static void PrintUsage()
                                        The result is saved (see `results`; --no-save skips);
                                        --html also writes the HTML report (report flags below).
           codediffer compare3 <base> <v1> <v2> [--all] [--threads N] [--no-cache | --rehash-side S]
-                              [--share-wait MIN] [--no-save]
+                              [--share-wait MIN] [--no-save] [--resolve-stamps]
                               [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]
                               [--merge-out DIR]
                                        3-way: v1 only | v2 only | agreed | merged | conflict
@@ -1239,6 +1241,9 @@ static void PrintUsage()
                                        empty DIR): deletes.txt to apply to v1 first, then files\
                                        to copy over it (text conflicts with diff3 markers),
                                        conflicts.txt, OVERLAY.txt.
+                                       --resolve-stamps merges a file whose colliding lines
+                                       differ only in keyword stamps ($Id: ... $), each stamp
+                                       from the side that changed it (v2's if both did).
           codediffer report <id|result-dir> [--large] [--include-identical] [--max-diffs N] [--out DIR]
                                        HTML report of a saved compare: folder tree, filters,
                                        each file's diff loaded on expand; opens from disk.
@@ -1259,12 +1264,14 @@ static void PrintUsage()
           Ctrl+C stops a running compare/compare3/apply; the hashes read so far are kept.
           codediffer diff <a> <b> [-U N] [--literal]
                                        unified diff of two files
-          codediffer apply <left> <right> <target> [--write] [--threads N] [--no-cache]
+          codediffer apply <left> <right> <target> [--write] [--resolve-stamps] [--threads N] [--no-cache]
                                        port the left->right changes onto target by 3-way
                                        merge; per hunk applied|fuzzy|already|conflict.
                                        Dry run unless --write (conflicted files untouched).
                                        Ctrl+C during --write stops between files; run it
                                        again to finish (done files come out "already").
+                                       --resolve-stamps: lines colliding only in keyword
+                                       stamps merge, the target's stamp kept if it changed it.
           codediffer apply-overlay <overlay-dir> <target> [--write] [--again] [--threads N]
                                        apply a compare3 --merge-out overlay to v1 (or a copy):
                                        deletes.txt, then the directories the deletes emptied,

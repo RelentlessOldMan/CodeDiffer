@@ -81,6 +81,10 @@ public sealed class CompareOptions
     /// session) before it stops with what it read kept (see <see cref="ShareGuard"/>). Default 30 minutes.</summary>
     public TimeSpan ShareWait { get; init; } = TimeSpan.FromMinutes(30);
 
+    /// <summary>compare3: a text file whose colliding lines differ only in keyword stamps (<c>$Id: … $</c>) is merged, each
+    /// stamp taken from the side that changed it (v2's where both did), not left a "stamps" conflict. Off by default.</summary>
+    public bool ResolveStamps { get; init; }
+
     /// <summary>Tests: the waits before a file that alone failed is tried again (default 1 s, 4 s), and between
     /// checks of trees that stopped answering (default 1 s growing to 30 s).</summary>
     internal IReadOnlyList<TimeSpan>? RetryDelays { get; init; }

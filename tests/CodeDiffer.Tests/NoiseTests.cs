@@ -2,6 +2,7 @@ using System.Text;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Model;
+using CodeDiffer.Core.Port;
 using CodeDiffer.Core.Sessions;
 using CodeDiffer.Core.ThreeWay;
 using Xunit;
@@ -203,6 +204,72 @@ public class NoiseTests : IDisposable
         // Saved and read back with its kind, so it stays noise.
         var back = Assert.IsType<Compare3Session>(new SessionStore(resultsRoot: Path.Combine(_dir, "results")).Get(s.Id));
         Assert.Equal(["stamps"], back.Report!.Entries.Single(x => x.Path == "src/b.c").Noise);
+    }
+
+    [Fact]
+    public void ThreeWay_ResolveStamps_MergesAFileWhereOnlyStampsCollide()
+    {
+        Put("B/src/a.c", "/* $Revision: 1 $ */\nint a;\nint b;\nint c;\nint d;\nint e;\n");
+        Put("V1/src/a.c", "/* $Revision: 2 $ */\nint a;\nint b = 1;\nint c;\nint d;\nint e;\n");
+        Put("V2/src/a.c", "/* $Revision: 3 $ */\nint a;\nint b;\nint c;\nint d;\nint e = 2;\n");
+        Put("B/src/b.c", "// $Id: b.c 1 $\nint b;\n");
+        Put("V1/src/b.c", "// $Id: b.c 2 sam $\nint b;\n");
+        Put("V2/src/b.c", "// $Id: b.c 3 kim $\nint b;\n");
+        Put("B/src/c.c", "// $Revision: 1 $ old\nint c;\n");
+        Put("V1/src/c.c", "// $Revision: 2 $ new\nint c;\n");
+        Put("V2/src/c.c", "// $Revision: 3 $ other\nint c;\n");
+        // v1 stamps the header, v2 edits the line under it: v1's stamp is kept beside v2's edit.
+        Put("B/src/d.c", "// $Id: d.c 1 $\nint d;\n");
+        Put("V1/src/d.c", "// $Id: d.c 2 $\nint d;\n");
+        Put("V2/src/d.c", "// $Id: d.c 1 $\nint d = 4;\n");
+
+        string b = Path.Combine(_dir, "B"), v1 = Path.Combine(_dir, "V1"), v2 = Path.Combine(_dir, "V2");
+        var s = new SessionStore(save: false).Start3(b, v1, v2, new CompareOptions { Cache = CacheMode.Off, ResolveStamps = true });
+        Assert.True(s.Wait(TimeSpan.FromSeconds(60)));
+        Assert.Null(s.Error);
+        var e = s.Report!.Entries.ToDictionary(x => x.Path);
+        Assert.Equal(Merge3Outcome.Merged, e["src/a.c"].Outcome);
+        Assert.Equal(TreeMerger.StampsResolved, e["src/a.c"].Note);
+        Assert.Equal("/* $Revision: 3 $ */\nint a;\nint b = 1;\nint c;\nint d;\nint e = 2;\n", TreeMerger.MergedText(e["src/a.c"], b, v1, v2));
+        Assert.Equal(Merge3Outcome.Merged, e["src/b.c"].Outcome);
+        Assert.Equal("// $Id: b.c 3 kim $\nint b;\n", TreeMerger.MergedText(e["src/b.c"], b, v1, v2));
+        Assert.Equal("content", e["src/c.c"].ConflictKind);              // more than a stamp: still a conflict
+        Assert.Equal(Merge3Outcome.Merged, e["src/d.c"].Outcome);
+        Assert.Equal("// $Id: d.c 2 $\nint d = 4;\n", TreeMerger.MergedText(e["src/d.c"], b, v1, v2));
+        TreeMerger.MergedBytes(e["src/a.c"], b, v1, v2, out var left);
+        Assert.Equal(0, left);
+        Assert.Contains("CONFLICT         1    content 1", ThreeWayViews.Summary(s));
+    }
+
+    [Fact]
+    public void Apply_ResolveStamps_KeepsTheTargetsStampAndAppliesTheRest()
+    {
+        Put("L/a.c", "/* $Revision: 1 $ */\nint a;\nint b;\n");
+        Put("R/a.c", "/* $Revision: 2 $ */\nint a;\nint b = 1;\n");
+        Put("C/a.c", "/* $Revision: 3 $ */\nint a;\nint b;\n");
+        Put("L/d.c", "// $Id: d.c 1 $\nint d;\n");                      // the change stamps it, the target edits under it
+        Put("R/d.c", "// $Id: d.c 2 $\nint d;\n");
+        Put("C/d.c", "// $Id: d.c 1 $\nint d = 4;\n");
+        Put("L/e.c", "// $Id: e.c 1 $ one\nint e;\n");                  // beyond the stamp: a conflict still
+        Put("R/e.c", "// $Id: e.c 2 $ two\nint e;\n");
+        Put("C/e.c", "// $Id: e.c 3 $ six\nint e;\n");
+        string l = Path.Combine(_dir, "L"), r = Path.Combine(_dir, "R"), c = Path.Combine(_dir, "C");
+        var report = new DirectoryComparer(new CompareOptions { Cache = CacheMode.Off }).Compare(l, r);
+
+        Assert.Equal(PortStatus.Conflict, ChangePorter.Run(report, l, r, c, write: false).Files.Single(x => x.Path == "a.c").Status);
+        var f = ChangePorter.Run(report, l, r, c, write: true, resolveStamps: true).Files.ToDictionary(x => x.Path);
+        Assert.Equal(PortStatus.Clean, f["a.c"].Status);
+        Assert.Equal(ChangePorter.StampsResolved, f["a.c"].Note);
+        Assert.Equal("/* $Revision: 3 $ */\nint a;\nint b = 1;\n", File.ReadAllText(Path.Combine(c, "a.c")));
+        Assert.Equal(PortStatus.Clean, f["d.c"].Status);
+        Assert.Contains(f["d.c"].Hunks, h => h.Outcome == HunkOutcome.Applied && h.BaseLine == 1);
+        Assert.Equal("// $Id: d.c 2 $\nint d = 4;\n", File.ReadAllText(Path.Combine(c, "d.c")));
+        Assert.Equal(PortStatus.Conflict, f["e.c"].Status);
+        Assert.Equal("// $Id: e.c 3 $ six\nint e;\n", File.ReadAllText(Path.Combine(c, "e.c")));
+        // Run again: everything it wrote is already there.
+        var again = ChangePorter.Run(report, l, r, c, write: false, resolveStamps: true).Files.ToDictionary(x => x.Path);
+        Assert.Equal(PortStatus.Already, again["a.c"].Status);
+        Assert.Equal(PortStatus.Already, again["d.c"].Status);
     }
 
     [Fact]

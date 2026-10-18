@@ -544,11 +544,13 @@ public static class AgentViews
     /// per-hunk report written to a file.
     /// </summary>
     /// <param name="ct">Stops it between files (a file is written whole or not at all): the files not reached are counted.</param>
-    public static string Apply(CompareSession s, string target, bool write, int maxFiles = 50, CancellationToken ct = default)
+    public static string Apply(CompareSession s, string target, bool write, int maxFiles = 50, CancellationToken ct = default,
+        bool resolveStamps = false)
     {
         if (Pending(s) is { } pending) return $"compare {s.Id}: {pending}";
         if (FastStat(s) is { } fast) return fast;
-        var r = ChangePorter.Run(s.Report!, s.Left, s.Right, target, write, parallelism: s.Options.Parallelism, ct: ct);
+        var r = ChangePorter.Run(s.Report!, s.Left, s.Right, target, write, parallelism: s.Options.Parallelism, ct: ct,
+            resolveStamps: resolveStamps);
         using (ResultStore.Hold(s)) // no prune takes the result away under the report
             return PortText(r, $"compare {s.Id}", Path.Combine(OutDir(s), $"apply-{(write ? "written" : "dryrun")}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt"), maxFiles);
     }

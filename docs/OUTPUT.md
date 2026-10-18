@@ -125,6 +125,9 @@ only when C equals the base byte for byte (compared and copied streamed, so a fi
 lone CR is content: merging across line endings converts only CRLF. A target in another line-ending style than the
 base is merged ignoring line endings and written in its own style (a mixed base too); a target still in the base's
 style takes a change that converts the file to one style, its own new lines included, as compare3 does.
+With `--resolve-stamps` (MCP `resolve_stamps=true`) a file whose conflicting lines differ only in keyword stamps
+is merged instead: the target's stamp is kept where it changed it, else the change's is applied (noted "only keyword
+stamps collided").
 Removes are done first, then renames, then adds and edits, so a directory that became a file (or the reverse)
 ports in one run: a directory the removes and renames leave empty is removed before the adds (one still holding
 anything, the target's own files included, stays, and so does any directory behind a link).
@@ -218,7 +221,8 @@ the first's base listing and the base hashes it proved (no re-listing, no re-rea
 stat of the base; both compares judge the same snapshot of it), then every touched path is
 v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content, stamps (a content conflict whose colliding lines
 differ only in version-control keyword stamps, `$Id: … $`: with the stamps bare it merges cleanly; written with
-markers, a stamp to pick), modify/delete, add/add, rename/rename, path collision, file/directory clash (one side has a file where the other has a
+markers, a stamp to pick; with `--resolve-stamps`, MCP `resolve_stamps=true`, it is merged instead, each stamp
+taken from the side that changed it and v2's where both did, noted "only keyword stamps collided"), modify/delete, add/add, rename/rename, path collision, file/directory clash (one side has a file where the other has a
 directory: v2 turns `D/` into a file `D` while v1 adds `D/z.txt`), binary, large (a side over the text limit, or
 the base when both sides cut a large file down: no file that big is read whole to merge it), behind a link and
 unopenable name (whether the path changed is unknown: never merged). Both sides cutting (or adding) copies of a run

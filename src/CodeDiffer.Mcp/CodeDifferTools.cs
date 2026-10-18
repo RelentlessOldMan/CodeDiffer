@@ -52,9 +52,12 @@ public static class CodeDifferTools
         [Description("Second variant directory.")] string v2,
         [Description("Hash cache: on (default), off, rehash.")] string cache = "on",
         [Description("Concurrent file reads (default min(cores, 8)).")] int threads = 0,
-        [Description("Seconds to wait for completion before returning (default 30; 0 = return at once).")] int wait_seconds = 30)
+        [Description("Seconds to wait for completion before returning (default 30; 0 = return at once).")] int wait_seconds = 30,
+        [Description("Merge a file whose colliding lines differ only in keyword stamps ($Id: ... $), each stamp from the side " +
+                     "that changed it, v2's where both did (default false: a \"stamps\" conflict).")] bool resolve_stamps = false)
     {
         if (Options(cache, threads, out var options) is { } bad) return bad;
+        if (resolve_stamps) options = new CompareOptions { Cache = options.Cache, Parallelism = options.Parallelism, ResolveStamps = true };
         Compare3Session s;
         try { s = Sessions.Start3(@base, v1, v2, options); }
         catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException or IOException or UnauthorizedAccessException)
@@ -177,11 +180,13 @@ public static class CodeDifferTools
         [Description("Compare id (default: the most recent).")] string? compare_id = null,
         [Description("Actually modify the target (default false = dry run).")] bool write = false,
         [Description("Most conflicted files listed inline (default 50); the full per-hunk report goes to a file.")] int max_files = 50,
+        [Description("Merge lines that collide only in keyword stamps ($Id: ... $), keeping the target's stamp where it changed " +
+                     "it, else the change's (default false: such a hunk is a conflict).")] bool resolve_stamps = false,
         CancellationToken cancellationToken = default)
     {
         if (Find(compare_id, out var s) is { } err) return err;
         if (s is not CompareSession c) return $"error: compare {s!.Id} is 3-way; apply_changeset needs a 2-way compare";
-        try { return AgentViews.Apply(c, target, write, Math.Clamp(max_files, 1, 500), cancellationToken); }
+        try { return AgentViews.Apply(c, target, write, Math.Clamp(max_files, 1, 500), cancellationToken, resolve_stamps); }
         catch (Exception ex) when (ex is DirectoryNotFoundException or IOException or UnauthorizedAccessException or ArgumentException)
         {
             return $"error: {ex.Message}";
