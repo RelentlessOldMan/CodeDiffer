@@ -265,7 +265,7 @@ public static class ChangePorter
         var a = TextInspector.ReadAll(aPath);
         var b = TextInspector.ReadAll(bPath);
         var t = TextInspector.ReadAll(tPath);
-        if (Text.TryRead(a, out var at) && Text.TryRead(b, out var bt) && Text.TryRead(t, out var tt))
+        if (Text.TryReadAll(a, b, t, out var at, out var bt, out var tt))
         {
             var (f, bytes) = Merge(c, at, bt, tt, stamps, ct);
             return (f, bytes is null ? null : Output.Of(bytes));
@@ -464,7 +464,8 @@ public static class ChangePorter
         {
             UTF8Encoding => Encoding.GetPreamble().Length > 0 ? "UTF-8 with BOM" : "UTF-8",
             UnicodeEncoding => Encoding.WebName == "utf-16BE" ? "UTF-16BE" : "UTF-16LE",
-            _ => Encoding.WebName == "utf-32BE" ? "UTF-32BE" : "UTF-32LE",
+            UTF32Encoding => Encoding.WebName == "utf-32BE" ? "UTF-32BE" : "UTF-32LE",
+            _ => "8-bit (not UTF-8)",
         };
 
         public byte[] Encode(string s)
@@ -495,6 +496,28 @@ public static class ChangePorter
             catch (DecoderFallbackException) { return false; }
             text = new Text { Content = s, Encoding = enc, Eol = EolOf(s) };
             return text.Encode(s).AsSpan().SequenceEqual(bytes);
+        }
+
+        /// <summary>
+        /// Three versions of one file as text, read alike. Where one isn't UTF-8 (a cp1252 / Latin-1 byte in a comment, a
+        /// test's legacy-encoded name) and none has a BOM or a NUL, all three are read as 8-bit text, one char per byte —
+        /// as git merges them, line by line on the bytes — so the merge writes back exactly the bytes its lines came from,
+        /// and a UTF-8 side's characters are never re-encoded (or turned into '?').
+        /// </summary>
+        public static bool TryReadAll(byte[] a, byte[] b, byte[] c, out Text ta, out Text tb, out Text tc)
+        {
+            if (TryRead(a, out ta) & TryRead(b, out tb) & TryRead(c, out tc)) return true;
+            if (!EightBit(a) || !EightBit(b) || !EightBit(c)) return false;
+            ta = Latin1(a); tb = Latin1(b); tc = Latin1(c);
+            return true;
+        }
+
+        private static bool EightBit(byte[] bytes) => !TextInspector.HasBom(bytes) && bytes.AsSpan().IndexOf((byte)0) < 0;
+
+        private static Text Latin1(byte[] bytes)
+        {
+            var s = Encoding.Latin1.GetString(bytes);
+            return new Text { Content = s, Encoding = Encoding.Latin1, Eol = EolOf(s) };
         }
 
         private static string EolOf(string s)

@@ -280,7 +280,7 @@ public static class TreeMerger
         if (!added && Math.Max(c1.LeftSize, c2.LeftSize) > maxText) return Whole() ?? Conflict("large", largeBase);
         var baseBytes = added ? [] : File.ReadAllBytes(Full(b, path));
         if (baseBytes.Length > maxText) return Whole() ?? Conflict("large", largeBase); // grown since it was listed
-        if (!ChangePorter.Text.TryRead(baseBytes, out var tb) || !ChangePorter.Text.TryRead(bytes1, out var t1) || !ChangePorter.Text.TryRead(bytes2, out var t2)
+        if (!ChangePorter.Text.TryReadAll(baseBytes, bytes1, bytes2, out var tb, out var t1, out var t2)
             || LooksBinary(bytes1) || LooksBinary(bytes2) || LooksBinary(baseBytes))
             return Whole() ?? Conflict(added ? "add/add (binary)" : "binary", "both changed a binary (or non-text) file differently");
 
@@ -370,9 +370,8 @@ public static class TreeMerger
         // Taken whole from one side (it may be binary or large): no line merge to show, and the file is never read whole.
         if (e.Outcome == Merge3Outcome.Merged && e.CleanRegions == 0 && e.ConflictRegions == 0 && WholeFrom(e.V1, e.V2) != 0) return null;
         bool added = e.V1.Status == ChangeStatus.Added;
-        if (!ChangePorter.Text.TryRead(added ? [] : File.ReadAllBytes(Full(b, e.Path)), out var tb)
-            || !ChangePorter.Text.TryRead(File.ReadAllBytes(Full(v1, e.V1.RelativePath)), out var t1)
-            || !ChangePorter.Text.TryRead(File.ReadAllBytes(Full(v2, e.V2.RelativePath)), out var t2)) return null;
+        if (!ChangePorter.Text.TryReadAll(added ? [] : File.ReadAllBytes(Full(b, e.Path)), File.ReadAllBytes(Full(v1, e.V1.RelativePath)),
+                File.ReadAllBytes(Full(v2, e.V2.RelativePath)), out var tb, out var t1, out var t2)) return null;
         var form = FormOf(tb, t1, t2, added);
         var lb = Split(tb.Content, form.Normalize);
         var l1 = Split(t1.Content, form.Normalize);

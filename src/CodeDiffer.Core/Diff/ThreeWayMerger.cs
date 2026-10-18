@@ -74,6 +74,8 @@ public static class ThreeWayMerger
     {
         var d1 = LineDiffer.Diff(baseLines, v1Lines, LineDiffer.DefaultMaxEditDistance, out _, ct: ct);
         var d2 = LineDiffer.Diff(baseLines, v2Lines, LineDiffer.DefaultMaxEditDistance, out _, ct: ct);
+        d1 = Apart(d1, d2, baseLines, v1Lines);
+        d2 = Apart(d2, d1, baseLines, v2Lines);
         var h1 = InPlace(d1, baseLines, v1Lines);
         var h2 = InPlace(d2, baseLines, v2Lines);
         var regions = Regions(baseLines, v1Lines, v2Lines, h1, h2);
@@ -139,6 +141,59 @@ public static class ThreeWayMerger
             k = first - 1; // the conflict may reach another run's agreed cut: look again from it
         }
         return regions;
+    }
+
+    /// <summary>
+    /// A side's hunks with each insert or delete that touches one of the other side's hunks slid, where it can, to stand
+    /// apart from it. An insert or a cut beside identical lines (a blank, a <c>}</c>, a <c>{</c>) can stand anywhere along
+    /// them: deleting <c>F() { … }⏎⏎</c> is also deleting <c>}⏎⏎F() { …</c>, the same file, and where Myers puts it is
+    /// its choice. Put hard against the other side's edit of the next function's first line, the two coalesce into a
+    /// conflict that a line or two of room would not have; git's differ, placing it otherwise, merges it clean. So it
+    /// moves to the nearest place touching none of the other's hunks — only when none of them lies among the lines it
+    /// could move across: a change to one of those lines could be to a copy it takes, and which is not for the differ
+    /// to guess (that stays a conflict).
+    /// </summary>
+    private static List<Hunk> Apart(List<Hunk> h, List<Hunk> other, IReadOnlyList<string> a, IReadOnlyList<string> b)
+    {
+        if (h.Count == 0 || other.Count == 0) return h;
+        List<Hunk>? moved = null;
+        for (int k = 0; k < h.Count; k++)
+        {
+            var x = (moved ?? h)[k];
+            if (x.Op == HunkOp.Replace) continue;
+            bool del = x.Op == HunkOp.Delete;
+            int s = BaseStart0(x), e = s + x.OldLines, t = x.NewStart - 1, u = t + x.NewLines;
+            if (!other.Any(o => Touch(o, s, e))) continue;
+            // Room: as far as this side's hunks before and after it (meeting one is one edit, as git's differ writes it).
+            int pe = k == 0 ? 0 : End((moved ?? h)[k - 1]), ns = k + 1 < h.Count ? BaseStart0(h[k + 1]) : a.Count;
+            int up = 0, down = 0;
+            if (del)
+            {
+                while (s - up - 1 >= pe && a[s - up - 1] == a[e - up - 1]) up++;
+                while (e + down < ns && a[s + down] == a[e + down]) down++;
+            }
+            else
+            {
+                while (s - up - 1 >= pe && t - up - 1 >= 0 && b[t - up - 1] == b[u - up - 1]) up++;
+                while (s + down < ns && u + down < b.Count && b[t + down] == b[u + down]) down++;
+            }
+            if (up == 0 && down == 0) continue;
+            int lo = s - up, hi = (del ? e : s) + down;
+            if (other.Any(o => BaseStart0(o) == End(o) ? lo < BaseStart0(o) && BaseStart0(o) < hi : BaseStart0(o) < hi && End(o) > lo))
+                continue; // the other side changed a line it could take: where it stands is not free
+            int best = 0;
+            for (int d = 1; d <= Math.Max(up, down) && best == 0; d++)
+                foreach (var dd in (int[])[-d, d])
+                    if ((dd < 0 ? -dd <= up : dd <= down) && !other.Any(o => Touch(o, s + dd, e + dd))) { best = dd; break; }
+            if (best == 0) continue;
+            moved ??= [.. h];
+            moved[k] = x with { OldStart = x.OldStart + best, NewStart = x.NewStart + best };
+        }
+        return moved ?? h;
+
+        static int End(Hunk o) => BaseStart0(o) + o.OldLines;
+        // As the regions coalesce: overlapping or abutting.
+        static bool Touch(Hunk o, int s, int e) => BaseStart0(o) <= e && s <= End(o);
     }
 
     /// <summary>Which side a conflict-free merge is: 1 if it is V1 (V2 changed nothing V1 lacks), 2 if V2, 3 both, else 0.</summary>

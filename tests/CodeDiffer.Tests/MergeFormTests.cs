@@ -71,6 +71,33 @@ public sealed class MergeFormTests : IDisposable
     }
 
     [Fact]
+    public void ALegacy8BitFile_MergesLineByLine_ToItsExactBytes()
+    {
+        // A cp1252 / Latin-1 byte (0xE9 é, 0x93 “) is no UTF-8, but no NUL either: text, as git merges it.
+        var b = Ten.Replace("line 5", "line 5 café \u0093q\u0094");
+        var (e, bytes) = Merge(b, Edit1(b), Edit2(b), Encoding.Latin1, Encoding.Latin1, Encoding.Latin1);
+        Assert.Equal(Merge3Outcome.Merged, e.Outcome);
+        Assert.Equal(Encoding.Latin1.GetBytes(Edit2(Edit1(b))), bytes!);
+    }
+
+    [Fact]
+    public void A8BitSide_AndAUtf8Side_MergeOnTheirBytes_NeitherReencoded()
+    {
+        // v1 adds a Latin-1 é (one byte), v2 a UTF-8 é (two): each side's bytes are kept as they are.
+        var v1 = Encoding.Latin1.GetBytes(Edit1(Ten).Replace("line 3", "line 3 é"));
+        var v2 = Utf8.GetBytes(Edit2(Ten).Replace("line 8", "line 8 é"));
+        Put(_b, Ten);
+        Directory.CreateDirectory(_v1);
+        Directory.CreateDirectory(_v2);
+        File.WriteAllBytes(Path.Combine(_v1, "f.c"), v1);
+        File.WriteAllBytes(Path.Combine(_v2, "f.c"), v2);
+        var e = TreeMerger.Run(_b, _v1, _v2, NoCache).Entries.Single(x => x.Path == "f.c");
+        Assert.Equal(Merge3Outcome.Merged, e.Outcome);
+        var want = Encoding.Latin1.GetBytes(Edit2(Edit1(Ten)).Replace("line 3", "line 3 é").Replace("line 8", "line 8 Ã©"));
+        Assert.Equal(want, TreeMerger.MergedBytes(e, _b, _v1, _v2)!);
+    }
+
+    [Fact]
     public void V2sAddedBom_IsKept()
     {
         var (e, bytes) = Merge(Ten, Edit1(Ten), Edit2(Ten), e2: Utf8Bom);

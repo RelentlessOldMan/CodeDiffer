@@ -63,6 +63,21 @@ public class ChangePorterTests : IDisposable
     }
 
     [Fact]
+    public void ALegacy8BitFile_IsPorted_OnItsBytes()
+    {
+        // A Latin-1 é (0xE9) is no UTF-8 but text: the edit ports, and the target's own 8-bit line stays as it was.
+        var latin1 = Encoding.Latin1;
+        PutBytes("L/a.c", latin1.GetBytes(Lines(1, 30).Replace("line 5\n", "line 5 café\n")));
+        PutBytes("R/a.c", latin1.GetBytes(Lines(1, 30).Replace("line 5\n", "line 5 café\n").Replace("line 21", "CHANGED 21")));
+        PutBytes("C/a.c", latin1.GetBytes(Lines(1, 30).Replace("line 5\n", "line 5 café\n").Replace("line 9", "line 9 né")));
+
+        var f = F(Port(write: true), "a.c");
+        Assert.Equal(PortStatus.Clean, f.Status);
+        Assert.Equal(latin1.GetBytes(Lines(1, 30).Replace("line 5\n", "line 5 café\n").Replace("line 9", "line 9 né").Replace("line 21", "CHANGED 21")),
+            File.ReadAllBytes(Path.Combine(C, "a.c")));
+    }
+
+    [Fact]
     public void ConflictingTarget_IsReported_AndLeftUntouched()
     {
         Put("L/a.c", Lines(1, 30));

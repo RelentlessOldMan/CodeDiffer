@@ -237,13 +237,19 @@ serve it; `get_file_diff` shows the merged file with diff3 markers (`<<<<<<< v1 
 >>>>>>> v2`). A clean merge equals porting base→v1 onto v2 (tested). Among identical lines (a run of one
 repeated statement, a column of `}`), a line a side edited in place is a replace of the line it stands on — not,
 as Myers and git write it, an insert there and a delete of a copy at the run's far end — so two sides editing the
-same line of a run conflict, where `git merge-file` keeps both edits side by side as a clean merge. A file's encoding (BOM, UTF-16) and
+same line of a run conflict, where `git merge-file` keeps both edits side by side as a clean merge. An insert or a
+cut beside identical lines (a blank, a `}`, a `{`) can stand anywhere along them; one put hard against the other
+side's change slides apart from it, so a function deleted on one side beside the next one's signature edited on the
+other merges clean (as git, placing the cut otherwise, merges it), unless the other side changed one of the lines it
+could move across: that change could be to a copy the cut takes, and stays a conflict. A file's encoding (BOM, UTF-16) and
 line-ending style (LF / CRLF / mixed) merge 3-way like its lines: a side that changed them wins (v2's LF→CRLF
 is kept when v1 also edited the file), the same change on both sides agrees, and different changes on both
 sides are a conflict of kind `encoding` or `line endings` (both files listed, nothing written); when the lines
 conflict too, the file is a `content` conflict written with markers in v1's encoding and line endings, and its
 note says the encoding or line-ending conflict as well. A mixed file keeps each line's own ending; a lone CR
-stays part of its line.
+stays part of its line. A file that isn't UTF-8 in one of the three (a cp1252 / Latin-1 byte, as in a test of
+legacy names) but has no BOM and no NUL is text, as git reads it: all three are merged line by line on their bytes,
+so each line is written back exactly as it came, a UTF-8 side's included (`apply` ports such a file the same way).
 
 **Merge overlay (built):** `write_merge(id[, out_dir])` (CLI `compare3 … --merge-out DIR`) writes the merge
 as an overlay on v1, never the whole tree: `files\` holds only what the merge changes in v1 (v2's one-sided
