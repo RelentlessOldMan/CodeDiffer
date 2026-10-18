@@ -18,6 +18,8 @@ public class FileTypeTests
     [InlineData("proj/game.vcxproj.filters", FileType.Build)]
     [InlineData("cfg/settings.json", FileType.Build)]
     [InlineData(".gitignore", FileType.Build)]
+    [InlineData("obj/render.o.d", FileType.Build)]        // a make dependency list, not D source
+    [InlineData("obj/Debug/link.tlog", FileType.Build)]
     [InlineData("sub/.editorconfig", FileType.Build)]
     [InlineData("src/notes.txt", FileType.Docs)]          // a .txt among the .c files is still docs
     [InlineData("README", FileType.Docs)]

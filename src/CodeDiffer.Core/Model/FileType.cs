@@ -60,12 +60,13 @@ public static class FileTypes
         (FileType.Docs, ["README", "LICENSE", "LICENCE", "COPYING", "NOTICE", "AUTHORS", "CONTRIBUTORS", "CHANGELOG", "CHANGES",
             "HISTORY", "NEWS", "TODO", "INSTALL"]));
 
+    // ".d" is a build: in a C or C++ tree it is a compiler's make dependency list (far more often than D source).
     private static readonly Dictionary<string, FileType> Extensions = Table(
         (FileType.Code, [".c", ".h", ".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".h++", ".inl", ".ipp", ".tpp", ".tcc",
             ".m", ".mm", ".cs", ".csx", ".fs", ".fsi", ".fsx", ".vb", ".java", ".kt", ".kts", ".scala", ".groovy", ".clj", ".js", ".jsx",
             ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".svelte", ".py", ".pyi", ".pyw", ".pyx", ".rb", ".go", ".rs", ".swift", ".php",
             ".pl", ".pm", ".lua", ".dart", ".r", ".jl", ".hs", ".ml", ".mli", ".ex", ".exs", ".erl", ".el", ".lisp", ".scm", ".zig",
-            ".nim", ".d", ".pas", ".f", ".f90", ".f95", ".for", ".ada", ".adb", ".ads", ".asm", ".s", ".inc", ".cu", ".cuh", ".hlsl",
+            ".nim", ".pas", ".f", ".f90", ".f95", ".for", ".ada", ".adb", ".ads", ".asm", ".s", ".inc", ".cu", ".cuh", ".hlsl",
             ".hlsli", ".fx", ".fxh", ".glsl", ".vert", ".frag", ".geom", ".comp", ".tesc", ".tese", ".metal", ".usf", ".ush", ".shader",
             ".cginc", ".compute", ".wgsl", ".ps1", ".psm1", ".psd1", ".bat", ".cmd", ".sh", ".bash", ".zsh", ".ksh", ".fish", ".vbs",
             ".awk", ".sed", ".tcl", ".sql", ".proto", ".idl", ".thrift", ".html", ".htm", ".css", ".scss", ".sass", ".less", ".xaml"]),
@@ -74,7 +75,7 @@ public static class FileTypes
             ".bzl", ".gn", ".gni", ".ninja", ".pri", ".pro", ".qbs", ".json", ".jsonc", ".json5", ".yaml", ".yml", ".toml", ".ini",
             ".cfg", ".conf", ".config", ".xml", ".xsd", ".xsl", ".xslt", ".plist", ".manifest", ".rc", ".def", ".ld", ".lds",
             ".properties", ".env", ".editorconfig", ".gitignore", ".gitattributes", ".gitmodules", ".clang-format", ".clang-tidy",
-            ".dockerignore", ".npmrc", ".lock", ".spec", ".vsconfig", ".runsettings", ".ruleset", ".resx", ".pdl"]),
+            ".dockerignore", ".npmrc", ".lock", ".spec", ".vsconfig", ".runsettings", ".ruleset", ".resx", ".pdl", ".d", ".dep", ".tlog"]),
         (FileType.Docs, [".txt", ".text", ".md", ".markdown", ".rst", ".adoc", ".asciidoc", ".tex", ".org", ".log", ".csv", ".tsv",
             ".rtf", ".svg", ".diff", ".patch", ".1", ".man"]),
         (FileType.Binary, [".exe", ".dll", ".so", ".dylib", ".lib", ".a", ".o", ".obj", ".pdb", ".ilk", ".exp", ".pch", ".ipch",

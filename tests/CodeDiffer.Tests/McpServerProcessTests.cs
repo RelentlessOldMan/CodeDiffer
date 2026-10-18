@@ -39,7 +39,8 @@ public sealed class McpServerProcessTests : IDisposable
         ExeRunner.Isolate(psi, _t.P("state"));
         using var p = Process.Start(psi)!;
         var stderr = p.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        // Longer than the compare's own wait_seconds below, with room for a slow start on a busy box.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(180));
         try
         {
             async Task Send(object message)
