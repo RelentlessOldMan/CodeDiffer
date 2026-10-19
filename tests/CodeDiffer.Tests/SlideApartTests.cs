@@ -72,4 +72,21 @@ public class SlideApartTests
         var f1 = "# make it\nf() {\n\tx;\n}\n\n";
         Assert.Null(Merged(A + G, A + f1 + G, A + F.Replace("f()", "f ()") + G));
     }
+
+    [Fact]
+    public void ATestRewrittenAboveATestAdded_MergesClean()
+    {
+        // v1 adds a prereq and rewrites the last two tests; v2 adds a test after them (git.git's t1006-cat-file.sh).
+        // Matching v1's three `'`+blank tails to base's two splits the last rewrite into an insert at v2's place; it
+        // goes back against v1's rewrite of the test before, one edit, as git writes it.
+        const string H = "\nexpect=\"$oid blob\"\n\n", Done = "test_done\n";
+        const string Added = "test_expect_success 'setup' '\n\tgit init repo\n'\n\nrun_filter \"type=tree\"\n\n";
+        string Old(string o) => $"test_expect_success PERL '--{o} is unbuffered' '\n\tperl -e \"$script\" -- --{o} $oid\n'\n\n";
+        string New(string o) => $"test_expect_success PERL_OPEN2 '--{o} is unbuffered' '\n\tperl -e \"$perl_script\" -- --{o} $oid\n'\n\n";
+        const string Pre = "test_lazy_prereq PERL_OPEN2 '\n\tperl -MOpen2 -e \"exit 0\"\n'\n\n";
+        var v1 = H + Pre + New("check") + New("command") + Done;
+        var v2 = H + Old("check") + Old("command") + Added + Done;
+        Assert.Equal(H + Pre + New("check") + New("command") + Added + Done,
+            Merged(H + Old("check") + Old("command") + Done, v1, v2));
+    }
 }

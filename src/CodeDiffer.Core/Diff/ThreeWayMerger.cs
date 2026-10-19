@@ -152,7 +152,8 @@ public static class ThreeWayMerger
     /// moves to the nearest place touching none of the other's hunks — only when none of them lies among the lines it
     /// could move across: a change to one of those lines could be to a copy it takes, and which is not for the differ
     /// to guess (that stays a conflict). Nor does an insert move off the other side's insert at the same place: which
-    /// goes first is the question, and moving one past a blank would answer it (or keep two copies of one function).
+    /// goes first is the question, and moving one past a blank would answer it (or keep two copies of one function) —
+    /// unless the move puts it back against this side's own hunk beside it, as one edit: Myers split it off that edit.
     /// </summary>
     private static List<Hunk> Apart(List<Hunk> h, List<Hunk> other, IReadOnlyList<string> a, IReadOnlyList<string> b)
     {
@@ -165,8 +166,6 @@ public static class ThreeWayMerger
             bool del = x.Op == HunkOp.Delete;
             int s = BaseStart0(x), e = s + x.OldLines, t = x.NewStart - 1, u = t + x.NewLines;
             if (!other.Any(o => Touch(o, s, e))) continue;
-            // Two inserts at one place have no order in the base: sliding one past a blank to stand apart only picks one.
-            if (!del && other.Any(o => o.OldLines == 0 && BaseStart0(o) == s)) continue;
             // Room: as far as this side's hunks before and after it (meeting one is one edit, as git's differ writes it).
             int pe = k == 0 ? 0 : End((moved ?? h)[k - 1]), ns = k + 1 < h.Count ? BaseStart0(h[k + 1]) : a.Count;
             int up = 0, down = 0;
@@ -181,11 +180,21 @@ public static class ThreeWayMerger
                 while (s + down < ns && u + down < b.Count && b[t + down] == b[u + down]) down++;
             }
             if (up == 0 && down == 0) continue;
+            // Two inserts at one place have no order in the base: sliding one past a blank to stand apart only picks one.
+            // But an insert Myers split off this side's own edit (a test rewritten, its tail `'` and blank matched to the
+            // one before) goes back against that edit, one hunk as git writes it: then it was never at the other's place.
+            int join = 0;
+            if (!del && other.Any(o => o.OldLines == 0 && BaseStart0(o) == s))
+            {
+                if (k > 0 && up > 0 && s - up == pe) (join, down) = (-up, 0);
+                else if (k + 1 < h.Count && down > 0 && s + down == ns) (join, up) = (down, 0);
+                else continue;
+            }
             int lo = s - up, hi = (del ? e : s) + down;
             if (other.Any(o => BaseStart0(o) == End(o) ? lo < BaseStart0(o) && BaseStart0(o) < hi : BaseStart0(o) < hi && End(o) > lo))
                 continue; // the other side changed a line it could take: where it stands is not free
-            int best = 0;
-            for (int d = 1; d <= Math.Max(up, down) && best == 0; d++)
+            int best = join != 0 && !other.Any(o => Touch(o, s + join, e + join)) ? join : 0;
+            for (int d = 1; d <= Math.Max(up, down) && best == 0 && join == 0; d++)
                 foreach (var dd in (int[])[-d, d])
                     if ((dd < 0 ? -dd <= up : dd <= down) && !other.Any(o => Touch(o, s + dd, e + dd))) { best = dd; break; }
             if (best == 0) continue;
