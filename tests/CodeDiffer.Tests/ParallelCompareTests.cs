@@ -120,6 +120,30 @@ public class ParallelCompareTests : IDisposable
         Assert.True(h.Stable);
         Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(edited)), h.Sha256);
         Assert.Equal(Convert.ToHexString(System.IO.Hashing.XxHash128.Hash(edited)), h.XxHash128);
+
+        // Every byte read is counted: the whole file, the known file up to the differing chunk, and the prefix again.
+        long len = data.Length, c = PairComparer.ChunkBytes;
+        long expected = at < 0 ? 2 * len : len + Math.Min((at / c + 1) * c, len) + at / c * c;
+        Assert.Equal(expected, h.BytesRead);
+    }
+
+    [Fact]
+    public async Task BesideAKnownFileThatCantBeRead_ThisFileIsHashedAlone()
+    {
+        // A byte-range lock on the known file (a database, a mail store, a VM disk): opening it works, reading it
+        // doesn't. This file's own bytes read fine, so it still gets its hashes.
+        if (OperatingSystem.IsMacOS()) return; // no byte-range locks there
+        var data = Payload(PairComparer.ChunkBytes + 99, 10);
+        var known = E(Put("known", data));
+        var id = new ContentId(Convert.ToHexString(System.IO.Hashing.XxHash128.Hash(data)), Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)));
+        using var holder = new FileStream(known.FullPath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+        holder.Lock(0, data.Length);
+        var h = await PairComparer.HashBesideAsync(known, id, E(Put("b", data)));
+        Assert.True(h.Stable);
+        Assert.Equal(id.Sha256, h.Sha256);
+        Assert.Equal(id.XxHash, h.XxHash128);
+        Assert.Equal(PairComparer.ChunkBytes + data.Length, h.BytesRead); // its first chunk, then the whole file alone
+        holder.Unlock(0, data.Length);
     }
 
     [Fact]
@@ -131,6 +155,7 @@ public class ParallelCompareTests : IDisposable
         var known = E(Put("known", data));
         var h = await PairComparer.HashBesideAsync(known, new ContentId(new string('0', 32), new string('A', 64)), E(Put("b", data)));
         Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)), h.Sha256);
+        Assert.Equal(3L * data.Length, h.BytesRead); // both files, then this one again on its own
     }
 
     [Fact]

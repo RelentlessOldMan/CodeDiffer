@@ -338,7 +338,7 @@ public sealed class DirectoryComparer
                     equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
                     if (!hasL && h.Stable) provenL = new ContentId(h.XxHash128, h.Sha256);
                     if (!hasR && h.Stable) idR = new ContentId(h.XxHash128, h.Sha256);
-                    read = bothLocal ? 2 * e.Length : e.Length; // upper bound (the cached side's read stops at a difference)
+                    read = h.BytesRead; // the cached side too when hashed beside it, and a prefix read again at a difference
                 }
                 else
                 {

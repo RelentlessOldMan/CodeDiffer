@@ -20,6 +20,9 @@ public sealed record FileHashes(string XxHash128, string Sha256, bool Stable, lo
     /// <summary>Stable, but the listing's FileId isn't the handle's (size, mtime and ChangeTime all agree): a server
     /// that numbers a file one way in its listing and another when it's opened. Cached without an id.</summary>
     public bool ListingIdDiffers { get; init; }
+
+    /// <summary>The bytes the hashing read, every handle and every pass (a beside-hash reads the cached file too).</summary>
+    public long BytesRead { get; init; }
 }
 
 /// <summary>Why a read's hashes can't vouch for the file the listing describes (never cached), most telling first.</summary>
@@ -158,7 +161,7 @@ public static class PairComparer
                 off += n;
                 tRead = IoMeter.Now();
             }
-            return hasher.Finish(Doubt(before, FileStat.Of(h, path), file), hashedAt);
+            return hasher.Finish(Doubt(before, FileStat.Of(h, path), file), hashedAt) with { BytesRead = off };
         }
         finally
         {
@@ -173,9 +176,12 @@ public static class PairComparer
     /// <summary>
     /// <paramref name="file"/>'s hashes, read beside <paramref name="known"/>, a same-length file whose hashes the
     /// ledger already has. While their bytes match only XxHash128 runs (~3% of a SHA-256): every byte equal, and the
-    /// known file's live XxHash128 still its recorded one, the known SHA-256 is this file's too, by byte compare, not
-    /// by hash. At the first differing chunk this file gets its own SHA-256, from its start. For local trees: the
-    /// known file is read again (a network share pays that at link speed, so it hashes alone there).
+    /// known file's live XxHash128 still its recorded one, the known SHA-256 is this file's too. The pair's equality is
+    /// byte for byte; that the known file's bytes are the ones the ledger's SHA-256 was taken of rests on its XxHash128
+    /// (not collision-resistant against a crafted file, as the ledger's own trust of a path, size and mtime isn't either).
+    /// At the first differing chunk this file gets its own SHA-256, from its start. A known file that can't be read
+    /// leaves this one hashed alone. For local trees: the known file is read again (a network share pays that at link
+    /// speed, so it hashes alone there).
     /// </summary>
     public static async Task<FileHashes> HashBesideAsync(FileEntry known, ContentId knownId, FileEntry file, CancellationToken ct = default,
         Action<int, int>? onChunk = null, IoMeter? meter = null)
@@ -201,6 +207,16 @@ public static class PairComparer
         IncrementalHash? sha = null; // null while every byte so far is the known file's
         var buf = ArrayPool<byte>.Shared.Rent(ChunkBytes);
         var bufK = ArrayPool<byte>.Shared.Rent(ChunkBytes);
+        long read = 0; // every byte read, both files and the prefix read again
+
+        // The known file only helps: a read of it that fails (a byte-range lock, a vanished share) hashes this one alone.
+        async ValueTask<int> Known(Memory<byte> into, long at)
+        {
+            try { return await Fill(kh, into, at, ct).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return -1; }
+        }
+        async Task<FileHashes> Alone() { var a = await HashAsync(file, ct, onChunk, meter).ConfigureAwait(false); return a with { BytesRead = read + a.BytesRead }; }
+
         try
         {
             long off = 0;
@@ -208,22 +224,31 @@ public static class PairComparer
             {
                 long tRead = IoMeter.Now();
                 var want = (int)Math.Min(ChunkBytes, len - off);
-                var tk = sha is null ? Fill(kh, bufK.AsMemory(0, want), off, ct) : ValueTask.FromResult(0);
+                var tk = sha is null ? Known(bufK.AsMemory(0, want), off) : ValueTask.FromResult(0);
                 int n = await Fill(h, buf.AsMemory(0, want), off, ct).ConfigureAwait(false);
                 int nk = await tk.ConfigureAwait(false);
+                if (nk < 0) { meter?.Read(tRead, n); read += n; return await Alone().ConfigureAwait(false); }
                 meter?.Read(tRead, n + nk);
+                read += n + nk;
                 if (n == 0) break; // shrank under us — the after-stat marks it unstable
                 onChunk?.Invoke(n, n + nk);
                 long tWork = IoMeter.Now();
                 if (sha is null && (nk != n || !buf.AsSpan(0, n).SequenceEqual(bufK.AsSpan(0, n))))
                 {
-                    // Differs here: this file's own SHA-256, over what was already read and on from here.
+                    // Differs here: this file's own SHA-256, over what was already read and on from here. Its XxHash128
+                    // starts over on that second read too, so both hashes describe one reading of the prefix.
                     sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                    xx = new XxHash128();
                     for (long o = 0; o < off;)
                     {
+                        long tAgain = IoMeter.Now();
                         int m = await Fill(h, bufK.AsMemory(0, (int)Math.Min(ChunkBytes, off - o)), o, ct).ConfigureAwait(false);
                         if (m == 0) break;
+                        meter?.Read(tAgain, m);
+                        read += m;
+                        onChunk?.Invoke(0, m);
                         sha.AppendData(bufK.AsSpan(0, m));
+                        xx.Append(bufK.AsSpan(0, m));
                         o += m;
                     }
                 }
@@ -234,11 +259,11 @@ public static class PairComparer
                 off += n;
             }
             if (sha is null && !string.Equals(Convert.ToHexString(xxKnown.GetCurrentHash()), knownId.XxHash, StringComparison.OrdinalIgnoreCase))
-                return await HashAsync(file, ct, onChunk, meter).ConfigureAwait(false); // the known file isn't what the ledger says now
+                return await Alone().ConfigureAwait(false); // the known file isn't what the ledger says now
             var digest = sha is null ? knownId.Sha256 : Convert.ToHexString(sha.GetHashAndReset());
             var (doubt, onlyId) = Doubt(before, FileStat.Of(h, path), file);
             return new FileHashes(Convert.ToHexString(xx.GetCurrentHash()), digest, doubt == ReadDoubt.None, hashedAt, doubt)
-                { ListingIdDiffers = onlyId };
+                { ListingIdDiffers = onlyId, BytesRead = read };
         }
         finally
         {
