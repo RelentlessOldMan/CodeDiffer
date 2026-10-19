@@ -83,6 +83,25 @@ public class ParallelCompareTests : IDisposable
         Assert.NotEqual(r.Left.Sha256, r.Right.Sha256);
     }
 
+    [Theory]
+    [InlineData(-1)] // identical
+    [InlineData(0)] // the first byte
+    [InlineData(PairComparer.ChunkBytes - 1)] // the first chunk's last byte
+    [InlineData(PairComparer.ChunkBytes)] // the second chunk's first
+    [InlineData(PairComparer.ChunkBytes * 2 + 40)] // the last byte
+    public async Task OneSha256ForBothWhileTheyMatch_StillEachFilesOwn(int at)
+    {
+        // The second file's SHA-256 is the first's until a chunk differs, then forked: each still its own file's.
+        var data = Payload(PairComparer.ChunkBytes * 2 + 41, 7);
+        var edited = (byte[])data.Clone();
+        if (at >= 0) edited[at] ^= 0x5A;
+        var r = await PairComparer.CompareAsync(E(Put("a", data)), E(Put("b", edited)), hashes: true);
+        Assert.Equal(at < 0, r.Equal);
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)), r.Left!.Sha256);
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(edited)), r.Right!.Sha256);
+        Assert.Equal(Convert.ToHexString(System.IO.Hashing.XxHash128.Hash(edited)), r.Right.XxHash128);
+    }
+
     [Fact]
     public async Task EmptyFiles_AreEqual()
     {

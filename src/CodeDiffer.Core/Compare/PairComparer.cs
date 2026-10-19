@@ -75,7 +75,7 @@ public static class PairComparer
         if (lenL != lenR && !hashes) return new PairResult(false, null, null);
 
         var hl = hashes ? new Hasher() : null;
-        var hr = hashes ? new Hasher() : null;
+        var hr = hashes ? (lenL == lenR ? hl!.Twin() : null) ?? new Hasher() : null;
         var bufL = ArrayPool<byte>.Shared.Rent(ChunkBytes);
         var bufR = ArrayPool<byte>.Shared.Rent(ChunkBytes);
         byte[]? keptL = null, keptR = null;
@@ -99,6 +99,7 @@ public static class PairComparer
                 if (equal && (nl != nr || !bufL.AsSpan(0, nl).SequenceEqual(bufR.AsSpan(0, nr))))
                 {
                     equal = false;
+                    hr?.Part();
                     if (keepSmall && offL == 0 && offR == 0 && nl == lenL && nr == lenR)
                         (keptL, keptR) = (bufL.AsSpan(0, nl).ToArray(), bufR.AsSpan(0, nr).ToArray());
                     if (!hashes) return new PairResult(false, null, null) { LeftBytes = keptL, RightBytes = keptR };
@@ -110,9 +111,8 @@ public static class PairComparer
                 offR += nr;
             }
             if (!hashes) return new PairResult(equal, null, null);
-            return new PairResult(equal,
-                hl!.Finish(Doubt(beforeL, FileStat.Of(lh, pathL), left), hashedAt),
-                hr!.Finish(Doubt(beforeR, FileStat.Of(rh, pathR), right), hashedAt))
+            var hashesL = hl!.Finish(Doubt(beforeL, FileStat.Of(lh, pathL), left), hashedAt); // before its twin's: the twin takes its SHA-256
+            return new PairResult(equal, hashesL, hr!.Finish(Doubt(beforeR, FileStat.Of(rh, pathR), right), hashedAt))
             { LeftBytes = keptL, RightBytes = keptR };
         }
         finally
@@ -178,24 +178,50 @@ public static class PairComparer
         return (after.ChangeUtcTicks == 0 ? ReadDoubt.NoChangeTime : ReadDoubt.None, onlyId);
     }
 
+    /// <summary>
+    /// One file's XxHash128 + SHA-256. SHA-256 is nearly all of it (~250 MB/s a core without SHA instructions,
+    /// XxHash128 ~8 GB/s), so the second file of a pair is a <see cref="Twin"/>: while its bytes are the first's, the
+    /// first's SHA-256 stands for both, forked at the first chunk that differs (<see cref="Part"/>). An identical
+    /// pair, the usual case, costs one SHA-256 pass, not two.
+    /// </summary>
     private sealed class Hasher
     {
         private readonly XxHash128 _xx = new();
-        private readonly IncrementalHash _sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        private IncrementalHash? _sha; // null while a twin: the first file's stands for it
+        private Hasher? _twin;
+        private byte[]? _digest;
+
+        public Hasher() => _sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        private Hasher(Hasher twin) => _twin = twin;
+
+        /// <summary>The other file of a same-length pair, appended chunk for chunk with this one; null where the runtime
+        /// can't fork a SHA-256 (IncrementalHash.Clone is .NET 9+: the exes run on 10, a net8 host hashes both).</summary>
+        public Hasher? Twin() => s_clone is null ? null : new Hasher(this);
+
+        /// <summary>A twin's next chunk differs from the first file's: its own SHA-256 from here, forked from theirs.</summary>
+        public void Part()
+        {
+            if (_twin is null) return;
+            _sha = s_clone!(_twin._sha!);
+            _twin = null;
+        }
 
         public void Append(ReadOnlySpan<byte> data)
         {
             _xx.Append(data);
-            _sha.AppendData(data);
+            _sha?.AppendData(data);
         }
 
         public FileHashes Finish((ReadDoubt Doubt, bool OnlyId) d, long hashedAt)
         {
-            var result = new FileHashes(Convert.ToHexString(_xx.GetCurrentHash()), Convert.ToHexString(_sha.GetHashAndReset()), d.Doubt == ReadDoubt.None, hashedAt, d.Doubt)
+            _digest = _sha?.GetHashAndReset() ?? _twin!._digest!;
+            _sha?.Dispose();
+            return new FileHashes(Convert.ToHexString(_xx.GetCurrentHash()), Convert.ToHexString(_digest), d.Doubt == ReadDoubt.None, hashedAt, d.Doubt)
                 { ListingIdDiffers = d.OnlyId };
-            _sha.Dispose();
-            return result;
         }
+
+        private static readonly Func<IncrementalHash, IncrementalHash>? s_clone =
+            typeof(IncrementalHash).GetMethod("Clone", Type.EmptyTypes)?.CreateDelegate<Func<IncrementalHash, IncrementalHash>>();
     }
 
     private static SafeFileHandle Open(string path)
