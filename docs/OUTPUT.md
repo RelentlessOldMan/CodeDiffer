@@ -284,7 +284,7 @@ bytes, comes out "already" — a case-only rename already done, and a file v2 tu
 place, too). The overlay holds `APPLYING.txt` while it runs and `APPLIED.txt` (target, time)
 once done with nothing failed — after a failure it stays unapplied, so the same apply can be run again once the
 cause is fixed; a second finished apply to the same target is refused unless `--again`, since it would
-overwrite conflicts resolved since. On death the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
+overwrite conflicts resolved since. On death 1.0.9 the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
 
 Full-scale check (2026-10-05, CodeSpawner `death` 1.0.9 base / v1 / v2 on `\\IRISH\TestHole`, 68,661 base
 files, `--threads 4`, warm hash cache): `compare3` in 3:59 (base→v1 124 s, base→v2 109 s, merge 5 s; 0 bytes
@@ -299,6 +299,12 @@ first compare), merge 5 s, HTML report 6 s; verdicts identical file for file to 
 2:13** with the base shared between the two compares (base→v2 44 s), against 2:52 before (84 s). On a
 cold run the bytes go first (biggest files first), then a tail of ~58k small files takes ~3.5 min for
 0.1 GB, which is why the time-left estimate follows bytes, then the recent files-per-second rate.
+
+Local baseline on the current corpus (2026-10-16 to 10-19, CodeSpawner `death_1.3.1`: 74,775 files, 91.4 GB a
+tree, base / v1 / v2 on a local SSD): `verify` v1 cold 10:11, 1,989/1,989; v2 6:52, 1,986/1,986; the conflict
+verify 0:15, an exact 16,708 conflict / 47,724 clean split, compare3 conflicting in exactly 1,935 files. `apply`
+dry run: 54 files apply, 1,935 conflict; 31,382 hunks applied, 0 fuzzy, 16,708 conflict. Cold compare3 of the
+`d0` subtree (3 × 58 GB, more than the 32 GB of RAM) with v1.0.110: 116–196 s wall, 66–68 s CPU.
 
 CodeCompass v2 ledger at full scale (2026-10-06, CodeCompass 1.0.243): `codecompass index` of base and v1 on
 IRISH (66,337 of 68,661 files each; it skips the rest by size), then `compare` base→v1 with an empty
@@ -582,8 +588,8 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   (BOM, whitespace and line endings normalized byte by byte by the same rule, stopping at the first real difference), so
   a large LF→CRLF change is still `eol`; past 64 MB, or in UTF-16/32, a difference is `content` unchecked.
 - `verify` checks CodeDiffer, not only the manifest: with the trees it runs CodeDiffer's own compare and
-  requires exactly the manifest's files, reasons and rename similarities (death 1.0.9: 1,561/1,561 and
-  1,354/1,354); the 3-way gate needs the exact decomposition, or reconstruction AND a merge conflicting in
+  requires exactly the manifest's files, reasons and rename similarities (death_1.3.1: 1,989/1,989 and
+  1,986/1,986); the 3-way gate needs the exact decomposition, or reconstruction AND a merge conflicting in
   exactly the manifest's files AND every region being what it says against the trees (a conflict both sides
   changed, differently, that some minimal alignment of each side leaves without a base line both sides keep — diff3
   ends a region at one, so a conflict widened over unchanged lines or two regions joined fails, while among repeated
@@ -591,7 +597,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   (one side's change is one hunk of a minimal diff), neither overlapping nor abutting another change, the other
   side's or its own side's; an edit both sides made alike only where they really did), AND compare3 itself
   — over the whole trees, lines with their endings — conflicting in exactly the manifest's files and merging
-  none it leaves out (death 1.0.9: 941 of 941). Every modified record's `oldSha`/`newSha`/`oldSize`/`newSize`
+  none it leaves out (death_1.3.1: 1,935 of 1,935). Every modified record's `oldSha`/`newSha`/`oldSize`/`newSize`
   is checked against the trees' files, whatever its reason: the digest only proves the manifest agrees with itself.
 - `verify` reads a sharded delta (CodeSpawner 1.1.x `--shard-size`) from its index, `<corpus>-delta.index.json`;
   a page alone is refused. Each page in the index's catalog must be beside it with the catalog's sha256, index,
