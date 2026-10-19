@@ -306,6 +306,12 @@ verify 0:15, an exact 16,708 conflict / 47,724 clean split, compare3 conflicting
 dry run: 54 files apply, 1,935 conflict; 31,382 hunks applied, 0 fuzzy, 16,708 conflict. Cold compare3 of the
 `d0` subtree (3 × 58 GB, more than the 32 GB of RAM) with v1.0.110: 116–196 s wall, 66–68 s CPU.
 
+Over the share (2026-10-19, v1.0.110, `death_1.3.1` vs `_v1` on `\\IRISH\TestHole`, 8 threads, empty CodeDiffer
+and CodeCompass caches): cold `compare` **34:43**, 182.8 GB read at ~95–101 MB/s (the link), walk 7 s, 0 pauses,
+0 unreadable; 1,989 modified, every one tagged comment-only noise (v1's edits append `/*v1:…*/` to lines). Then
+`verify` of the v1 delta on the same trees with that cache: 2:07, digest reproduced, hunks 1,989/1,989 exact,
+shas 0 wrong, the compare's file operations 1,989/1,989.
+
 CodeCompass v2 ledger at full scale (2026-10-06, CodeCompass 1.0.243): `codecompass index` of base and v1 on
 IRISH (66,337 of 68,661 files each; it skips the rest by size), then `compare` base→v1 with an empty
 CodeDiffer cache: 129,552 sides from CodeCompass's ledgers, 17.3 GB read (exactly the files CodeCompass
