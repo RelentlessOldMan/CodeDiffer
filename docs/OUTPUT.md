@@ -317,6 +317,14 @@ files, which held nearly all its bytes): such a file, its size, mtime and Change
 and told by those three alone, and the summary counts it ("cached by size, modified and change time only").
 Before v1.0.89 such files were never cached, so every compare read them again.
 
+When one side of a same-size pair is cached and the other isn't (compare3's base→v2, where base comes from
+base→v1), the uncached file is read beside the cached one on local trees: while their bytes match only XxHash128
+runs, and a file equal to the end, the cached file's live XxHash128 still its recorded one, takes the cached SHA-256,
+proven by byte compare; a file that differs gets its own SHA-256 from its start. The cached side is read again, so
+the read cost counts it (base→v2 shows about base→v1's bytes, not half). On death's d0 (3 × 58 GB, cold) that cut
+compare3's CPU from 116 s to 67 s, wall no slower. On a share each file hashes alone (a second read there costs link
+time, and the hashing keeps up with the link), and never with `--rehash-side`, which reads only the trees named.
+
 `--rehash` re-reads every tree and refreshes its cache; `--rehash-side` does that for the trees named and uses
 the others' cache: `compare --rehash-side left|right`, `compare3 --rehash-side base|v1|v2` (several with commas,
 e.g. `v1,v2`). It checks one tree's cache against its bytes, or times one side cold, without reading the rest

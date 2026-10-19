@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.IO.Hashing;
 using System.Security.Cryptography;
+using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Walk;
 using Microsoft.Win32.SafeHandles;
 
@@ -168,6 +169,84 @@ public static class PairComparer
     /// <summary>Convenience for callers with only a path (tests, probes): stat-less entry ⇒ never Stable.</summary>
     public static Task<FileHashes> HashAsync(string path, CancellationToken ct = default)
         => HashAsync(new FileEntry("", path, -1, default), ct);
+
+    /// <summary>
+    /// <paramref name="file"/>'s hashes, read beside <paramref name="known"/>, a same-length file whose hashes the
+    /// ledger already has. While their bytes match only XxHash128 runs (~3% of a SHA-256): every byte equal, and the
+    /// known file's live XxHash128 still its recorded one, the known SHA-256 is this file's too, by byte compare, not
+    /// by hash. At the first differing chunk this file gets its own SHA-256, from its start. For local trees: the
+    /// known file is read again (a network share pays that at link speed, so it hashes alone there).
+    /// </summary>
+    public static async Task<FileHashes> HashBesideAsync(FileEntry known, ContentId knownId, FileEntry file, CancellationToken ct = default,
+        Action<int, int>? onChunk = null, IoMeter? meter = null)
+    {
+        if (knownId.Sha256.Length == 0 || knownId.XxHash.Length == 0 || known.Length != file.Length)
+            return await HashAsync(file, ct, onChunk, meter).ConfigureAwait(false);
+        long t0 = IoMeter.Now();
+        string path = file.FullPath;
+        SafeFileHandle kh;
+        try { kh = Open(known.FullPath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return await HashAsync(file, ct, onChunk, meter).ConfigureAwait(false);
+        }
+        using var _ = kh;
+        using var h = Open(path);
+        long hashedAt = DateTime.UtcNow.Ticks;
+        var before = FileStat.Of(h, path);
+        long len = RandomAccess.GetLength(h);
+        meter?.Opened(t0);
+        var xx = new XxHash128();
+        var xxKnown = new XxHash128();
+        IncrementalHash? sha = null; // null while every byte so far is the known file's
+        var buf = ArrayPool<byte>.Shared.Rent(ChunkBytes);
+        var bufK = ArrayPool<byte>.Shared.Rent(ChunkBytes);
+        try
+        {
+            long off = 0;
+            while (off < len)
+            {
+                long tRead = IoMeter.Now();
+                var want = (int)Math.Min(ChunkBytes, len - off);
+                var tk = sha is null ? Fill(kh, bufK.AsMemory(0, want), off, ct) : ValueTask.FromResult(0);
+                int n = await Fill(h, buf.AsMemory(0, want), off, ct).ConfigureAwait(false);
+                int nk = await tk.ConfigureAwait(false);
+                meter?.Read(tRead, n + nk);
+                if (n == 0) break; // shrank under us — the after-stat marks it unstable
+                onChunk?.Invoke(n, n + nk);
+                long tWork = IoMeter.Now();
+                if (sha is null && (nk != n || !buf.AsSpan(0, n).SequenceEqual(bufK.AsSpan(0, n))))
+                {
+                    // Differs here: this file's own SHA-256, over what was already read and on from here.
+                    sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                    for (long o = 0; o < off;)
+                    {
+                        int m = await Fill(h, bufK.AsMemory(0, (int)Math.Min(ChunkBytes, off - o)), o, ct).ConfigureAwait(false);
+                        if (m == 0) break;
+                        sha.AppendData(bufK.AsSpan(0, m));
+                        o += m;
+                    }
+                }
+                xx.Append(buf.AsSpan(0, n));
+                if (sha is null) xxKnown.Append(bufK.AsSpan(0, n));
+                else sha.AppendData(buf.AsSpan(0, n));
+                meter?.Worked(tWork);
+                off += n;
+            }
+            if (sha is null && !string.Equals(Convert.ToHexString(xxKnown.GetCurrentHash()), knownId.XxHash, StringComparison.OrdinalIgnoreCase))
+                return await HashAsync(file, ct, onChunk, meter).ConfigureAwait(false); // the known file isn't what the ledger says now
+            var digest = sha is null ? knownId.Sha256 : Convert.ToHexString(sha.GetHashAndReset());
+            var (doubt, onlyId) = Doubt(before, FileStat.Of(h, path), file);
+            return new FileHashes(Convert.ToHexString(xx.GetCurrentHash()), digest, doubt == ReadDoubt.None, hashedAt, doubt)
+                { ListingIdDiffers = onlyId };
+        }
+        finally
+        {
+            sha?.Dispose();
+            ArrayPool<byte>.Shared.Return(buf);
+            ArrayPool<byte>.Shared.Return(bufK);
+        }
+    }
 
     private static (ReadDoubt, bool OnlyId) Doubt(FileStat before, FileStat after, FileEntry listing)
     {

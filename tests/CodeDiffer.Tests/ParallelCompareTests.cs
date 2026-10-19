@@ -1,4 +1,5 @@
 using CodeDiffer.Core.Compare;
+using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Walk;
 using Xunit;
@@ -100,6 +101,36 @@ public class ParallelCompareTests : IDisposable
         Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)), r.Left!.Sha256);
         Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(edited)), r.Right!.Sha256);
         Assert.Equal(Convert.ToHexString(System.IO.Hashing.XxHash128.Hash(edited)), r.Right.XxHash128);
+    }
+
+    [Theory]
+    [InlineData(-1)] // identical: the known SHA-256 stands, proven byte for byte
+    [InlineData(0)]
+    [InlineData(PairComparer.ChunkBytes - 1)]
+    [InlineData(PairComparer.ChunkBytes)] // differs after a whole matching chunk: its own SHA-256 from its start
+    [InlineData(PairComparer.ChunkBytes * 2 + 40)]
+    public async Task BesideAKnownFile_TheHashesAreStillThisFilesOwn(int at)
+    {
+        var data = Payload(PairComparer.ChunkBytes * 2 + 41, 8);
+        var edited = (byte[])data.Clone();
+        if (at >= 0) edited[at] ^= 0x5A;
+        var known = E(Put("known", data));
+        var id = new ContentId(Convert.ToHexString(System.IO.Hashing.XxHash128.Hash(data)), Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)));
+        var h = await PairComparer.HashBesideAsync(known, id, E(Put("b", edited)));
+        Assert.True(h.Stable);
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(edited)), h.Sha256);
+        Assert.Equal(Convert.ToHexString(System.IO.Hashing.XxHash128.Hash(edited)), h.XxHash128);
+    }
+
+    [Fact]
+    public async Task BesideAKnownFileTheLedgerNoLongerDescribes_ItsSha256IsNotTaken()
+    {
+        // The bytes match, but the known file's live XxHash128 isn't the recorded one: its recorded SHA-256 isn't
+        // these bytes', so this file is hashed for itself.
+        var data = Payload(5000, 9);
+        var known = E(Put("known", data));
+        var h = await PairComparer.HashBesideAsync(known, new ContentId(new string('0', 32), new string('A', 64)), E(Put("b", data)));
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)), h.Sha256);
     }
 
     [Fact]

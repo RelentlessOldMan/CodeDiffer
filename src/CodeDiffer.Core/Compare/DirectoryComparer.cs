@@ -152,6 +152,10 @@ public sealed class DirectoryComparer
             off: _options.Cache == CacheMode.Off);
         long bytesRead = 0;
         int retriedAtEnd = 0;
+        // Hash an uncached file beside its cached twin: on local trees only, and never when a side is named for a
+        // rehash (--rehash-side reads that tree alone, so it can be checked or timed cold without the rest).
+        bool bothLocal = trustVerdicts &&
+                         TrustTiming.For(leftFull) == TrustTiming.Local && TrustTiming.For(Path.GetFullPath(right)) == TrustTiming.Local;
 
         int pathCount = 0;
         var changes = new List<FileChange>(Math.Max(leftFiles.Count, rightFiles.Count));
@@ -326,12 +330,15 @@ public sealed class DirectoryComparer
                 {
                     // One side cached: read only the other side, and compare hashes (SHA-256 when both have it).
                     var (e, cache, known) = hasL ? (re, rightCache, cl) : (le, leftCache, cr);
-                    var h = await PairComparer.HashAsync(e, ct, onChunk, io).ConfigureAwait(false);
+                    // On local trees beside the cached file: an unchanged file then costs XxHash128, not a SHA-256.
+                    var h = bothLocal
+                        ? await PairComparer.HashBesideAsync(hasL ? le : re, known, e, ct, onChunk, io).ConfigureAwait(false)
+                        : await PairComparer.HashAsync(e, ct, onChunk, io).ConfigureAwait(false);
                     cache.Record(e, h);
                     equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
                     if (!hasL && h.Stable) provenL = new ContentId(h.XxHash128, h.Sha256);
                     if (!hasR && h.Stable) idR = new ContentId(h.XxHash128, h.Sha256);
-                    read = e.Length;
+                    read = bothLocal ? 2 * e.Length : e.Length; // upper bound (the cached side's read stops at a difference)
                 }
                 else
                 {
