@@ -50,6 +50,7 @@ public static class DeltaManifestParser
         string? diffSha = meta.TryGetProperty("diffTruthSha", out var d) && d.ValueKind == JsonValueKind.String
             ? d.GetString()
             : null;
+        var bookkeeping = ManifestBookkeeping.Read(meta, version);
 
         var added = new List<string>();
         var removed = new List<string>();
@@ -79,7 +80,8 @@ public static class DeltaManifestParser
             if (root.TryGetProperty("shards", out _))
                 throw new FormatException("a shards[] catalog without _meta.shardSize: a sharded delta's index carries both");
             NoPathTwice(added, removed, renamed, modified);
-            return new DeltaManifest(version, added, removed, renamed, modified, diffSha);
+            ManifestBookkeeping.NotDescribed(bookkeeping, Described(added, removed, renamed, modified));
+            return new DeltaManifest(version, added, removed, renamed, modified, diffSha, Bookkeeping: bookkeeping);
         }
 
         if (size.ValueKind != JsonValueKind.Number || !size.TryGetInt32(out int shardSize) || shardSize < 1)
@@ -93,8 +95,12 @@ public static class DeltaManifestParser
 
         var pages = ReadPages(root, indexPath, shardSize);
         NoPathTwice(added, removed, renamed, pages.Modified);
-        return new DeltaManifest(version, added, removed, renamed, pages.Modified, diffSha, new DeltaPaging(shardSize, pages.Count));
+        ManifestBookkeeping.NotDescribed(bookkeeping, Described(added, removed, renamed, pages.Modified));
+        return new DeltaManifest(version, added, removed, renamed, pages.Modified, diffSha, new DeltaPaging(shardSize, pages.Count), bookkeeping);
     }
+
+    private static IEnumerable<string> Described(List<string> added, List<string> removed, List<RenameOp> renamed, List<FileDelta> modified)
+        => added.Concat(removed).Concat(renamed.SelectMany(r => new[] { r.From, r.To })).Concat(modified.Select(m => m.Path));
 
     /// <summary>The <c>modified</c> records of a sharded delta: every page in the index's catalog, each checked against it.</summary>
     private static (List<FileDelta> Modified, int Count) ReadPages(JsonElement index, string indexPath, int shardSize)

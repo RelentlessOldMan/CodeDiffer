@@ -18,8 +18,12 @@ public sealed record Compare3CrossCheck(
     IReadOnlyList<string> ConflictOnlyInManifest,
     IReadOnlyList<string> Unchanged,
     int Unread,
-    IReadOnlyList<string> MergedNotInManifest)
+    IReadOnlyList<string> MergedNotInManifest,
+    IReadOnlyList<string>? Bookkeeping = null)
 {
+    /// <summary>Paths compare3 changed that the manifest lists as bookkeeping: reported, not checked.</summary>
+    public IReadOnlyList<string> BookkeepingSkipped => Bookkeeping ?? [];
+
     public bool Ok => ConflictOnlyInCompare3.Count == 0 && ConflictOnlyInManifest.Count == 0 && Unchanged.Count == 0 && Unread == 0
                       && MergedNotInManifest.Count == 0;
 }
@@ -92,8 +96,12 @@ public static class ConflictTreeCrossCheck
         // A line merge happens where both sides modified the file in place; renames, adds and deletes are file
         // operations the conflict manifest doesn't describe.
         static bool InPlace(Merge3Entry e) => e.V1 is { Status: ChangeStatus.Modified } && e.V2 is { Status: ChangeStatus.Modified };
-        var mine = report.Entries.Where(e => e.Outcome == Merge3Outcome.Conflict && InPlace(e)).Select(e => e.Path).ToHashSet(StringComparer.Ordinal);
-        var merged = report.Entries.Where(e => e.Outcome == Merge3Outcome.Merged && InPlace(e)).Select(e => e.Path).ToHashSet(StringComparer.Ordinal);
+        // A bookkeeping path (version 2: each variant's compile db, rewritten to name its own tree) differs without an
+        // edit: set aside, and reported.
+        var skip = (manifest.Bookkeeping ?? []).ToHashSet(StringComparer.Ordinal);
+        var checkedEntries = report.Entries.Where(e => !skip.Contains(e.Path)).ToList();
+        var mine = checkedEntries.Where(e => e.Outcome == Merge3Outcome.Conflict && InPlace(e)).Select(e => e.Path).ToHashSet(StringComparer.Ordinal);
+        var merged = checkedEntries.Where(e => e.Outcome == Merge3Outcome.Merged && InPlace(e)).Select(e => e.Path).ToHashSet(StringComparer.Ordinal);
         var theirs = manifest.Conflicts.Select(c => c.Path).ToHashSet(StringComparer.Ordinal);
         var touched = report.Entries.Select(e => e.Path).ToHashSet(StringComparer.Ordinal);
         var named = manifest.Conflicts.Select(c => c.Path).Concat(manifest.CleanMerges.Select(m => m.Path)).ToHashSet(StringComparer.Ordinal);
@@ -105,7 +113,9 @@ public static class ConflictTreeCrossCheck
             report.UnreadableFiles + report.DroppedDirectories,
             // A file both sides edited in place and compare3 merged cleanly is a merge the manifest must describe: one
             // left out entirely would otherwise pass every gate (gates 1 and 2 only see the files the manifest names).
-            merged.Except(named).Order(StringComparer.Ordinal).ToList());
+            merged.Except(named).Order(StringComparer.Ordinal).ToList(),
+            report.Entries.Where(e => skip.Contains(e.Path)).Select(e => $"{e.Path} ({e.Outcome.ToString().ToLowerInvariant()})")
+                .Order(StringComparer.Ordinal).ToList());
     }
 
     public static ConflictCrossCheckResult Run(

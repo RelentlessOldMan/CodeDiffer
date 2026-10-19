@@ -3,7 +3,7 @@
 The ground-truth contract CodeDiffer verifies against. CodeSpawner's bulk `mutate` emits a
 base→variant `<corpus>-delta.json`; CodeDiffer composes `truth = base ⊕ delta` and asserts its diff
 output equals it. The stable coupling point is this schema + the `diffTruthSha` digest — **not** the
-corpus bytes. Hard-assert `_meta.manifestVersion == 1` before trusting any manifest.
+corpus bytes. Hard-assert `_meta.manifestVersion` (1, or 2 with bookkeeping: see below) before trusting any manifest.
 
 (Locked in the claudes-chatroom design session; CodeSpawner keeps the authoritative generator-side copy
 in its own `docs/`. This is CodeDiffer's consumer-side record.)
@@ -117,6 +117,19 @@ path), the records ascending across pages with no path twice, and no `<corpus>-d
 index that the catalog leaves out. The pages in order are `modified`, and the digest must reproduce. A missing,
 extra, altered or misplaced page is a hard error, never a partial verify. Fixture: `\\IRISH\TestHole\codediffer-fixtures\sharded-delta`
 (250 modified in 3 pages of 100; the monolithic delta beside it carries the same `diffTruthSha`).
+
+## Bookkeeping (manifestVersion 2, CodeSpawner 1.3.2)
+
+A `--three-way` copy rewrites each variant's `compile_commands.json` to name the variant's own tree. That file then
+differs from B without being an edit: it is in no file op, hunk or conflict, and the v1, v2 and conflict manifests
+list it instead, as `_meta.bookkeeping: ["compile_commands.json"]` with `manifestVersion: 2`. Version 2 exactly when
+the list is there (a corpus with a compile db); otherwise version 1, byte-identical to before. No digest covers it.
+
+CodeDiffer reads it strictly: version 2 without the list, version 1 with one, an empty list, a path twice, or a
+listed path that is also a record of the manifest are each a hard error. The tree checks (file ops against
+CodeDiffer's own compare; compare3's conflicted and merged files) set the listed paths aside and print each one
+they found changed as `BOOKKEEPING, not checked`, so a skip is never silent. Any other file the manifest leaves out
+still fails.
 
 ## Build sequence
 

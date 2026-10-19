@@ -541,7 +541,7 @@ static int Verify(string[] args)
 
     var v = DeltaVerifier.VerifyDigest(manifest);
     Console.WriteLine($"verify: {args[1]}");
-    Console.WriteLine($"  manifestVersion {manifest.ManifestVersion}");
+    Console.WriteLine($"  manifestVersion {manifest.ManifestVersion}{Bookkept(manifest.Bookkeeping)}");
     Console.WriteLine($"  modified {manifest.Modified.Count} · added {manifest.Added.Count} · removed {manifest.Removed.Count} · renamed {manifest.Renamed.Count}");
     if (manifest.Paging is { } paging)
         Console.WriteLine($"  sharded: modified read from {paging.Pages} page(s) of up to {paging.ShardSize:N0} · each page's sha, " +
@@ -589,6 +589,7 @@ static int Verify(string[] args)
             Console.WriteLine($"    ({fo.MetadataCount:N0} metadata record(s): content identical, so expected unchanged — CodeDiffer doesn't diff metadata)");
         if (fo.BelowThresholdCount > 0)
             Console.WriteLine($"    ({fo.BelowThresholdCount:N0} rename(s) below the {options.RenameSimilarityThresholdMilli / 10}% rename threshold, so expected removed and added)");
+        foreach (var b in fo.BookkeepingSkipped) Console.WriteLine($"    BOOKKEEPING, not checked: {b}");
         foreach (var m in fo.Missing) Console.WriteLine($"    MISSING  {m}");
         foreach (var x in fo.Extra) Console.WriteLine($"    EXTRA    {x}");
         foreach (var w in fo.WrongReason.Concat(fo.WrongSimilarity)) Console.WriteLine($"    WRONG    {w}");
@@ -602,6 +603,10 @@ static int Verify(string[] args)
 
     return v.Ok && crossOk ? 0 : 1;
 }
+
+// Version 2's bookkeeping paths, on the version line: skipped by the tree checks, so said up front.
+static string Bookkept(IReadOnlyList<string>? paths)
+    => paths is { Count: > 0 } ? $" · bookkeeping (differs without an edit, skipped by the tree checks): {string.Join(", ", paths)}" : "";
 
 static int VerifyConflict(string[] args)
 {
@@ -620,7 +625,7 @@ static int VerifyConflict(string[] args)
 
     var v = DeltaVerifier.VerifyConflictDigest(manifest);
     Console.WriteLine($"verify: {args[1]}");
-    Console.WriteLine($"  manifestVersion {manifest.ManifestVersion}  (deltaKind conflict-3way)");
+    Console.WriteLine($"  manifestVersion {manifest.ManifestVersion}  (deltaKind conflict-3way){Bookkept(manifest.Bookkeeping)}");
     Console.WriteLine($"  conflicts {manifest.Conflicts.Count} · clean-merges {manifest.CleanMerges.Count}  (v1Tree {manifest.V1Tree ?? "?"} · v2Tree {manifest.V2Tree ?? "?"})");
     Console.WriteLine($"  conflictTruthSha stated     {v.Stated ?? "(none)"}");
     Console.WriteLine($"  conflictTruthSha recomputed {v.Recomputed}");
@@ -687,6 +692,7 @@ static int VerifyConflict(string[] args)
         foreach (var p in c3.ConflictOnlyInManifest.Take(20)) Console.WriteLine($"        - manifest-only conflicted file {p}");
         foreach (var p in c3.Unchanged.Take(20)) Console.WriteLine($"        ? unchanged in compare3 {p}");
         foreach (var p in c3.MergedNotInManifest.Take(20)) Console.WriteLine($"        - merged by compare3, not in the manifest {p}");
+        foreach (var b in c3.BookkeepingSkipped) Console.WriteLine($"        BOOKKEEPING, not checked: {b}");
         if (c3.Unread > 0) Console.WriteLine($"        (compare3 could not read {c3.Unread:N0} file(s) / director(ies))");
         Console.WriteLine(c3.Ok
             ? "  OK — compare3 conflicts in exactly the manifest's files"

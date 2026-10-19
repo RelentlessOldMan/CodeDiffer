@@ -90,7 +90,7 @@ public class DeltaVerifyTests
     [Fact]
     public void AssertSupportedVersion_RejectsUnknownVersion()
     {
-        var m = new DeltaManifest(ManifestVersion: 2, Added: [], Removed: [], Renamed: [], Modified: [], DiffTruthSha: null);
+        var m = new DeltaManifest(ManifestVersion: 3, Added: [], Removed: [], Renamed: [], Modified: [], DiffTruthSha: null);
         Assert.Throws<NotSupportedException>(() => DeltaVerifier.AssertSupportedVersion(m));
     }
 }

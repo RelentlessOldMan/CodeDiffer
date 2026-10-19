@@ -16,7 +16,8 @@ public sealed record CleanMerge(string Path, string Side, HunkOp Op, int OldStar
 /// <summary>
 /// The parsed CodeSpawner 3-way conflict artifact (deltaKind "conflict-3way"). Pair it with the two
 /// B→V diff-deltas and the B_v1/B_v2 trees. Assert <see cref="ManifestVersion"/> and independently
-/// reproduce <see cref="ConflictTruthSha"/> before trusting it.
+/// reproduce <see cref="ConflictTruthSha"/> before trusting it. <paramref name="Bookkeeping"/>: version 2's
+/// <c>_meta.bookkeeping</c>, paths the variants differ in without an edit (skipped by compare3's cross-check).
 /// </summary>
 public sealed record ConflictManifest(
     int ManifestVersion,
@@ -24,4 +25,5 @@ public sealed record ConflictManifest(
     string? V2Tree,
     IReadOnlyList<Conflict> Conflicts,
     IReadOnlyList<CleanMerge> CleanMerges,
-    string? ConflictTruthSha);
+    string? ConflictTruthSha,
+    IReadOnlyList<string>? Bookkeeping = null);

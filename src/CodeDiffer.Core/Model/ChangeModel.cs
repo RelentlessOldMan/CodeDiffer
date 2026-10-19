@@ -129,7 +129,9 @@ public sealed record RenameOp(string From, string To, int SimilarityMilli, strin
 
 /// <summary>
 /// The parsed CodeSpawner base→variant delta manifest (the consumer-side model). Assert
-/// <see cref="ManifestVersion"/> == 1 before trusting it; independently reproduce <see cref="DiffTruthSha"/>.
+/// <see cref="ManifestVersion"/> (1 or 2) before trusting it; independently reproduce <see cref="DiffTruthSha"/>.
+/// <paramref name="Bookkeeping"/>: version 2's <c>_meta.bookkeeping</c>, paths the variant differs in without an edit
+/// (skipped when comparing the trees); null or empty in version 1.
 /// </summary>
 public sealed record DeltaManifest(
     int ManifestVersion,
@@ -138,7 +140,8 @@ public sealed record DeltaManifest(
     IReadOnlyList<RenameOp> Renamed,
     IReadOnlyList<FileDelta> Modified,
     string? DiffTruthSha,
-    DeltaPaging? Paging = null);
+    DeltaPaging? Paging = null,
+    IReadOnlyList<string>? Bookkeeping = null);
 
 /// <summary>How a sharded delta was read: its index's <c>shardSize</c> and the pages its <c>modified</c> came from.</summary>
 public sealed record DeltaPaging(int ShardSize, int Pages);

@@ -15,22 +15,20 @@ public sealed record DigestVerification(bool Ok, string? Stated, string Recomput
 /// </summary>
 public static class DeltaVerifier
 {
-    public const int SupportedManifestVersion = 1;
+    /// <summary>Version 2 (CodeSpawner 1.3.2) is version 1 plus <c>_meta.bookkeeping</c>.</summary>
+    public const int OldestManifestVersion = 1, NewestManifestVersion = 2;
 
     /// <summary>Hard-assert the manifest version before trusting anything else (the contract's first rule).</summary>
-    public static void AssertSupportedVersion(DeltaManifest manifest)
-    {
-        if (manifest.ManifestVersion != SupportedManifestVersion)
-            throw new NotSupportedException(
-                $"unsupported manifestVersion {manifest.ManifestVersion} (CodeDiffer supports {SupportedManifestVersion})");
-    }
+    public static void AssertSupportedVersion(DeltaManifest manifest) => AssertSupported(manifest.ManifestVersion);
 
     /// <summary>The same for a 3-way conflict artifact.</summary>
-    public static void AssertSupportedVersion(ConflictManifest manifest)
+    public static void AssertSupportedVersion(ConflictManifest manifest) => AssertSupported(manifest.ManifestVersion);
+
+    private static void AssertSupported(int version)
     {
-        if (manifest.ManifestVersion != SupportedManifestVersion)
+        if (version is < OldestManifestVersion or > NewestManifestVersion)
             throw new NotSupportedException(
-                $"unsupported manifestVersion {manifest.ManifestVersion} (CodeDiffer supports {SupportedManifestVersion})");
+                $"unsupported manifestVersion {version} (CodeDiffer supports {OldestManifestVersion} and {NewestManifestVersion})");
     }
 
     /// <summary>Recompute diffTruthSha and compare to the stated value. Ok iff they match (both present).</summary>

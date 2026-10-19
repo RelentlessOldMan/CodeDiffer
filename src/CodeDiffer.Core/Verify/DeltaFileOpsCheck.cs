@@ -6,8 +6,12 @@ namespace CodeDiffer.Core.Verify;
 public sealed record FileOpsCheckResult(
     int Expected, int Matched,
     IReadOnlyList<string> Missing, IReadOnlyList<string> Extra, IReadOnlyList<string> WrongReason, IReadOnlyList<string> WrongSimilarity,
-    int MissingCount, int ExtraCount, int WrongReasonCount, int WrongSimilarityCount, int MetadataCount = 0, int BelowThresholdCount = 0)
+    int MissingCount, int ExtraCount, int WrongReasonCount, int WrongSimilarityCount, int MetadataCount = 0, int BelowThresholdCount = 0,
+    IReadOnlyList<string>? Bookkeeping = null)
 {
+    /// <summary>The compare's operations on the manifest's bookkeeping paths: listed, not checked.</summary>
+    public IReadOnlyList<string> BookkeepingSkipped => Bookkeeping ?? [];
+
     /// <summary>Pass iff CodeDiffer reports exactly the manifest's file operations, with the same reasons and rename similarities.</summary>
     public bool Ok => MissingCount + ExtraCount + WrongReasonCount + WrongSimilarityCount == 0;
 }
@@ -23,7 +27,8 @@ public sealed record FileOpsCheckResult(
 /// (<c>oldSha==newSha</c>) and CodeDiffer doesn't diff metadata, so the compare must report that file unchanged (a rename
 /// with one, identical). A rename less similar than the compare's rename threshold (the contract grades renames down to
 /// ~0.3 and sets no threshold; CodeDiffer's is git's 50%) is no rename to the compare: it must report the file removed
-/// and added.
+/// and added. A path in the manifest's <c>bookkeeping</c> (version 2) differs without an edit: the compare's operation on
+/// it is set aside and reported, not counted extra.
 /// </summary>
 public static class DeltaFileOpsCheck
 {
@@ -56,7 +61,15 @@ public static class DeltaFileOpsCheck
         var classifier = new Compare.ReasonClassifier();
 
         var actual = new Dictionary<string, string>(StringComparer.Ordinal);
+        var skip = (manifest.Bookkeeping ?? []).ToHashSet(StringComparer.Ordinal);
+        var skipped = new List<string>();
         foreach (var c in report.Changes)
+        {
+            if (c.Status != ChangeStatus.Identical && (skip.Contains(c.RelativePath) || c.RenamedFrom is { } was && skip.Contains(was)))
+            {
+                skipped.Add(c.RenamedFrom is { } from ? $"renamed {from} -> {c.RelativePath}" : $"{c.Status.ToString().ToLowerInvariant()} {c.RelativePath}");
+                continue;
+            }
             switch (c.Status)
             {
                 case ChangeStatus.Added: actual[$"added {c.RelativePath}"] = ""; break;
@@ -67,6 +80,7 @@ public static class DeltaFileOpsCheck
                     break;
                 case ChangeStatus.Modified: actual[$"modified {c.RelativePath}"] = c.ReasonLabel ?? "?"; break;
             }
+        }
         if (metadata.Count > 0)
         {
             var changed = report.Changes.Where(c => c.Status != ChangeStatus.Identical).SelectMany(c => c.RenamedFrom is { } from ? [c.RelativePath, from] : new[] { c.RelativePath })
@@ -84,7 +98,7 @@ public static class DeltaFileOpsCheck
 
         return new FileOpsCheckResult(expected.Count, expected.Count - missing.Count - wrong.Count,
             missing.Take(maxListed).ToList(), extra.Take(maxListed).ToList(), reason.Take(maxListed).ToList(), sim.Take(maxListed).ToList(),
-            missing.Count, extra.Count, reason.Count, sim.Count, metadata.Count, below);
+            missing.Count, extra.Count, reason.Count, sim.Count, metadata.Count, below, skipped.Order(StringComparer.Ordinal).ToList());
     }
 
     private static string RenameReason(Compare.ReasonClassifier classifier, string baseDir, string variantDir, FileChange c)

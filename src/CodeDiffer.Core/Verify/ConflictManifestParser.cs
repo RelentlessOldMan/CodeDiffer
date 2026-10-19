@@ -60,7 +60,9 @@ public static class ConflictManifestParser
                 m.GetProperty("newStart").GetInt32(), m.GetProperty("newLines").GetInt32()));
         }
 
-        return new ConflictManifest(version, v1Tree, v2Tree, conflicts, clean, sha);
+        var bookkeeping = ManifestBookkeeping.Read(meta, version);
+        ManifestBookkeeping.NotDescribed(bookkeeping, conflicts.Select(c => c.Path).Concat(clean.Select(m => m.Path)));
+        return new ConflictManifest(version, v1Tree, v2Tree, conflicts, clean, sha, bookkeeping);
     }
 
     /// <summary>A required array property's items; anything else is a malformed manifest (<see cref="FormatException"/>).</summary>
