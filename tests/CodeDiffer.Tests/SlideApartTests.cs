@@ -63,4 +63,13 @@ public class SlideApartTests
         var v2 = A + F.Replace("}", "};") + G;
         Assert.Null(Merged(A + F + G, A + G, v2));
     }
+
+    [Fact]
+    public void TwoFunctionsAddedAtOnePlace_StayAConflict()
+    {
+        // Both sides add a near-copy of one function between a and g (git.git's t/lib-gpg.sh): either could slide past
+        // the blank to stand apart, and that would keep both copies, in an order the base doesn't give.
+        var f1 = "# make it\nf() {\n\tx;\n}\n\n";
+        Assert.Null(Merged(A + G, A + f1 + G, A + F.Replace("f()", "f ()") + G));
+    }
 }

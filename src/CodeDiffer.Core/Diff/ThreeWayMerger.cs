@@ -151,7 +151,8 @@ public static class ThreeWayMerger
     /// conflict that a line or two of room would not have; git's differ, placing it otherwise, merges it clean. So it
     /// moves to the nearest place touching none of the other's hunks — only when none of them lies among the lines it
     /// could move across: a change to one of those lines could be to a copy it takes, and which is not for the differ
-    /// to guess (that stays a conflict).
+    /// to guess (that stays a conflict). Nor does an insert move off the other side's insert at the same place: which
+    /// goes first is the question, and moving one past a blank would answer it (or keep two copies of one function).
     /// </summary>
     private static List<Hunk> Apart(List<Hunk> h, List<Hunk> other, IReadOnlyList<string> a, IReadOnlyList<string> b)
     {
@@ -164,6 +165,8 @@ public static class ThreeWayMerger
             bool del = x.Op == HunkOp.Delete;
             int s = BaseStart0(x), e = s + x.OldLines, t = x.NewStart - 1, u = t + x.NewLines;
             if (!other.Any(o => Touch(o, s, e))) continue;
+            // Two inserts at one place have no order in the base: sliding one past a blank to stand apart only picks one.
+            if (!del && other.Any(o => o.OldLines == 0 && BaseStart0(o) == s)) continue;
             // Room: as far as this side's hunks before and after it (meeting one is one edit, as git's differ writes it).
             int pe = k == 0 ? 0 : End((moved ?? h)[k - 1]), ns = k + 1 < h.Count ? BaseStart0(h[k + 1]) : a.Count;
             int up = 0, down = 0;
