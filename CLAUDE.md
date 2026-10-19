@@ -1,12 +1,5 @@
 # CodeDiffer — project instructions
 
-## ComputeWarden
-
-Owner `codediffer`. Solo jobs: timing runs and benchmarks (e.g. a cold compare3 old-vs-new measurement,
-build timings), each 10 minutes or less; split a longer measurement into runs that fit. No CodeDiffer job is
-big-memory: compares stream and hold only the verdicts (peak working set about 160–380 MB on death).
-Measured run costs, for `estimateSeconds`, are in [`docs/OUTPUT.md`](docs/OUTPUT.md) §9.
-
 ## The ground-truth contract (CodeSpawner coupling)
 
 CodeDiffer's correctness oracle is CodeSpawner's **delta manifest** (`<corpus>-delta.json`), locked
@@ -33,3 +26,7 @@ full contract is in [`docs/diff-delta-contract.md`](docs/diff-delta-contract.md)
 - `tests/CodeDiffer.Tests` — xUnit, **net10.0** (it references the MCP and CLI projects to test them, like
   CodeCompass.Core.Tests); seed it from the prototype-review regression bugs (see DESIGN.txt).
 - Public-repo conventions live in `C:\Playground\RelentlessOldMan\Project_Instructions\REPO-SETUP.md`.
+
+## Resource needs
+- Compares stream and hold only the verdicts: peak working set ~160–380 MB on death.
+- Measured run costs are in [`docs/OUTPUT.md`](docs/OUTPUT.md) §9.
