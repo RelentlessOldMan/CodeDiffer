@@ -629,6 +629,23 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 | 64 | usage: a missing argument, an unknown option, a flag without its value |
 | 130 | stopped by Ctrl+C (a compare, an apply, or a report or merge overlay written part way) |
 
+## 9. Measured costs (for sizing a run)
+
+Measured on death 1.0.9 (68,661 files, ~94 GB a tree), the share on a 1 Gbit link that tops out ~95–110 MB/s:
+
+| Operation | Cost |
+|---|---|
+| Cold `compare` / `compare3` / `apply` over the share (no or partial hash cache) | reads at link speed for 10–60 min (189 GB in 33 min); CPU ~1–2 %, ~160 MB RAM |
+| Compare reading CodeCompass ledgers (only uncached big + changed files read, e.g. 17 GB) | several minutes at link speed |
+| Cold compare of large local trees | reads the trees end to end, at disk speed; hashing keeps up |
+| Warm `compare` / `compare3` (cache hits) | ~0 bytes read, a stat per file: 1–4 min, a few % CPU |
+| `verify` against the delta / conflict manifests | a warm compare of the two trees plus the changed files: 30 s–2 min |
+| `apply` dry run or `--write` after a warm compare | reads the changed files of three trees: ~1–2 min |
+| HTML report (`--html`, `report <id>`, `write_report`) | seconds, a ~20 MB write |
+| `report --large` / `blockdiff` | trivial, unless many giant files mean tens of GB to read |
+
+Memory stays small throughout: compares stream and hold only the verdicts (peak working set about 160–380 MB).
+
 Net: the agent pays for a summary plus what it opens; the human gets a shareable shell that lazily
 loads; the 1 GB header is touched a few MB at a time and reported as a bounded, honest summary with the
 full detail one `get_file_diff` (or one click) away.
