@@ -70,9 +70,56 @@ public class LinearSpaceDiffTests
     public void WorkCap_FallsBackToCoarse_StillCorrect()
     {
         var a = Enumerable.Range(0, 2000).Select(i => $"a{i}").ToArray();
-        var b = Enumerable.Range(0, 2000).Select(i => $"b{i}").ToArray();
+        var b = Enumerable.Range(0, 2000).Select(i => $"a{i * 7919 % 2000}").ToArray(); // a's lines, shuffled
         var hunks = LineDiffer.Diff(a, b, maxEditDistance: 0, out bool coarse, maxWork: 1000);
         Assert.True(coarse);
         Assert.Equal(b, HunkApplier.Reconstruct(a, b, hunks));
+    }
+
+    [Fact]
+    public void AFileRewrittenWithMostlyNewLines_IsNotCoarse()
+    {
+        // A file rewritten with mostly new lines: 1,000 lines become 26,000, nearly all new, a few cut. As
+        // changed lines that is far past the work cap; the new lines can match nothing, so set aside they are no work.
+        var a = Enumerable.Range(0, 1_000).Select(i => $"msgid \"{i}\"").ToArray();
+        var b = new List<string>();
+        for (int i = 0; i < a.Length; i++)
+        {
+            if (i % 40 == 3) continue; // cut
+            b.Add(a[i]);
+            for (int k = 0; k < 25; k++) b.Add($"msgstr \"{i}.{k}\"");
+        }
+        var hunks = LineDiffer.Diff(a, b, LineDiffer.DefaultMaxEditDistance, out bool coarse);
+        Assert.False(coarse);
+        Assert.Equal(b, HunkApplier.Reconstruct(a, b, hunks));
+        Assert.Equal(25 + 975 * 25, Cost(hunks)); // minimal: the 25 cuts and the 975 kept lines' new lines
+    }
+
+    [Fact]
+    public void AMergeWithAFileRewrittenWithMostlyNewLines_ConflictsOnlyWhereTheOtherSideEdited()
+    {
+        // v1 rewrites the file with mostly new lines, v2 fixes one msgid: one small conflict there, not one over the whole file.
+        var b = Enumerable.Range(0, 1_000).Select(i => $"msgid \"{i}\"").ToArray();
+        var v1 = b.SelectMany((l, i) => new[] { l }.Concat(Enumerable.Range(0, 25).Select(k => $"msgstr \"{i}.{k}\""))).ToArray();
+        var v2 = b.Select((l, i) => i == 500 ? "msgid \"500 fixed\"" : l).ToArray();
+        var conflicts = ThreeWayMerger.Regions(b, v1, v2).Where(r => r.Kind == RegionKind.Conflict).ToList();
+        Assert.True(conflicts.Count <= 1 && conflicts.All(c => c.V1Lines < 60), string.Join(", ", conflicts));
+    }
+
+    [Fact]
+    public void LinesOnlyOneSideHas_SetAside_StillMinimal()
+    {
+        // Every trial forces the linear-space pass on inputs with many lines unique to one side, mixed with shared ones.
+        var rng = new Random(99);
+        for (int trial = 0; trial < 300; trial++)
+        {
+            var a = Enumerable.Range(0, rng.Next(0, 80)).Select(i => rng.Next(3) == 0 ? $"A{trial}.{i}" : "L" + rng.Next(6)).ToArray();
+            var b = Enumerable.Range(0, rng.Next(0, 80)).Select(i => rng.Next(3) == 0 ? $"B{trial}.{i}" : "L" + rng.Next(6)).ToArray();
+            var exact = LineDiffer.Diff(a, b, maxEditDistance: int.MaxValue, out _);
+            var linear = LineDiffer.Diff(a, b, maxEditDistance: 0, out bool coarse);
+            Assert.False(coarse);
+            Assert.Equal(b, HunkApplier.Reconstruct(a, b, linear));
+            Assert.Equal(Cost(exact), Cost(linear));
+        }
     }
 }

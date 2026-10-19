@@ -86,7 +86,7 @@ public sealed class Round13Tier3Tests : IDisposable
     {
         const int n = 60_000;
         var old = Blocks(Enumerable.Range(0, n).Select(i => "b" + i));
-        var scattered = Blocks(Enumerable.Range(0, n).Select(i => i % 2 == 0 ? "c" + i : "b" + i));
+        var scattered = Blocks(Enumerable.Range(0, n).Select(i => "b" + (i % 2 == 0 ? i * 7919 % n : i))); // every other block moved
         var r = GiantFileDiffer.Diff(old, scattered);
         Assert.True(r.Coarse);
         Assert.False(GiantFileDiffer.Diff(old, Blocks(Enumerable.Range(0, n).Select(i => i == 7 ? "c" : "b" + i))).Coarse);

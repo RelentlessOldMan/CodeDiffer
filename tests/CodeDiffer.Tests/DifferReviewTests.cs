@@ -146,13 +146,16 @@ public sealed class DifferReviewTests : IDisposable
 
     // ---- P1: a coarse line diff (past the work cap: one wide replace) says so wherever it is shown ----
 
-    /// <summary>Two text files, every line different: past the line diff's work cap, so one replace over the lot.</summary>
+    /// <summary>Two text files of the same 1,000 lines in two random orders: few in common order, so past the line diff's
+    /// work cap, one replace over the lot. (Lines only one file has are no work: the diff sets them aside.)</summary>
     internal static void PutCoarsePair(string left, string right)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(left)!);
         Directory.CreateDirectory(Path.GetDirectoryName(right)!);
-        File.WriteAllText(left, string.Concat(Enumerable.Range(0, 15_000).Select(i => $"left {i}\n")));
-        File.WriteAllText(right, string.Concat(Enumerable.Range(0, 15_000).Select(i => $"right {i}\n")));
+        var rng = new Random(5);
+        string Text(string side) => $"{side}\n" + string.Concat(Enumerable.Range(0, 14_998).Select(_ => $"line {rng.Next(1000)}\n")) + $"end {side}\n";
+        File.WriteAllText(left, Text("left"));
+        File.WriteAllText(right, Text("right"));
     }
 
     [Fact]

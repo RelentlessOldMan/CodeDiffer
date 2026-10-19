@@ -159,7 +159,7 @@ public class PatchTests : IDisposable
     public void EditDistanceBudget_FallsBackToOneCorrectHunk()
     {
         var a = Enumerable.Range(0, 200).Select(i => $"a{i}").ToArray();
-        var b = Enumerable.Range(0, 200).Select(i => i is < 5 or >= 195 ? $"a{i}" : $"b{i}").ToArray();
+        var b = Enumerable.Range(0, 200).Select(i => i is < 5 or >= 195 ? $"a{i}" : $"a{i * 37 % 200}").ToArray(); // a's lines, shuffled
         var hunks = LineDiffer.Diff(a, b, maxEditDistance: 10, out bool coarse, maxWork: 100);
         Assert.True(coarse);
         Assert.Single(hunks);

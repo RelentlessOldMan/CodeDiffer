@@ -105,7 +105,8 @@ when large. A text pair with too many changes to align exactly in time (past the
 their lines differ, or more than about 35,000 lines do however long the files) comes out as one replace over the differing middle: still a correct patch,
 but its `+`/`-` counts are of that replace, not of the lines that changed. It is marked `coarse` wherever the counts
 show: `get_file_diff`'s first line, `list_files`, `get_stats`, the HTML report, and a note on stderr from
-`codediffer diff`.
+`codediffer diff`. Lines only one of the two files has are no work: the diff sets them aside, as git's does, so a
+file rewritten with mostly new lines still diffs line by line, and merges as narrowly as git's.
 
 `get_stats` — totals by status/reason, byte mass, biggest/most-changed.
 

@@ -115,16 +115,57 @@ public static class LineDiffer
     /// </summary>
     private static class LinearSpace
     {
+        /// <summary>
+        /// A line with no copy in the other file can never be matched, so (as git's xdiff does) the search runs without
+        /// them and they go back as deletes and inserts after: the same common lines, so still minimal. A file rewritten
+        /// with mostly new lines (1,100 lines become 25,800: 25,000 new, 700 cut) was a diff of 26,000 changed lines,
+        /// past the work cap, so one replace over the lot — a 3-way merge of it one conflict over the whole file where
+        /// git's was 12 lines; without its new lines it is a few hundred.
+        /// </summary>
         public static List<Edit>? Moves(IReadOnlyList<string> a, IReadOnlyList<string> b, long maxWork, CancellationToken ct)
         {
             var ids = new Dictionary<string, int>(StringComparer.Ordinal);
             int[] A = Intern(a, ids), B = Intern(b, ids);
-            int max = A.Length + B.Length + 2;
+            var inA = new bool[ids.Count];
+            var inB = new bool[ids.Count];
+            foreach (int id in A) inA[id] = true;
+            foreach (int id in B) inB[id] = true;
+            int[] ka = Kept(A, inB), kb = Kept(B, inA); // the indexes of the lines that can match
+            int[] RA = Pick(A, ka), RB = Pick(B, kb);
+            int max = RA.Length + RB.Length + 2;
             var vf = new int[2 * max + 2];
             var vb = new int[2 * max + 2];
-            var moves = new List<Edit>(A.Length + B.Length);
+            var moves = new List<Edit>(RA.Length + RB.Length);
             long work = 0;
-            return Solve(A, 0, A.Length, B, 0, B.Length, vf, vb, moves, ref work, maxWork, ct) ? moves : null;
+            if (!Solve(RA, 0, RA.Length, RB, 0, RB.Length, vf, vb, moves, ref work, maxWork, ct)) return null;
+            if (ka.Length == A.Length && kb.Length == B.Length) return moves;
+
+            // The dropped lines back in place: those before a kept line go just before it, deletes first.
+            var all = new List<Edit>(A.Length + B.Length);
+            int i = 0, j = 0, p = 0, q = 0;
+            foreach (var mv in moves)
+            {
+                if (mv != Edit.Insert) { for (; i < ka[p]; i++) all.Add(Edit.Delete); i++; p++; }
+                if (mv != Edit.Delete) { for (; j < kb[q]; j++) all.Add(Edit.Insert); j++; q++; }
+                all.Add(mv);
+            }
+            for (; i < A.Length; i++) all.Add(Edit.Delete);
+            for (; j < B.Length; j++) all.Add(Edit.Insert);
+            return all;
+        }
+
+        private static int[] Kept(int[] lines, bool[] inOther)
+        {
+            var r = new List<int>(lines.Length);
+            for (int i = 0; i < lines.Length; i++) if (inOther[lines[i]]) r.Add(i);
+            return [.. r];
+        }
+
+        private static int[] Pick(int[] lines, int[] at)
+        {
+            var r = new int[at.Length];
+            for (int i = 0; i < at.Length; i++) r[i] = lines[at[i]];
+            return r;
         }
 
         private static int[] Intern(IReadOnlyList<string> lines, Dictionary<string, int> ids)
