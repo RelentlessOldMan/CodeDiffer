@@ -22,7 +22,7 @@ public sealed record BlockDiffResult(
 }
 
 /// <summary>
-/// Diffs two files at content-defined-block granularity: run the Myers differ over the two block-SHA
+/// Diffs two files at content-defined-block granularity: run the Myers differ over the two block-hash
 /// sequences (each hash plays the role of a "line"), then map the resulting chunk-index hunks back to
 /// absolute byte ranges. The block hashes come from <see cref="BlockIndex"/>, so each file is read once,
 /// streamed, bounded memory — the whole point for multi-GB files. Because boundaries are content-defined,
@@ -35,10 +35,10 @@ public static class GiantFileDiffer
     {
         long oldSize = TotalSize(oldChunks), newSize = TotalSize(newChunks);
 
-        var oldShas = oldChunks.Select(c => c.Sha).ToArray();
-        var newShas = newChunks.Select(c => c.Sha).ToArray();
+        var oldHashes = oldChunks.Select(c => c.Hash).ToArray();
+        var newHashes = newChunks.Select(c => c.Hash).ToArray();
         // Block-index coordinates, 1-based; past the work cap, coarse (said, never passed off as exact).
-        var hunks = LineDiffer.Diff(oldShas, newShas, LineDiffer.DefaultMaxEditDistance, out bool coarse, ct: ct);
+        var hunks = LineDiffer.Diff(oldHashes, newHashes, LineDiffer.DefaultMaxEditDistance, out bool coarse, ct: ct);
 
         var changes = new List<ChangedBlock>(hunks.Count);
         long changedOld = 0, changedNew = 0;

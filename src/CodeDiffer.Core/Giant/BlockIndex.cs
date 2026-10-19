@@ -1,9 +1,9 @@
-using System.Security.Cryptography;
+using System.IO.Hashing;
 
 namespace CodeDiffer.Core.Giant;
 
-/// <summary>One content-defined chunk: its byte offset in the file, length, and SHA-256 (lowercase hex).</summary>
-public readonly record struct Chunk(long Offset, int Length, string Sha);
+/// <summary>One content-defined chunk: its byte offset in the file, length, and XxHash128 (32 uppercase hex).</summary>
+public readonly record struct Chunk(long Offset, int Length, string Hash);
 
 /// <summary>Tuning for the content-defined chunker. Defaults target ~64 KB average chunks.</summary>
 public sealed class ChunkerOptions
@@ -21,13 +21,18 @@ public sealed class ChunkerOptions
 
 /// <summary>
 /// Builds a file's block index by streaming it once through a FastCDC-style content-defined chunker and
-/// SHA-256-ing each chunk. Memory is bounded by <see cref="ChunkerOptions.ReadBufferSize"/> plus the chunk
+/// XxHash128-ing each chunk. Memory is bounded by <see cref="ChunkerOptions.ReadBufferSize"/> plus the chunk
 /// list (metadata only — never the file body), so a multi-GB header over SMB is indexed without loading it.
 ///
 /// Content-defined boundaries (cut where the rolling gear fingerprint has MaskBits low zero bits) are the
 /// whole point: an edit near the front of a 1 GB file only re-chunks its locality; every chunk after the
 /// next boundary keeps its hash, so the diff stays O(changed bytes), not O(file). Fixed-size blocks can't
 /// do this — one inserted byte would shift and dirty every block.
+///
+/// The chunk hashes only match chunks with each other (whether two files differ at all is the compare's byte for
+/// byte read), so XxHash128, ~30x SHA-256's speed on a core without SHA instructions. The fingerprint is a gear
+/// hash, shifted one bit a byte: only a chunk's last 64 bytes are in it, so it is begun 64 bytes before the
+/// shortest cut (FastCDC's skip) and the cuts are where they would be if it ran from the chunk's start.
 /// </summary>
 public static class BlockIndex
 {
@@ -46,7 +51,8 @@ public static class BlockIndex
 
         var chunks = new List<Chunk>();
         var buffer = new byte[o.ReadBufferSize];
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var hash = new XxHash128();
+        int skip = Math.Max(0, o.MinSize - 64); // bytes of a chunk before the fingerprint can matter
 
         long chunkStart = 0;   // absolute offset of the current chunk
         int chunkLen = 0;      // bytes accumulated into the current chunk
@@ -59,14 +65,21 @@ public static class BlockIndex
             int segStart = 0; // start of the not-yet-hashed run within this buffer
             for (int i = 0; i < read; i++)
             {
+                if (chunkLen < skip)
+                {
+                    int n = Math.Min(skip - chunkLen, read - i);
+                    chunkLen += n;
+                    i += n - 1;
+                    continue;
+                }
                 fp = (fp << 1) + GearHash.Table[buffer[i]];
                 chunkLen++;
 
                 bool cut = (chunkLen >= o.MinSize && (fp & mask) == 0) || chunkLen >= o.MaxSize;
                 if (!cut) continue;
 
-                hash.AppendData(buffer, segStart, i - segStart + 1); // feed this chunk's tail
-                chunks.Add(new Chunk(chunkStart, chunkLen, Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()));
+                hash.Append(buffer.AsSpan(segStart, i - segStart + 1)); // feed this chunk's tail
+                chunks.Add(new Chunk(chunkStart, chunkLen, Convert.ToHexString(hash.GetHashAndReset())));
 
                 chunkStart += chunkLen;
                 chunkLen = 0;
@@ -75,11 +88,11 @@ public static class BlockIndex
             }
 
             if (segStart < read) // carry the unterminated chunk's bytes into the hash before next read
-                hash.AppendData(buffer, segStart, read - segStart);
+                hash.Append(buffer.AsSpan(segStart, read - segStart));
         }
 
         if (chunkLen > 0) // final partial chunk at EOF
-            chunks.Add(new Chunk(chunkStart, chunkLen, Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()));
+            chunks.Add(new Chunk(chunkStart, chunkLen, Convert.ToHexString(hash.GetHashAndReset())));
 
         return chunks;
     }

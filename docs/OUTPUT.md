@@ -32,8 +32,9 @@ it chooses to open.
 ## 3. Giant files — diffed at the block level, never whole
 
 A file over 16 MB (either side) is never line-diffed or decoded whole. Both files are streamed once through a
-content-defined chunker (FastCDC-style cuts: chunks of 16–256 KB, ~64 KB on average, each SHA-256), in bounded
-memory whatever their size, and the two chunk lists are matched: an edit dirties only the chunks around it, so one
+content-defined chunker (FastCDC-style cuts: chunks of 16–256 KB, ~64 KB on average, each XxHash128: the hashes
+only match chunks; whether the files differ is the compare's byte-for-byte read), in bounded memory whatever their
+size, and the two chunk lists are matched: an edit dirties only the chunks around it, so one
 inserted byte near the front doesn't shift everything after it. What comes back is a bounded list of **changed byte
 ranges**, not line hunks (e.g.):
 

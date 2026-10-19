@@ -41,7 +41,31 @@ public class GiantFileDiffTests
     public void Chunking_IsDeterministic()
     {
         var data = Payload(20_000, 1);
-        Assert.Equal(Index(data).Select(c => c.Sha), Index(data).Select(c => c.Sha));
+        Assert.Equal(Index(data).Select(c => c.Hash), Index(data).Select(c => c.Hash));
+    }
+
+    [Theory]
+    [InlineData(16, 6, 512, 256)]
+    [InlineData(200, 6, 2_000, 97)] // the fingerprint begun 136 bytes into each chunk, reads cutting through the skip
+    [InlineData(1_000, 8, 1_500, 4_096)]
+    [InlineData(64, 4, 100, 33)]
+    public void CutsAreWhereAFingerprintFromTheChunksStartPutsThem(int min, int maskBits, int max, int buffer)
+    {
+        // The chunker skips the bytes the fingerprint has shifted out by the shortest cut: the same cuts as running it all.
+        var o = new ChunkerOptions { MaskBits = maskBits, MinSize = min, MaxSize = max, ReadBufferSize = buffer };
+        var data = Payload(60_000, 9);
+        var cuts = new List<long>();
+        ulong fp = 0, mask = (1UL << maskBits) - 1;
+        for (int i = 0, len = 0; i < data.Length; i++)
+        {
+            fp = (fp << 1) + GearHash.Table[data[i]];
+            if (++len >= min && (fp & mask) == 0 || len >= max) { cuts.Add(i + 1); len = 0; fp = 0; }
+        }
+        if (cuts.Count == 0 || cuts[^1] != data.Length) cuts.Add(data.Length);
+        using var ms = new MemoryStream(data);
+        var chunks = BlockIndex.Build(ms, o);
+        Assert.Equal(cuts, chunks.Select(c => c.Offset + c.Length));
+        Assert.Equal(Convert.ToHexString(System.IO.Hashing.XxHash128.Hash(data.AsSpan(0, chunks[0].Length))), chunks[0].Hash);
     }
 
     [Fact]
@@ -86,8 +110,8 @@ public class GiantFileDiffTests
             $"expected a local change, but {r.ChangedOldBytes} of {data.Length} bytes diffed");
 
         // Concretely: most old block SHAs survive into the new index.
-        var newShas = newIx.Select(c => c.Sha).ToHashSet();
-        int survivors = oldIx.Count(c => newShas.Contains(c.Sha));
+        var newShas = newIx.Select(c => c.Hash).ToHashSet();
+        int survivors = oldIx.Count(c => newShas.Contains(c.Hash));
         Assert.True(survivors >= oldIx.Count - 3, $"only {survivors}/{oldIx.Count} blocks resynced");
     }
 
@@ -108,11 +132,11 @@ public class GiantFileDiffTests
     [Fact]
     public void ADeletedBlock_SitsWhereItWasInTheNewFile_NotOneBlockLater()
     {
-        static List<Chunk> Blocks(params (string Sha, int Len)[] bs)
+        static List<Chunk> Blocks(params (string Hash, int Len)[] bs)
         {
             long off = 0;
             var list = new List<Chunk>();
-            foreach (var (sha, len) in bs) { list.Add(new Chunk(off, len, sha)); off += len; }
+            foreach (var (hash, len) in bs) { list.Add(new Chunk(off, len, hash)); off += len; }
             return list;
         }
         var old = Blocks(("A", 100), ("B", 200), ("C", 300), ("D", 400));

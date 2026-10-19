@@ -82,7 +82,7 @@ Locked decisions
   Tiers 0-2 run over the whole tree and emit only counts + per-file status. Tier 3 is lazy.
 - Giant files are diffed at the BLOCK level, never whole. Reusing CodeCompass's block/positional
   sidecar idea: stream each file once through a content-defined chunker (16-256 KB chunks, ~64 KB
-  average, SHA-256 each), match the two chunk lists, and report the changed byte ranges (bounded; never
+  average, XxHash128 each), match the two chunk lists, and report the changed byte ranges (bounded; never
   line-diffed, never decoded whole). An edit dirties only its neighbourhood, not every block after it.
 - Hash discipline = SHA-256 of raw file bytes, lowercase hex. This is (a) the same hash the CodeSpawner
   delta contract uses, so our verify-adapter asserts directly; and (b) the loose-coupling point with a
