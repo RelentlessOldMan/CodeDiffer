@@ -242,7 +242,8 @@ cut beside identical lines (a blank, a `}`, a `{`) can stand anywhere along them
 side's change slides apart from it, so a function deleted on one side beside the next one's signature edited on the
 other merges clean (as git, placing the cut otherwise, merges it), unless the other side changed one of the lines it
 could move across: that change could be to a copy the cut takes, and stays a conflict. Two inserts at the same place
-never slide apart: which goes first is not in the base, so that stays a conflict too. A file's encoding (BOM, UTF-16) and
+never slide apart: which goes first is not in the base, so that stays a conflict too, unless one goes back against
+its own side's edit beside it (a rewritten test whose last part the differ split off to the other's place). A file's encoding (BOM, UTF-16) and
 line-ending style (LF / CRLF / mixed) merge 3-way like its lines: a side that changed them wins (v2's LF→CRLF
 is kept when v1 also edited the file), the same change on both sides agrees, and different changes on both
 sides are a conflict of kind `encoding` or `line endings` (both files listed, nothing written); when the lines
