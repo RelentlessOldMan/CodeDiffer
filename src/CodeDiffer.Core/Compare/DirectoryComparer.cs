@@ -70,6 +70,11 @@ public sealed class CompareOptions
     /// <summary>Override for the ledger's trust margins (tests); default 3 s local / 1 h share, 3 s settle.</summary>
     internal TrustTiming? Timing { get; init; }
 
+    /// <summary>Override for which roots are on a share (tests); default by the drive the root is on.</summary>
+    internal Func<string, bool>? OnShare { get; init; }
+
+    internal bool IsOnShare(string rootFull) => OnShare?.Invoke(rootFull) ?? TrustTiming.For(rootFull) == TrustTiming.Network;
+
     /// <summary>Tests: called after each content pair a session's compare checks (to cancel at a known point).</summary>
     internal Action<long>? AfterPairChecked { get; init; }
 
@@ -154,8 +159,7 @@ public sealed class DirectoryComparer
         int retriedAtEnd = 0;
         // Hash an uncached file beside its cached twin: on local trees only, and never when a side is named for a
         // rehash (--rehash-side reads that tree alone, so it can be checked or timed cold without the rest).
-        bool bothLocal = trustVerdicts &&
-                         TrustTiming.For(leftFull) == TrustTiming.Local && TrustTiming.For(Path.GetFullPath(right)) == TrustTiming.Local;
+        bool bothLocal = trustVerdicts && !_options.IsOnShare(leftFull) && !_options.IsOnShare(Path.GetFullPath(right));
 
         int pathCount = 0;
         var changes = new List<FileChange>(Math.Max(leftFiles.Count, rightFiles.Count));

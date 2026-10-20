@@ -36,8 +36,11 @@ public sealed class RehashSideTests : IDisposable
         File.WriteAllBytes(P(rel), new UTF8Encoding(false).GetBytes(text));
     }
 
-    private CompareOptions Opts(params string[] rehash) => new()
+    private CompareOptions Opts(params string[] rehash) => Opts(rehash, onShare: null);
+
+    private CompareOptions Opts(string[] rehash, string? onShare) => new()
     {
+        OnShare = onShare is null ? null : root => root == P(onShare),
         Parallelism = 1,
         CacheBaseDir = P("cache"),
         CodeCompassBaseDir = P("no-compass"),
@@ -75,6 +78,18 @@ public sealed class RehashSideTests : IDisposable
         var r = new DirectoryComparer(Opts()).Compare(P("B"), P("V2"));
         Assert.Equal(Files, r.CacheHits);
         Assert.Equal(2 * Bytes("V2"), r.BytesRead); // on local trees V2 is read beside B, and B's bytes count too
+        Assert.All(r.Changes, c => Assert.Equal(ChangeStatus.Identical, c.Status));
+    }
+
+    [Theory]
+    [InlineData("B")]
+    [InlineData("V2")]
+    public void WhenEitherTreeIsOnAShare_TheCachedTwinIsNotReadBeside(string share)
+    {
+        new DirectoryComparer(Opts()).Compare(P("B"), P("V1")); // B cached
+        var r = new DirectoryComparer(Opts([], onShare: share)).Compare(P("B"), P("V2"));
+        Assert.Equal(Files, r.CacheHits);
+        Assert.Equal(Bytes("V2"), r.BytesRead); // V2 alone: reading B again over a share costs more than it saves
         Assert.All(r.Changes, c => Assert.Equal(ChangeStatus.Identical, c.Status));
     }
 
