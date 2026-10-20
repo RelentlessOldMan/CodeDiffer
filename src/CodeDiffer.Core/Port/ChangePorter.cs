@@ -516,31 +516,41 @@ public static class ChangePorter
         /// and a UTF-8 side's characters are never re-encoded (or turned into '?'). But where a side is the base
         /// (<paramref name="a"/>) re-saved as UTF-8 — the same text, an <c>encoding</c> change — the 8-bit ones are read as the
         /// text they are: that side then changed no line, and the merge is written in its encoding, the other side's lines too
-        /// (not one side's lines in UTF-8 and the other's in the old code page). Only where no 8-bit side has a byte in
-        /// 0x80–0x9F: Latin-1 and cp1252 read the rest alike, and those are cp1252 punctuation, not Latin-1's controls.
+        /// (not one side's lines in UTF-8 and the other's in the old code page). The code page is the one, Latin-1 or cp1252,
+        /// that reads the base as that side's text (they differ only in 0x80–0x9F: Latin-1's controls, cp1252's “ ” – € …),
+        /// and every 8-bit side must read in it and back to its exact bytes.
         /// </summary>
         public static bool TryReadAll(byte[] a, byte[] b, byte[] c, out Text ta, out Text tb, out Text tc)
         {
             bool ua = TryRead(a, out ta), ub = TryRead(b, out tb), uc = TryRead(c, out tc);
             if (ua && ub && uc) return true;
-            if (!ua && Legacy(a))
-            {
-                var la = Latin1(a);
-                if ((ub && tb.Content == la.Content || uc && tc.Content == la.Content) && (ub || Legacy(b)) && (uc || Legacy(c)))
+            if (!ua && EightBit(a) && (ub || EightBit(b)) && (uc || EightBit(c)))
+                foreach (var page in (Encoding[])[Encoding.Latin1, Cp1252])
                 {
-                    ta = la;
-                    if (!ub) tb = Latin1(b);
-                    if (!uc) tc = Latin1(c);
+                    // The code page the UTF-8 side's text says the base is in, and every 8-bit side reads in it exactly.
+                    if (In(page, a) is not { } pa || !(ub && tb.Content == pa.Content || uc && tc.Content == pa.Content)) continue;
+                    Text? pb = ub ? tb : In(page, b), pc = uc ? tc : In(page, c);
+                    if (pb is null || pc is null) continue;
+                    (ta, tb, tc) = (pa, pb, pc);
                     return true;
                 }
-            }
             if (!EightBit(a) || !EightBit(b) || !EightBit(c)) return false;
             ta = Latin1(a); tb = Latin1(b); tc = Latin1(c);
             return true;
         }
 
-        /// <summary>8-bit text that reads alike as Latin-1 and cp1252: no byte in 0x80–0x9F.</summary>
-        private static bool Legacy(byte[] bytes) => EightBit(bytes) && bytes.AsSpan().IndexOfAnyInRange((byte)0x80, (byte)0x9F) < 0;
+        private static readonly Encoding Cp1252 =
+            CodePagesEncodingProvider.Instance.GetEncoding(1252, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback)!;
+
+        /// <summary>8-bit bytes as text in <paramref name="page"/>, or null where they don't read back to themselves.</summary>
+        private static Text? In(Encoding page, byte[] bytes)
+        {
+            string s;
+            try { s = page.GetString(bytes); } catch (DecoderFallbackException) { return null; }
+            byte[] back;
+            try { back = page.GetBytes(s); } catch (EncoderFallbackException) { return null; }
+            return back.AsSpan().SequenceEqual(bytes) ? new Text { Content = s, Encoding = page, Eol = EolOf(s) } : null;
+        }
 
         private static bool EightBit(byte[] bytes) => !TextInspector.HasBom(bytes) && bytes.AsSpan().IndexOf((byte)0) < 0;
 

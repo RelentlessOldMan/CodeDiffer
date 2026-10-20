@@ -112,12 +112,27 @@ public sealed class MergeFormTests : IDisposable
     }
 
     [Fact]
-    public void A8BitFileReSavedAsUtf8_WithCp1252Punctuation_StillMergesOnItsBytes()
+    public void ACp1252FileReSavedAsUtf8_OnOneSide_TakesTheOthersEdits_InUtf8()
     {
-        // 0x93/0x94 are cp1252 quotes but Latin-1 controls: read as Latin-1 they'd be written as the wrong characters.
+        // 0x93/0x94 are cp1252's “ ”: the UTF-8 side says so (E2 80 9C), and v2's new – (0x96) is written as UTF-8 too.
+        var cp1252 = CodePagesEncodingProvider.Instance.GetEncoding(1252)!;
+        var b = Ten.Replace("line 5", "line 5 “q”");
+        var v2 = b.Replace("line 5", "line 5 – v2");
+        var (e, bytes) = Merge(b, b, v2, cp1252, Utf8, cp1252);
+        Assert.Equal(Merge3Outcome.Merged, e.Outcome);
+        Assert.Equal(Utf8.GetBytes(v2), bytes!);
+        Assert.Contains("v1 changed the encoding (WINDOWS-1252 → UTF-8", e.Note);
+    }
+
+    [Fact]
+    public void A8BitFileConvertedAsLatin1_KeepsItsControls()
+    {
+        // Converted byte for byte as Latin-1 (0x93 → C2 93, a control): that reading is the one the UTF-8 side has.
         var b = Ten.Replace("line 5", "line 5 \u0093q\u0094");
-        var (e, _) = Merge(b, b, b.Replace("line 5", "line 5 v2"), Encoding.Latin1, Utf8, Encoding.Latin1);
-        Assert.Equal(Merge3Outcome.Conflict, e.Outcome);
+        var v2 = b.Replace("line 5", "line 5 v2");
+        var (e, bytes) = Merge(b, b, v2, Encoding.Latin1, Utf8, Encoding.Latin1);
+        Assert.Equal(Merge3Outcome.Merged, e.Outcome);
+        Assert.Equal(Utf8.GetBytes(v2), bytes!);
     }
 
     [Fact]

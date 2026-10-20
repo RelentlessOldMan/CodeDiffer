@@ -92,6 +92,21 @@ public class ChangePorterTests : IDisposable
     }
 
     [Fact]
+    public void ATargetThatReSavedACp1252FileAsUtf8_GetsTheChange_InUtf8()
+    {
+        // cp1252's “ ” (0x93 0x94) and – (0x96): the target's UTF-8 says which code page the base is in.
+        var cp1252 = CodePagesEncodingProvider.Instance.GetEncoding(1252)!;
+        var b = Lines(1, 30).Replace("line 5\n", "line 5 “q”\n");
+        PutBytes("L/a.c", cp1252.GetBytes(b));
+        PutBytes("R/a.c", cp1252.GetBytes(b.Replace("line 21", "CHANGED 21 – €5")));
+        PutBytes("C/a.c", new UTF8Encoding(false).GetBytes(b));
+
+        var f = F(Port(write: true), "a.c");
+        Assert.Equal(PortStatus.Clean, f.Status);
+        Assert.Equal(new UTF8Encoding(false).GetBytes(b.Replace("line 21", "CHANGED 21 – €5")), File.ReadAllBytes(Path.Combine(C, "a.c")));
+    }
+
+    [Fact]
     public void ConflictingTarget_IsReported_AndLeftUntouched()
     {
         Put("L/a.c", Lines(1, 30));
