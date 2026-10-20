@@ -89,4 +89,15 @@ public class SlideApartTests
         Assert.Equal(H + Pre + New("check") + New("command") + Added + Done,
             Merged(H + Old("check") + Old("command") + Done, v1, v2));
     }
+
+    [Fact]
+    public void AnInsertTheLinearSpaceDifferPutsHigh_GoesDownToItsOwnEdit_MergesClean()
+    {
+        // Both cut the first `}`; v1 adds one at the end with more lines past the exact differ's budget, v2 adds an `x;`.
+        // The linear-space differ, searching from the end too, puts v1's new `}` before base's last, at v2's place; it
+        // goes down against v1's lines added after, one edit (git, whose differ made it two, calls it a conflict).
+        // Forward Myers never puts an insert where it could go down: it takes the match first.
+        var tail = string.Concat(Enumerable.Range(0, LineDiffer.DefaultMaxEditDistance + 1).Select(i => $"more({i});\n"));
+        Assert.Equal("x;\nx;\n}\n}\n" + tail, Merged("}\nx;\n}\n", "x;\n}\n}\n" + tail, "x;\nx;\n}\n"));
+    }
 }
