@@ -242,6 +242,59 @@ public class NoiseTests : IDisposable
     }
 
     [Fact]
+    public void ThreeWay_ResolveStamps_AStampChangedOnALineTheOtherSideEdited_IsCarriedIntoTheEdit()
+    {
+        Put("B/e.c", "x $Id: 1 $\nint a;\n");   // v1 edits the line, v2 only re-stamps it
+        Put("V1/e.c", "y $Id: 1 $\nint a;\n");
+        Put("V2/e.c", "x $Id: 2 $\nint a;\n");
+        Put("B/f.c", "x $Id: 1 $\nint a;\n");   // the mirror: v1 re-stamps, v2 edits
+        Put("V1/f.c", "x $Id: 2 $\nint a;\n");
+        Put("V2/f.c", "y $Id: 1 $\nint a;\n");
+        Put("B/g.c", "x $Id: 1 $ $Rev: 1 $\n"); // both re-stamp $Id (v2's wins), only v1 $Rev, and v1 edits
+        Put("V1/g.c", "y $Id: 5 $ $Rev: 4 $\n");
+        Put("V2/g.c", "x $Id: 2 $ $Rev: 1 $\n");
+        Put("B/h.c", "x $Id: 1 $\nint a;\n");   // v1's edit drops the stamp v2 changed: nowhere to carry it
+        Put("V1/h.c", "y;\nint a;\n");
+        Put("V2/h.c", "x $Id: 2 $\nint a;\n");
+
+        string b = Path.Combine(_dir, "B"), v1 = Path.Combine(_dir, "V1"), v2 = Path.Combine(_dir, "V2");
+        var s = new SessionStore(save: false).Start3(b, v1, v2, new CompareOptions { Cache = CacheMode.Off, ResolveStamps = true });
+        Assert.True(s.Wait(TimeSpan.FromSeconds(60)));
+        Assert.Null(s.Error);
+        var e = s.Report!.Entries.ToDictionary(x => x.Path);
+        Assert.Equal(Merge3Outcome.Merged, e["e.c"].Outcome);
+        Assert.Equal("y $Id: 2 $\nint a;\n", TreeMerger.MergedText(e["e.c"], b, v1, v2));
+        Assert.Equal(Merge3Outcome.Merged, e["f.c"].Outcome);
+        Assert.Equal("y $Id: 2 $\nint a;\n", TreeMerger.MergedText(e["f.c"], b, v1, v2));
+        Assert.Equal(Merge3Outcome.Merged, e["g.c"].Outcome);
+        Assert.Equal("y $Id: 2 $ $Rev: 4 $\n", TreeMerger.MergedText(e["g.c"], b, v1, v2));
+        Assert.Equal(Merge3Outcome.Conflict, e["h.c"].Outcome);
+        Assert.Equal("content", e["h.c"].ConflictKind);
+    }
+
+    [Fact]
+    public void Apply_ResolveStamps_AStampChangedOnALineTheOtherSideEdited_IsCarriedIntoTheEdit()
+    {
+        Put("L/a.c", "x=1; // $Rev: 5 $\nint q;\n");  // the change edits the line, the target only re-stamped it
+        Put("R/a.c", "x=2; // $Rev: 5 $\nint q;\n");
+        Put("C/a.c", "x=1; // $Rev: 7 $\nint q;\n");
+        Put("L/b.c", "x=1; // $Rev: 5 $\nint q;\n");  // the change only re-stamps, the target edited the line
+        Put("R/b.c", "x=1; // $Rev: 6 $\nint q;\n");
+        Put("C/b.c", "x=3; // $Rev: 5 $\nint q;\n");
+        string l = Path.Combine(_dir, "L"), r = Path.Combine(_dir, "R"), c = Path.Combine(_dir, "C");
+        var report = new DirectoryComparer(new CompareOptions { Cache = CacheMode.Off }).Compare(l, r);
+
+        var f = ChangePorter.Run(report, l, r, c, write: true, resolveStamps: true).Files.ToDictionary(x => x.Path);
+        Assert.Equal(PortStatus.Clean, f["a.c"].Status);
+        Assert.Equal("x=2; // $Rev: 7 $\nint q;\n", File.ReadAllText(Path.Combine(c, "a.c")));
+        Assert.Equal(PortStatus.Clean, f["b.c"].Status);
+        Assert.Contains(f["b.c"].Hunks, h => h.Outcome == HunkOutcome.Applied && h.BaseLine == 1);
+        Assert.Equal("x=3; // $Rev: 6 $\nint q;\n", File.ReadAllText(Path.Combine(c, "b.c")));
+        var again = ChangePorter.Run(report, l, r, c, write: false, resolveStamps: true).Files.ToDictionary(x => x.Path);
+        Assert.All(again.Values, x => Assert.Equal(PortStatus.Already, x.Status));
+    }
+
+    [Fact]
     public void Apply_ResolveStamps_KeepsTheTargetsStampAndAppliesTheRest()
     {
         Put("L/a.c", "/* $Revision: 1 $ */\nint a;\nint b;\n");

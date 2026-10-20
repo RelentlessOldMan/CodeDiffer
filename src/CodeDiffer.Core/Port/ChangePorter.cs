@@ -347,10 +347,21 @@ public static class ChangePorter
             int offset = r.V2Start0 - r.BaseStart0;
             switch (r.Kind)
             {
-                case RegionKind.V1Only: // the change side alone: apply it
-                    for (int k = 0; k < r.V1Lines; k++) merged.Append(bl[r.V1Start0 + k]);
+                case RegionKind.V1Only: // the change side alone: apply it (with any stamp the target changed on its lines)
+                    if (stamps) merged.AppendJoin("", TreeMerger.StampedEdit(r, al, bl, tl)!);
+                    else for (int k = 0; k < r.V1Lines; k++) merged.Append(bl[r.V1Start0 + k]);
                     hunks.Add(new PortHunk(offset == 0 ? HunkOutcome.Applied : HunkOutcome.Fuzzy,
                         r.BaseStart0 + 1, r.BaseLines, r.V2Start0 + 1, r.V1Lines, r.V1Lines, offset));
+                    break;
+                case RegionKind.V2Only when stamps: // the target's own edit, with any stamp only the change changed on its lines
+                    var own = TreeMerger.StampedEdit(r, al, bl, tl)!;
+                    for (int k = 0; k < own.Count; k++)
+                    {
+                        merged.Append(own[k]);
+                        if (own[k] != tl[r.V2Start0 + k])
+                            hunks.Add(new PortHunk(offset == 0 ? HunkOutcome.Applied : HunkOutcome.Fuzzy,
+                                r.BaseStart0 + k + 1, 1, r.V2Start0 + k + 1, 1, 1, offset));
+                    }
                     break;
                 case RegionKind.V2Only: // the target's own edit: keep it, not part of the change set
                     for (int k = 0; k < r.V2Lines; k++) merged.Append(tl[r.V2Start0 + k]);

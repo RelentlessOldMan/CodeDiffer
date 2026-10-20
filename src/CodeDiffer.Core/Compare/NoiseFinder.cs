@@ -63,6 +63,31 @@ public static class NoiseFinder
     /// <summary>Each keyword stamp as its bare keyword.</summary>
     public static string Stamps(string text) => text.Contains('$') ? Stamp.Replace(text, "$$$1$$") : text;
 
+    /// <summary>
+    /// <paramref name="edited"/>, a side's edit of <paramref name="baseLine"/>, with each keyword stamp the other side
+    /// changed there (<paramref name="other"/>, which differs from the base only in stamps) carried into it: the other
+    /// side's where the edit kept the base's stamp, or where <paramref name="otherWins"/>. Null when the stamps don't
+    /// pair up (a stamp the edit added, dropped or swapped for another keyword).
+    /// </summary>
+    internal static string? CarryStamps(string edited, string baseLine, string other, bool otherWins)
+    {
+        var mb = Stamp.Matches(baseLine);
+        var mo = Stamp.Matches(other);
+        var me = Stamp.Matches(edited);
+        if (mo.Count != mb.Count || me.Count != mb.Count) return null;
+        var s = new System.Text.StringBuilder(edited.Length + 32);
+        int at = 0;
+        for (int i = 0; i < mb.Count; i++)
+        {
+            string key = mb[i].Groups[1].Value;
+            if (mo[i].Groups[1].Value != key || me[i].Groups[1].Value != key) return null;
+            bool theirs = mo[i].Value != mb[i].Value && (otherWins || me[i].Value == mb[i].Value);
+            s.Append(edited, at, me[i].Index - at).Append(theirs ? mo[i].Value : me[i].Value);
+            at = me[i].Index + me[i].Length;
+        }
+        return s.Append(edited, at, edited.Length - at).ToString();
+    }
+
     /// <summary>Each number, date, time, version or ID (a word with a digit in it, and any more such words it is joined to
     /// by one <c>. : / -</c>) as <c>#</c>, followed by the letters of its words that aren't hex: <c>v1.2.3</c> is <c>#v</c>,
     /// an ID <c>7f3a9c2</c> is <c>#</c>, and <c>agent07</c> is <c>#agent</c> — so a word swapped for another

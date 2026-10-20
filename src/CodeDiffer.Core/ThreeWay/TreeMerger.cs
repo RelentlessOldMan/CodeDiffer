@@ -313,14 +313,39 @@ public static class TreeMerger
     public const string StampsResolved = "only keyword stamps collided: each taken from the side that changed it, v2's where both did";
 
     /// <summary>The regions of a merge that conflicts, merged again with each keyword stamp bare (<c>$Id$</c>): null unless
-    /// that merge is clean. A stamp never spans lines, so the bare lines are the same lines, numbered alike.</summary>
+    /// that merge is clean, and every stamp a side changed on a line the other side edited can be carried into that edit
+    /// (<see cref="StampedEdit"/>). A stamp never spans lines, so the bare lines are the same lines, numbered alike.</summary>
     internal static List<MergeRegion>? StampsMerge(List<string> lb, List<string> l1, List<string> l2, CancellationToken ct)
     {
         static bool Any(List<string> l) => l.Exists(s => s.Contains('$'));
         if (!Any(l1) && !Any(l2)) return null;
         static List<string> Bare(List<string> l) => l.ConvertAll(NoiseFinder.Stamps);
         var regions = ThreeWayMerger.Regions(Bare(lb), Bare(l1), Bare(l2), ct);
-        return regions.Exists(r => r.Kind == RegionKind.Conflict) ? null : regions;
+        if (regions.Exists(r => r.Kind == RegionKind.Conflict)) return null;
+        return regions.TrueForAll(r => r.Kind is not (RegionKind.V1Only or RegionKind.V2Only) || StampedEdit(r, lb, l1, l2) is not null) ? regions : null;
+    }
+
+    /// <summary>
+    /// The lines a one-sided region of a <see cref="StampsMerge"/> writes: the editing side's, each carrying a keyword stamp
+    /// the other side changed on the base line it replaces (v2's where both changed it). In such a region the other side
+    /// differs from the base only in stamps, line for line. Null when a changed stamp can't be carried: the edit isn't
+    /// line for line, or its stamps don't pair up with the base's.
+    /// </summary>
+    internal static List<string>? StampedEdit(MergeRegion r, List<string> lb, List<string> l1, List<string> l2)
+    {
+        bool v1Edits = r.Kind == RegionKind.V1Only;
+        var (edit, start, count, other, otherStart) = v1Edits
+            ? (l1, r.V1Start0, r.V1Lines, l2, r.V2Start0)
+            : (l2, r.V2Start0, r.V2Lines, l1, r.V1Start0);
+        var lines = edit.GetRange(start, count);
+        for (int k = 0; k < r.BaseLines; k++)
+        {
+            string was = lb[r.BaseStart0 + k], theirs = other[otherStart + k];
+            if (theirs == was) continue;
+            if (count != r.BaseLines || NoiseFinder.CarryStamps(lines[k], was, theirs, otherWins: v1Edits) is not { } carried) return null;
+            lines[k] = carried;
+        }
+        return lines;
     }
 
     /// <summary>
@@ -414,6 +439,7 @@ public static class TreeMerger
             cursor = r.BaseStart0 + r.BaseLines;
             switch (r.Kind)
             {
+                case RegionKind.V1Only or RegionKind.V2Only when stamps: o.AppendJoin("", StampedEdit(r, ob, o1, o2)!); break;
                 case RegionKind.V2Only: Emit(o2, r.V2Start0, r.V2Lines); break;
                 case RegionKind.Conflict:
                     conflicts++;
