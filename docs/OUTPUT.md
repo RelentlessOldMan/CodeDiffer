@@ -311,6 +311,12 @@ and CodeCompass caches): cold `compare` **34:43**, 182.8 GB read at ~95–101 MB
 0 unreadable; 1,989 modified, every one tagged comment-only noise (v1's edits append `/*v1:…*/` to lines). Then
 `verify` of the v1 delta on the same trees with that cache: 2:07, digest reproduced, hunks 1,989/1,989 exact,
 shas 0 wrong, the compare's file operations 1,989/1,989.
+The same day, cold `compare3` of base / `_v1` / `_v2` over the share (empty caches, after commit 6195a05):
+**57:54** — base→v1 2,282 s (182.8 GB), base→v2 1,179 s (91.4 GB: v2 alone, 72,785 base files reused),
+classify + merge 14 s; 1,990 touched, 1,935 conflicts, 16,708 conflict regions, 50 merged, 0 pauses,
+0 unreadable. The conflict verify after it took 3:02 (digest reproduced, the exact 16,708 / 47,724 split,
+compare3 conflicting in exactly the manifest's 1,935 files). The `apply` dry run took 1:17 (54 apply, 1,935 conflict;
+31,382 hunks applied, 0 fuzzy, 16,708 conflict). Every number matches the local baseline.
 
 CodeCompass v2 ledger at full scale (2026-10-06, CodeCompass 1.0.243): `codecompass index` of base and v1 on
 IRISH (66,337 of 68,661 files each; it skips the rest by size), then `compare` base→v1 with an empty
