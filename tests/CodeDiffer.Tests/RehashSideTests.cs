@@ -69,6 +69,16 @@ public sealed class RehashSideTests : IDisposable
     }
 
     [Fact]
+    public void BesideItsCachedTwin_BothFilesAreCounted()
+    {
+        new DirectoryComparer(Opts()).Compare(P("B"), P("V1")); // B cached
+        var r = new DirectoryComparer(Opts()).Compare(P("B"), P("V2"));
+        Assert.Equal(Files, r.CacheHits);
+        Assert.Equal(2 * Bytes("V2"), r.BytesRead); // on local trees V2 is read beside B, and B's bytes count too
+        Assert.All(r.Changes, c => Assert.Equal(ChangeStatus.Identical, c.Status));
+    }
+
+    [Fact]
     public void Compare3_RehashesOnlyTheTreeNamed()
     {
         TreeMerger.Run(P("B"), P("V1"), P("V2"), Opts());

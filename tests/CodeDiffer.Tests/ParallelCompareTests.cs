@@ -159,6 +159,73 @@ public class ParallelCompareTests : IDisposable
     }
 
     [Fact]
+    public async Task FilesOfDifferentLengths_EachGetsItsOwnSha256()
+    {
+        // A twin stands for the first file only while the bytes match, and files of two lengths never do.
+        var a = Payload(5000, 3);
+        var b = Payload(5001, 3);
+        var r = await PairComparer.CompareAsync(E(Put("a", a)), E(Put("b", b)), hashes: true);
+        Assert.False(r.Equal);
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(a)), r.Left!.Sha256);
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(b)), r.Right!.Sha256);
+    }
+
+    private (FileEntry Known, ContentId Id, byte[] Data) KnownFile(int length)
+    {
+        var data = Payload(length, 12);
+        return (E(Put("known", data)), new ContentId(Convert.ToHexString(System.IO.Hashing.XxHash128.Hash(data)),
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data))), data);
+    }
+
+    [Fact]
+    public async Task BesideAKnownFile_AFileThatChangesWhileReadIsNotStable()
+    {
+        var (known, id, data) = KnownFile(PairComparer.ChunkBytes * 3);
+        var path = Put("b", data);
+        var file = E(path);
+        bool grown = false;
+        var h = await PairComparer.HashBesideAsync(known, id, file, onChunk: (_, _) =>
+        {
+            if (grown) return;
+            grown = true;
+            using var w = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+            w.SetLength(data.Length + 1);
+        });
+        Assert.False(h.Stable);
+        Assert.Equal(ReadDoubt.Changed, h.Doubt);
+    }
+
+    [Fact]
+    public async Task BesideAKnownFile_AStaleListingIsNotStable()
+    {
+        var (known, id, data) = KnownFile(PairComparer.ChunkBytes + 7);
+        var path = Put("b", data);
+        var file = E(path);
+        File.SetLastWriteTimeUtc(path, file.LastWriteTimeUtc.AddHours(1)); // changed since the walk listed it
+        var h = await PairComparer.HashBesideAsync(known, id, file);
+        Assert.False(h.Stable);
+        Assert.Equal(ReadDoubt.Listing, h.Doubt);
+    }
+
+    [Fact]
+    public async Task BesideAKnownFile_AFileCutShortWhileItsStartIsReadAgain_Finishes()
+    {
+        // The second chunk differs, so the first is read again: by then the file is empty and that read gets nothing.
+        var (known, id, data) = KnownFile(PairComparer.ChunkBytes * 3);
+        var edited = (byte[])data.Clone();
+        edited[PairComparer.ChunkBytes + 5] ^= 0x5A;
+        var path = Put("b", edited);
+        int chunks = 0;
+        var h = await PairComparer.HashBesideAsync(known, id, E(path), onChunk: (_, _) =>
+        {
+            if (++chunks != 2) return;
+            using var w = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+            w.SetLength(0);
+        }).WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.False(h.Stable);
+    }
+
+    [Fact]
     public async Task EmptyFiles_AreEqual()
     {
         var r = await PairComparer.CompareAsync(E(Put("a", [])), E(Put("b", [])), hashes: true);

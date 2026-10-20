@@ -49,11 +49,12 @@ public class GiantFileDiffTests
     [InlineData(200, 6, 2_000, 97)] // the fingerprint begun 136 bytes into each chunk, reads cutting through the skip
     [InlineData(1_000, 8, 1_500, 4_096)]
     [InlineData(64, 4, 100, 33)]
-    public void CutsAreWhereAFingerprintFromTheChunksStartPutsThem(int min, int maskBits, int max, int buffer)
+    [InlineData(200, 12, 260, 4_096, 1_000_000)] // a fingerprint wider than 8 bits: a skip of only MinSize - 8 cuts elsewhere
+    public void CutsAreWhereAFingerprintFromTheChunksStartPutsThem(int min, int maskBits, int max, int buffer, int size = 60_000)
     {
         // The chunker skips the bytes the fingerprint has shifted out by the shortest cut: the same cuts as running it all.
         var o = new ChunkerOptions { MaskBits = maskBits, MinSize = min, MaxSize = max, ReadBufferSize = buffer };
-        var data = Payload(60_000, 9);
+        var data = Payload(size, 9);
         var cuts = new List<long>();
         ulong fp = 0, mask = (1UL << maskBits) - 1;
         for (int i = 0, len = 0; i < data.Length; i++)
