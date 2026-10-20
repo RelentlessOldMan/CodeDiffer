@@ -97,6 +97,29 @@ public sealed class MergeFormTests : IDisposable
         Assert.Equal(want, TreeMerger.MergedBytes(e, _b, _v1, _v2)!);
     }
 
+    [Theory]
+    [InlineData("line 9", false)] // v2 edits another line: was written half UTF-8, half 8-bit
+    [InlineData("line 5", false)] // v2 edits the line v1's re-save changed the bytes of: was a conflict
+    [InlineData("line 9", true)]  // the same, v1 re-saving it with a BOM: was "binary"
+    public void A8BitFileReSavedAsUtf8_OnOneSide_TakesTheOthersEdits_InUtf8(string line, bool bom)
+    {
+        var b = Ten.Replace("line 5", "line 5 café");
+        var v2 = b.Replace(line, line + " crème");
+        var (e, bytes) = Merge(b, b, v2, Encoding.Latin1, bom ? Utf8Bom : Utf8, Encoding.Latin1);
+        Assert.Equal(Merge3Outcome.Merged, e.Outcome);
+        Assert.Equal([.. (bom ? Utf8Bom : Utf8).GetPreamble(), .. Utf8.GetBytes(v2)], bytes!);
+        Assert.Contains("v1 changed the encoding (ISO-8859-1 → UTF-8", e.Note);
+    }
+
+    [Fact]
+    public void A8BitFileReSavedAsUtf8_WithCp1252Punctuation_StillMergesOnItsBytes()
+    {
+        // 0x93/0x94 are cp1252 quotes but Latin-1 controls: read as Latin-1 they'd be written as the wrong characters.
+        var b = Ten.Replace("line 5", "line 5 \u0093q\u0094");
+        var (e, _) = Merge(b, b, b.Replace("line 5", "line 5 v2"), Encoding.Latin1, Utf8, Encoding.Latin1);
+        Assert.Equal(Merge3Outcome.Conflict, e.Outcome);
+    }
+
     [Fact]
     public void V2sAddedBom_IsKept()
     {

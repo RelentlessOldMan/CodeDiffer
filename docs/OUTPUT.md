@@ -254,6 +254,10 @@ note says the encoding or line-ending conflict as well. A mixed file keeps each 
 stays part of its line. A file that isn't UTF-8 in one of the three (a cp1252 / Latin-1 byte, as in a test of
 legacy names) but has no BOM and no NUL is text, as git reads it: all three are merged line by line on their bytes,
 so each line is written back exactly as it came, a UTF-8 side's included (`apply` ports such a file the same way).
+But where a side only re-saved the 8-bit base as UTF-8 (the same text), and no 8-bit side has a byte in 0x80–0x9F
+(cp1252 punctuation, which Latin-1 reads as other characters), the three are merged as text: that side changed no
+line, and the merge is written in UTF-8, the other side's edits too — not one side's lines in UTF-8 and the other's
+in the old code page, nor a conflict on every line with an accent the other side edited.
 
 **Merge overlay (built):** `write_merge(id[, out_dir])` (CLI `compare3 … --merge-out DIR`) writes the merge
 as an overlay on v1, never the whole tree: `files\` holds only what the merge changes in v1 (v2's one-sided

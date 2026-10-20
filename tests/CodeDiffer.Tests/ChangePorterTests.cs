@@ -78,6 +78,20 @@ public class ChangePorterTests : IDisposable
     }
 
     [Fact]
+    public void ATargetThatReSavedA8BitFileAsUtf8_GetsTheChange_InUtf8()
+    {
+        // The target only re-encoded the base: the change's 8-bit è goes in as UTF-8, not as a lone 0xE8 in a UTF-8 file.
+        var b = Lines(1, 30).Replace("line 5\n", "line 5 café\n");
+        PutBytes("L/a.c", Encoding.Latin1.GetBytes(b));
+        PutBytes("R/a.c", Encoding.Latin1.GetBytes(b.Replace("line 21", "CHANGED 21 crème")));
+        PutBytes("C/a.c", new UTF8Encoding(false).GetBytes(b));
+
+        var f = F(Port(write: true), "a.c");
+        Assert.Equal(PortStatus.Clean, f.Status);
+        Assert.Equal(new UTF8Encoding(false).GetBytes(b.Replace("line 21", "CHANGED 21 crème")), File.ReadAllBytes(Path.Combine(C, "a.c")));
+    }
+
+    [Fact]
     public void ConflictingTarget_IsReported_AndLeftUntouched()
     {
         Put("L/a.c", Lines(1, 30));

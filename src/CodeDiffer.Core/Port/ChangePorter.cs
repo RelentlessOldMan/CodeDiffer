@@ -513,15 +513,34 @@ public static class ChangePorter
         /// Three versions of one file as text, read alike. Where one isn't UTF-8 (a cp1252 / Latin-1 byte in a comment, a
         /// test's legacy-encoded name) and none has a BOM or a NUL, all three are read as 8-bit text, one char per byte —
         /// as git merges them, line by line on the bytes — so the merge writes back exactly the bytes its lines came from,
-        /// and a UTF-8 side's characters are never re-encoded (or turned into '?').
+        /// and a UTF-8 side's characters are never re-encoded (or turned into '?'). But where a side is the base
+        /// (<paramref name="a"/>) re-saved as UTF-8 — the same text, an <c>encoding</c> change — the 8-bit ones are read as the
+        /// text they are: that side then changed no line, and the merge is written in its encoding, the other side's lines too
+        /// (not one side's lines in UTF-8 and the other's in the old code page). Only where no 8-bit side has a byte in
+        /// 0x80–0x9F: Latin-1 and cp1252 read the rest alike, and those are cp1252 punctuation, not Latin-1's controls.
         /// </summary>
         public static bool TryReadAll(byte[] a, byte[] b, byte[] c, out Text ta, out Text tb, out Text tc)
         {
-            if (TryRead(a, out ta) & TryRead(b, out tb) & TryRead(c, out tc)) return true;
+            bool ua = TryRead(a, out ta), ub = TryRead(b, out tb), uc = TryRead(c, out tc);
+            if (ua && ub && uc) return true;
+            if (!ua && Legacy(a))
+            {
+                var la = Latin1(a);
+                if ((ub && tb.Content == la.Content || uc && tc.Content == la.Content) && (ub || Legacy(b)) && (uc || Legacy(c)))
+                {
+                    ta = la;
+                    if (!ub) tb = Latin1(b);
+                    if (!uc) tc = Latin1(c);
+                    return true;
+                }
+            }
             if (!EightBit(a) || !EightBit(b) || !EightBit(c)) return false;
             ta = Latin1(a); tb = Latin1(b); tc = Latin1(c);
             return true;
         }
+
+        /// <summary>8-bit text that reads alike as Latin-1 and cp1252: no byte in 0x80–0x9F.</summary>
+        private static bool Legacy(byte[] bytes) => EightBit(bytes) && bytes.AsSpan().IndexOfAnyInRange((byte)0x80, (byte)0x9F) < 0;
 
         private static bool EightBit(byte[] bytes) => !TextInspector.HasBom(bytes) && bytes.AsSpan().IndexOf((byte)0) < 0;
 
