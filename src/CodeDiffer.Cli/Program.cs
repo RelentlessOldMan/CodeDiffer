@@ -93,7 +93,7 @@ static int Compare(string[] args)
             ["--threads", "-U", "--max-diffs", "--out", "--rehash-side", "--share-wait"]))
         return 64;
 
-    int threads = new CompareOptions().Parallelism;
+    int threads = CompareOptions.DefaultThreadsFor(args[1], args[2]);
     if (!ShareWait(args, 2, out var shareWait)) return 64;
     if (FlagValue(args, "--threads") is { } t && (!int.TryParse(t, out threads) || threads < 1))
     {
@@ -909,7 +909,7 @@ static int Apply(string[] args)
         if (args.Length < 4) Console.Error.WriteLine(applyUsage);
         return 64;
     }
-    int threads = new CompareOptions().Parallelism;
+    int threads = CompareOptions.DefaultThreadsFor(args[1], args[2], args[3]);
     if (FlagValue(args, "--threads") is { } t && (!int.TryParse(t, out threads) || threads < 1))
     {
         Console.Error.WriteLine("error: --threads needs a positive integer");
@@ -961,7 +961,7 @@ static int ApplyOverlay(string[] args)
         return 64;
     }
     if (!ArgsOk(args, 2, overlayUsage, ["--write", "--again"], ["--threads"])) return 64;
-    int threads = new CompareOptions().Parallelism;
+    int threads = CompareOptions.DefaultThreadsFor(args[1], args[2]);
     if (FlagValue(args, "--threads", from: 3) is { } t && (!int.TryParse(t, out threads) || threads < 1))
     {
         Console.Error.WriteLine("error: --threads needs a positive integer");
@@ -1036,7 +1036,7 @@ static int Compare3(string[] args)
         if (args.Length < 4) Console.Error.WriteLine(compare3Usage);
         return 64;
     }
-    int threads = new CompareOptions().Parallelism;
+    int threads = CompareOptions.DefaultThreadsFor(args[1], args[2], args[3]);
     if (FlagValue(args, "--threads") is { } t && (!int.TryParse(t, out threads) || threads < 1))
     {
         Console.Error.WriteLine("error: --threads needs a positive integer");
@@ -1218,7 +1218,8 @@ static void PrintUsage()
                                        [--fast-stat] [--share-wait MIN]
                                        [--patch [-U N] [--literal]] [--timings] [--no-save]
                                        [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]
-                                       compare two trees (parallel; default min(cores,8)).
+                                       compare two trees (parallel; default min(cores,8) threads,
+                                       32 when a tree is on a share; --threads N for this run).
                                        Hash cache ON by default: a file whose size, mtime, ChangeTime
                                        and file id match a trusted ledger entry isn't re-read. --no-cache
                                        proves every byte; --rehash re-reads and refreshes it;

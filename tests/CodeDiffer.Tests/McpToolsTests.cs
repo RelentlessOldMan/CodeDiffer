@@ -185,11 +185,13 @@ public sealed class McpToolsTests : IDisposable
     {
         _t.Put("L/a.txt", "a\n");
         _t.Put("R/a.txt", "b\n");
-        foreach (var (cache, threads) in new[] { ("ON", -3), (" rehash ", 1000), ("", 0), ("Off", 1) })
+        int local = CompareOptions.LocalThreads; // local trees: no thread count given is the local default
+        foreach (var (cache, threads, used) in new[] { ("ON", -3, local), (" rehash ", 1000, 64), ("", 0, local), ("Off", 1, 1) })
         {
             var text = await CodeDifferTools.StartCompare(_t.P("L"), _t.P("R"), cache: cache, threads: threads, wait_seconds: 60);
             Assert.Contains("finished in", text);
             Assert.Matches(@"modified\s+1\s", text);
+            Assert.Contains($"threads {used} ·", CodeDifferTools.GetStats(Id(text)));
         }
     }
 

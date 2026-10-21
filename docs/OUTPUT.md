@@ -675,6 +675,12 @@ Measured on death 1.0.9 (68,661 files, ~94 GB a tree), the share on a 1 Gbit lin
 
 Memory stays small throughout: compares stream and hold only the verdicts (peak working set about 160–380 MB).
 
+Threads (since v1.0.126): `compare`, `compare3`, `apply` and `apply-overlay`, and the MCP server's `start_compare` /
+`start_compare3`, run 32 threads when any tree is on a share (a UNC path, a mapped or network drive) and
+min(cores, 8) otherwise; `--threads N` (MCP `threads`, up to 64) sets it for a run. Over a share a file is mostly a
+wait on the server, so more threads overlap more waits: a warm compare of ~30k files over a work share took 2:08
+at 8 threads and 0:32 at 32, the same verdicts. On a local disk more threads only queue.
+
 Net: the agent pays for a summary plus what it opens; the human gets a shareable shell that lazily
 loads; the 1 GB header is touched a few MB at a time and reported as a bounded, honest summary with the
 full detail one `get_file_diff` (or one click) away.

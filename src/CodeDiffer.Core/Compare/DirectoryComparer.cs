@@ -30,9 +30,30 @@ public sealed class CompareOptions
 
     /// <summary>
     /// Concurrent directory listings / file-pair reads per side. Over SMB, overlapping round-trips is what
-    /// fills the link; locally it washes. Default min(cores, 8) — CodeCompass's measured SMB sweet spot.
+    /// fills the link; locally it washes. Default min(cores, 8); the CLI and MCP server start from
+    /// <see cref="DefaultThreadsFor"/>, which gives trees on a share more.
     /// </summary>
-    public int Parallelism { get; init; } = Math.Min(Environment.ProcessorCount, 8);
+    public int Parallelism { get; init; } = LocalThreads;
+
+    /// <summary>The thread count for local trees: min(cores, 8). More only queues on the disk and the cores.</summary>
+    public static int LocalThreads => Math.Min(Environment.ProcessorCount, 8);
+
+    /// <summary>The thread count when a tree is on a share. A file there is mostly a wait on the server (a warm
+    /// compare is a stat per file), so threads that overlap the waits are what speed it up, and each costs little:
+    /// a warm compare of ~30k files over a work share took 2:08 at 8 threads, 0:32 at 32.</summary>
+    public const int ShareThreads = 32;
+
+    /// <summary>The default <see cref="Parallelism"/> for a run over these trees: <see cref="ShareThreads"/> if any is
+    /// on a share, else <see cref="LocalThreads"/>.</summary>
+    public static int DefaultThreadsFor(params string[] roots)
+        => roots.Any(OnAShare) ? ShareThreads : LocalThreads;
+
+    // A path that doesn't parse counts as local: the run then stops on it, as without this.
+    private static bool OnAShare(string root)
+    {
+        try { return TrustTiming.For(Path.GetFullPath(root)) == TrustTiming.Network; }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+    }
 
     /// <summary>Hash-ledger use: On (default; trust path+size+mtime), Off (--no-cache), Rehash (--rehash).</summary>
     public CacheMode Cache { get; init; } = CacheMode.On;

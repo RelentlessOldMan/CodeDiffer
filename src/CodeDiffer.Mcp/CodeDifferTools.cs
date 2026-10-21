@@ -28,10 +28,10 @@ public static class CodeDifferTools
         [Description("Left (old/base) directory.")] string left,
         [Description("Right (new) directory.")] string right,
         [Description("Hash cache: on (default), off (byte-compare everything), rehash (re-read and refresh it).")] string cache = "on",
-        [Description("Concurrent file reads (default min(cores, 8)).")] int threads = 0,
+        [Description("Concurrent file reads (default: 32 if a tree is on a network share, where each file is mostly a wait on the server; else min(cores, 8)). Max 64.")] int threads = 0,
         [Description("Seconds to wait for completion before returning (default 30; 0 = return at once).")] int wait_seconds = 30)
     {
-        if (Options(cache, threads, out var options) is { } bad) return bad;
+        if (Options(cache, threads, [left, right], out var options) is { } bad) return bad;
         CompareSession s;
         try { s = Sessions.Start(left, right, options); }
         catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException or IOException or UnauthorizedAccessException)
@@ -51,12 +51,12 @@ public static class CodeDifferTools
         [Description("First variant directory.")] string v1,
         [Description("Second variant directory.")] string v2,
         [Description("Hash cache: on (default), off, rehash.")] string cache = "on",
-        [Description("Concurrent file reads (default min(cores, 8)).")] int threads = 0,
+        [Description("Concurrent file reads (default: 32 if a tree is on a network share, where each file is mostly a wait on the server; else min(cores, 8)). Max 64.")] int threads = 0,
         [Description("Seconds to wait for completion before returning (default 30; 0 = return at once).")] int wait_seconds = 30,
         [Description("Merge a file whose colliding lines differ only in keyword stamps ($Id: ... $), each stamp from the side " +
                      "that changed it, v2's where both did (default false: a \"stamps\" conflict).")] bool resolve_stamps = false)
     {
-        if (Options(cache, threads, out var options) is { } bad) return bad;
+        if (Options(cache, threads, [@base, v1, v2], out var options) is { } bad) return bad;
         if (resolve_stamps) options = new CompareOptions { Cache = options.Cache, Parallelism = options.Parallelism, ResolveStamps = true };
         Compare3Session s;
         try { s = Sessions.Start3(@base, v1, v2, options); }
@@ -348,7 +348,7 @@ public static class CodeDifferTools
         }
     }
 
-    private static string? Options(string? cache, int threads, out CompareOptions options)
+    private static string? Options(string? cache, int threads, string[] trees, out CompareOptions options)
     {
         options = new CompareOptions();
         var mode = cache?.Trim().ToLowerInvariant() switch
@@ -359,9 +359,7 @@ public static class CodeDifferTools
             _ => null,
         };
         if (mode is null) return $"error: cache must be on, off or rehash (got '{cache}')";
-        options = threads > 0
-            ? new CompareOptions { Cache = mode.Value, Parallelism = Math.Min(threads, 64) }
-            : new CompareOptions { Cache = mode.Value };
+        options = new CompareOptions { Cache = mode.Value, Parallelism = threads > 0 ? Math.Min(threads, 64) : CompareOptions.DefaultThreadsFor(trees) };
         return null;
     }
 
