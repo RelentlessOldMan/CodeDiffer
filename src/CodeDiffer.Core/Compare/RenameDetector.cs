@@ -259,7 +259,7 @@ public sealed class RenameDetector
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    unreadable[e.RelativePath] = ex.Message;
+                    unreadable[e.RelativePath] = ReadFailure.Note(ex);
                 }
             }).GetAwaiter().GetResult();
         bytesRead += read;
@@ -538,7 +538,7 @@ public sealed class RenameDetector
             try { bytes = Guard is null ? TextInspector.ReadAll(e.FullPath) : Guard.Run(e.FullPath, () => TextInspector.ReadAll(e.FullPath), ct); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                unreadable[e.RelativePath] = ex.Message;
+                unreadable[e.RelativePath] = ReadFailure.Note(ex);
                 return;
             }
             Interlocked.Add(ref read, bytes.Length);

@@ -245,6 +245,10 @@ public sealed class DirectoryComparerTests : IDisposable
         Assert.Equal(ChangeReason.Content, Change(r, "log.txt").Reason);
         Assert.Equal(ChangeReason.Content, Change(r, "ok.c").Reason);
         Assert.Equal(2, r.UnreadableFiles);
+        // Why, and which side: both held open with no sharing on the right.
+        Assert.StartsWith("[right, in use] ", l.Unreadable);
+        Assert.Equal("right in use 2", ReadFailure.Line(ReadFailure.Tally(r)));
+        Assert.Equal("v1 in use 2", ReadFailure.Line(ReadFailure.Tally(r, "base", "v1")));
     }
 
     [Fact]

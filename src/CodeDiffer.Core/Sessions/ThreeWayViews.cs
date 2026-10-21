@@ -47,7 +47,8 @@ public static class ThreeWayViews
                      "; the verdicts under them may be wrong.\n");
         if (r.UnreadableFiles > 0)
             o.Append($"WARNING: {r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown " +
-                     "(shown as 'unreadable'); compare again once they can be read.\n");
+                     "(shown as 'unreadable'); compare again once they can be read. By side and cause: " +
+                     ReadFailure.Line(ReadFailure.Tally(r.V1Report, "base", "v1").Concat(ReadFailure.Tally(r.V2Report, "base", "v2"))) + ".\n");
         foreach (var n in AgentViews.Notes(r.V1Report, "base->v1").Concat(AgentViews.Notes(r.V2Report, "base->v2")))
             o.Append("note: ").Append(n).Append('\n');
         AgentViews.Saved(o, s);

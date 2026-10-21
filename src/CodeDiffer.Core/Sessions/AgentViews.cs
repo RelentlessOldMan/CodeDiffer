@@ -761,7 +761,8 @@ public static class AgentViews
         foreach (var n in Notes(r)) o.Append("note: ").Append(n).Append('\n');
         if (r.UnreadableFiles > 0)
             o.Append($"WARNING: {r.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict is unknown, " +
-                     "listed as [unreadable] (a pair as modified, never identical); compare again once they can be read.\n");
+                     "listed as [unreadable] (a pair as modified, never identical); compare again once they can be read. " +
+                     $"By side and cause: {ReadFailure.Line(ReadFailure.Tally(r))}.\n");
     }
 
     private static string Reasons(CompareReport r) =>

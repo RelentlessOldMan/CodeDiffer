@@ -197,7 +197,8 @@ static int Compare(string[] args)
     }
     if (report.UnreadableFiles > 0)
         Console.Error.WriteLine($"WARNING: {report.UnreadableFiles} file(s) could not be read (locked, vanished or denied) — their verdict " +
-            "is unknown, listed as [unreadable] (a pair as modified, never identical); compare again once they can be read.");
+            "is unknown, listed as [unreadable] (a pair as modified, never identical); compare again once they can be read. " +
+            $"By side and cause: {ReadFailure.Line(ReadFailure.Tally(report))}.");
     return htmlCode ?? (report.LeftDroppedDirectories + report.RightDroppedDirectories + report.UnreadableFiles > 0 ? 3 : 0);
 }
 

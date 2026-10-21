@@ -410,7 +410,11 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - `identical` = compared-and-equal, distinct from `not compared` (skipped by a cap).
 - A file that can't be read (locked, gone since the walk, access denied) never stops the compare and is never
   called identical: it is listed `[unreadable]` with why (a pair as modified with no reason, an add or remove
-  as itself, left out of rename matching), every summary warns, and the CLI exits 3. Files are opened so a
+  as itself, left out of rename matching), every summary warns, and the CLI exits 3. Since v1.0.126 the why
+  starts with its side and cause, `[right, in use] …` (causes: denied, in use, missing, path too long, offline,
+  network, disk error, else the Windows error code), and the warning ends with them counted, no names:
+  `By side and cause: v1 denied 2 · base in use 1` (compare3 names the trees base / v1 / v2). A pair's side is
+  the one that fails to open again; `a side` when both open by then. Files are opened so a
   writer can keep writing (a log being appended to is still read), and the hashes read are kept even when a
   compare fails.
 - Trees that stop answering are not 28,000 unreadable files. After any failed read the compare checks that each

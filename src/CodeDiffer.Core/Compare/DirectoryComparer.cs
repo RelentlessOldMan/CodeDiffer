@@ -529,7 +529,7 @@ public sealed class DirectoryComparer
 
     /// <summary>A pair that could not be read: modified with no reason, and why.</summary>
     private static FileChange Unknown(FileEntry le, FileEntry re, Exception ex)
-        => new(le.RelativePath, ChangeStatus.Modified, null, le.Length, re.Length, Unreadable: ex.Message);
+        => new(le.RelativePath, ChangeStatus.Modified, null, le.Length, re.Length, Unreadable: ReadFailure.PairNote(le.FullPath, re.FullPath, ex));
 
     /// <summary>
     /// Turn the held-back left-only / right-only entries into Renamed changes (when enabled) plus the
