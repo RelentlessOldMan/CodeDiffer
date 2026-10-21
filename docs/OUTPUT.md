@@ -180,6 +180,11 @@ It holds process memory (working set and its peak, private, .NET heap and its pe
 handles, the machine's cores and memory load, and per compare: files listed, same-size pairs and bytes checked,
 bytes read, cache hits, differences found, wall time per phase, mid-run hash saves, and the content phase's worker
 time split into opening files, waiting for bytes (the network, over a share) and comparing+hashing.
+Its CPU time (`cpuSeconds`, since v1.0.125) is the process's cycle count over the processor's rated clock
+(`cpuFrom: cycles`). Windows' own CPU time is sampled at the clock tick, and a compare's threads work in short
+bursts between reads that mostly fall between ticks: for a cold local compare3 it showed 5 s where the cycles say
+about 30 s. Off Windows, or without a rated clock, it is that sampled figure (`cpuFrom: sampled`), and so is every
+CPU time recorded before v1.0.125: read those as far too low.
 `codediffer runs [--max N]` and the MCP tool `get_run_telemetry` print it, newest first.
 
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
@@ -308,7 +313,7 @@ Local baseline on the current corpus (2026-10-16 to 10-19, CodeSpawner `death_1.
 tree, base / v1 / v2 on a local SSD): `verify` v1 cold 10:11, 1,989/1,989; v2 6:52, 1,986/1,986; the conflict
 verify 0:15, an exact 16,708 conflict / 47,724 clean split, compare3 conflicting in exactly 1,935 files. `apply`
 dry run: 54 files apply, 1,935 conflict; 31,382 hunks applied, 0 fuzzy, 16,708 conflict. Cold compare3 of the
-`d0` subtree (3 × 58 GB, more than the 32 GB of RAM) with v1.0.110: 116–196 s wall, 66–68 s CPU.
+`d0` subtree (3 × 58 GB, more than the 32 GB of RAM) with v1.0.110: 116–196 s wall (66–68 s CPU by the tick-sampled count, far below the real cost; see run.json above).
 
 Over the share (2026-10-19, v1.0.110, `death_1.3.1` vs `_v1` on `\\IRISH\TestHole`, 8 threads, empty CodeDiffer
 and CodeCompass caches): cold `compare` **34:43**, 182.8 GB read at ~95–101 MB/s (the link), walk 7 s, 0 pauses,
@@ -343,8 +348,9 @@ When one side of a same-size pair is cached and the other isn't (compare3's base
 base→v1), the uncached file is read beside the cached one on local trees: while their bytes match only XxHash128
 runs, and a file equal to the end, the cached file's live XxHash128 still its recorded one, takes the cached SHA-256,
 proven by byte compare; a file that differs gets its own SHA-256 from its start. The cached side is read again, so
-the read cost counts it (base→v2 shows about base→v1's bytes, not half). On death's d0 (3 × 58 GB, cold) that cut
-compare3's CPU from 116 s to 67 s, wall no slower. On a share each file hashes alone (a second read there costs link
+the read cost counts it (base→v2 shows about base→v1's bytes, not half). An unchanged file then skips its own
+SHA-256 pass, nearly all of a cold compare's CPU (on death's d0, 3 × 58 GB cold, the tick-sampled CPU went from
+116 s to 67 s, a count that misses most of the real cost), wall no slower. On a share each file hashes alone (a second read there costs link
 time, and the hashing keeps up with the link), and never with `--rehash-side`, which reads only the trees named.
 
 `--rehash` re-reads every tree and refreshes its cache; `--rehash-side` does that for the trees named and uses
@@ -657,9 +663,10 @@ Measured on death 1.0.9 (68,661 files, ~94 GB a tree), the share on a 1 Gbit lin
 
 | Operation | Cost |
 |---|---|
-| Cold `compare` / `compare3` / `apply` over the share (no or partial hash cache) | reads at link speed for 10–60 min (189 GB in 33 min); CPU ~1–2 %, ~160 MB RAM |
+| Cold `compare` / `compare3` / `apply` over the share (no or partial hash cache) | reads at link speed for 10–60 min (189 GB in 33 min); one SHA-256 pass per pair at link speed, an estimated fifth of a core (the ~1–2 % once listed here was the tick-sampled count), ~160 MB RAM |
 | Compare reading CodeCompass ledgers (only uncached big + changed files read, e.g. 17 GB) | several minutes at link speed |
 | Cold compare of large local trees | reads the trees end to end, at disk speed; hashing keeps up |
+| CPU of a cold local compare (counted by cycles, files in the OS cache, i7-8700) | ~5–6 CPU-s per GB of tree: one SHA-256 pass per identical pair, ~0.25 GB/s a core without SHA instructions; compare3's v2 adds ~1 CPU-s per GB (read beside base: XxHash128 only). death_1.3.1 slice, 5.5 GB × 3: `compare` 6 s wall / ~25–34 CPU-s, `compare3` 10.5 s / ~29–39 CPU-s |
 | Warm `compare` / `compare3` (cache hits) | ~0 bytes read, a stat per file: 1–4 min, a few % CPU |
 | `verify` against the delta / conflict manifests | a warm compare of the two trees plus the changed files: 30 s–2 min |
 | `apply` dry run or `--write` after a warm compare | reads the changed files of three trees: ~1–2 min |

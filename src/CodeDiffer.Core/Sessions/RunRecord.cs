@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using CodeDiffer.Core.Compare;
@@ -49,6 +50,35 @@ internal sealed class RunRecord : IDisposable
 
     public void Dispose() => _timer.Dispose();
 
+    /// <summary>
+    /// The process's CPU time. Windows' own figure (<see cref="Process.TotalProcessorTime"/>) is sampled at the clock
+    /// tick, and a compare's threads run in short bursts between reads that mostly fall between ticks: it showed 5 s
+    /// for a run whose cycles say 30 s. So on Windows it is the process's cycle count over the processor's rated
+    /// clock, the rate those cycles are counted at; elsewhere, or if either is missing, the sampled figure.
+    /// </summary>
+    internal static (double Seconds, string From) Cpu(Process me)
+    {
+        if (OperatingSystem.IsWindows() && s_cycleHz > 0 && QueryProcessCycleTime(me.Handle, out ulong cycles))
+            return (cycles / s_cycleHz, "cycles");
+        return (me.TotalProcessorTime.TotalSeconds, "sampled");
+    }
+
+    private static readonly double s_cycleHz = RatedHz();
+
+    private static double RatedHz()
+    {
+        if (!OperatingSystem.IsWindows()) return 0;
+        try
+        {
+            using var k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0");
+            return k?.GetValue("~MHz") is int mhz && mhz > 0 ? mhz * 1e6 : 0;
+        }
+        catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException) { return 0; }
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern bool QueryProcessCycleTime(IntPtr process, out ulong cycles);
+
     private void Write(string? ended, string? errorType)
     {
         try
@@ -92,7 +122,9 @@ internal sealed class RunRecord : IDisposable
                 w.WriteNumber("peakGcHeapMB", _peakGcHeap >> 20);
                 w.WriteNumber("peakLiveAfterGcMB", _peakLive >> 20);
                 w.WriteNumber("allocatedMB", GC.GetTotalAllocatedBytes() >> 20);
-                w.WriteNumber("cpuSeconds", Math.Round(me.TotalProcessorTime.TotalSeconds, 1));
+                var (cpu, from) = Cpu(me);
+                w.WriteNumber("cpuSeconds", Math.Round(cpu, 1));
+                w.WriteString("cpuFrom", from);
                 w.WriteNumber("threads", me.Threads.Count);
                 w.WriteNumber("handles", me.HandleCount);
                 w.WriteNumber("gen2Collections", GC.CollectionCount(2));
