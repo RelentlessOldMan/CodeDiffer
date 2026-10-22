@@ -410,7 +410,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - `identical` = compared-and-equal, distinct from `not compared` (skipped by a cap).
 - A file that can't be read (locked, gone since the walk, access denied) never stops the compare and is never
   called identical: it is listed `[unreadable]` with why (a pair as modified with no reason, an add or remove
-  as itself, left out of rename matching), every summary warns, and the CLI exits 3. Since v1.0.126 the why
+  as itself, left out of rename matching), every summary warns, and the CLI exits 3. Since v1.0.127 the why
   starts with its side and cause, `[right, in use] …` (causes: denied, in use, missing, path too long, offline,
   network, disk error, else the Windows error code), and the warning ends with them counted, no names:
   `By side and cause: v1 denied 2 · base in use 1` (compare3 names the trees base / v1 / v2). A pair's side is
@@ -679,7 +679,7 @@ Measured on death 1.0.9 (68,661 files, ~94 GB a tree), the share on a 1 Gbit lin
 
 Memory stays small throughout: compares stream and hold only the verdicts (peak working set about 160–380 MB).
 
-Threads (since v1.0.126): `compare`, `compare3`, `apply` and `apply-overlay`, and the MCP server's `start_compare` /
+Threads (since v1.0.127): `compare`, `compare3`, `apply` and `apply-overlay`, and the MCP server's `start_compare` /
 `start_compare3`, run 32 threads when any tree is on a share (a UNC path, a mapped or network drive) and
 min(cores, 8) otherwise; `--threads N` (MCP `threads`, up to 64) sets it for a run. Over a share a file is mostly a
 wait on the server, so more threads overlap more waits: a warm compare of ~30k files over a work share took 2:08

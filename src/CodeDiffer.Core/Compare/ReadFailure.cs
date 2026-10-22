@@ -66,7 +66,7 @@ public static class ReadFailure
         if (c.BehindLink) return "not followed (link, or a name Windows can't open)";
         var note = c.Unreadable!;
         int end = note.StartsWith('[') ? note.IndexOf(']') : -1;
-        if (end < 0) return "cause not recorded"; // saved before 1.0.126
+        if (end < 0) return "cause not recorded"; // saved before 1.0.127
         var parts = note[1..end].Split(", ", 2);
         // An add or remove is one side's file; a pair's note says which side failed.
         var side = parts.Length == 2 ? parts[0] : c.Status == ChangeStatus.Removed ? "left" : c.Status == ChangeStatus.Added ? "right" : null;
