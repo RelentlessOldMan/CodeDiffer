@@ -144,11 +144,6 @@ Libraries target **net8.0** (fleet floor); the CLI, the MCP server and the tests
 target **net10.0** (requires the .NET 10 SDK to build). See [`DESIGN.txt`](DESIGN.txt) for architecture and the regression suite seeded from a
 prototype-diff-tool review.
 
-**No internet, ever.** CodeDiffer reads only the trees you name (a share over your own network) and never connects
-to the internet, not even through a library: it ships its own .NET runtime, and its report page loads nothing from
-outside its folder. The tests hold it to that. They run the real CLI and MCP server and fail if either loads .NET's
-networking code. They also fail if the source gains a network call or the list of libraries changes at all.
-
 ## Contributing
 
 This is a personal tool, published as-is — **issues and pull requests aren't accepted** (PRs auto-close).
