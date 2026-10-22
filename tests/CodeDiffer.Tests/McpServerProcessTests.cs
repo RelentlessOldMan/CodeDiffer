@@ -37,6 +37,8 @@ public sealed class McpServerProcessTests : IDisposable
             StandardInputEncoding = new UTF8Encoding(false),
         };
         ExeRunner.Isolate(psi, _t.P("state"));
+        var loaded = _t.P("loaded.txt");
+        psi.Environment[CodeDiffer.Core.Sessions.LoadedList.Variable] = loaded;
         using var p = Process.Start(psi)!;
         var stderr = p.StandardError.ReadToEndAsync();
         // Longer than the compare's own wait_seconds below, with room for a slow start on a busy box.
@@ -118,5 +120,7 @@ public sealed class McpServerProcessTests : IDisposable
             p.StandardInput.Close(); // end of input: the server exits
             if (!p.WaitForExit(15_000)) p.Kill(entireProcessTree: true);
         }
+        // A whole session — handshake, a compare, a diff — never loaded the networking code.
+        NoInternetTests.AssertNoNetworking(loaded, "the MCP server");
     }
 }

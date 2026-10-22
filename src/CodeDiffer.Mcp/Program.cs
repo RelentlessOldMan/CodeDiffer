@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 // line goes to stderr. Compares run in the background inside this process and are queried by id.
 Console.Error.WriteLine($"{CodeDiffer.Mcp.McpServerInfo.ServerName} MCP {CodeDiffer.Mcp.McpServerInfo.Version}: ready (stdio)");
 
+LoadedList.WriteOnExitIfAsked(); // tests only: which libraries a run loaded
 // A crash is recorded in each running compare's run.json (numbers only), so a dead run says what killed it.
 AppDomain.CurrentDomain.UnhandledException += (_, e) => { if (e.ExceptionObject is Exception ex) Session.RecordCrash(ex); };
 

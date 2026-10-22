@@ -18,6 +18,7 @@ if (Console.IsOutputRedirected)
 if (Console.IsErrorRedirected)
     Console.SetError(new StreamWriter(Console.OpenStandardError(), new System.Text.UTF8Encoding(false)) { AutoFlush = true });
 
+LoadedList.WriteOnExitIfAsked(); // tests only: which libraries a run loaded
 // A crash is recorded in the running compare's run.json (numbers only), so a dead run says what killed it.
 AppDomain.CurrentDomain.UnhandledException += (_, e) => { if (e.ExceptionObject is Exception ex) Session.RecordCrash(ex); };
 // The console window closed, a logoff or shutdown: stop the compare so it keeps what it read and records why (Windows
