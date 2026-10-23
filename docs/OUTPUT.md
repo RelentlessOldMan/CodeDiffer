@@ -185,7 +185,7 @@ Its CPU time (`cpuSeconds`, since v1.0.125) is the process's cycle count over th
 bursts between reads that mostly fall between ticks: for a cold local compare3 it showed 5 s where the cycles say
 about 30 s. Off Windows, or without a rated clock, it is that sampled figure (`cpuFrom: sampled`), and so is every
 CPU time recorded before v1.0.125: read those as far too low.
-Since v1.0.128 it also counts what the run did underneath, to find where a run's CPU or memory goes without a
+Since v1.0.132 it also counts what the run did underneath, to find where a run's CPU or memory goes without a
 profiler: every exception thrown during it, caught or not (`exceptions`: by type and Windows error code, never
 the message); which way each live stat of a file went (`liveStats`: answered by name, one query on a handle,
 separate queries, a query the server refused and its status, and files opened plainly after a server refused an
@@ -422,7 +422,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   the one that fails to open again; `a side` when both open by then. Files are opened so a
   writer can keep writing (a log being appended to is still read), and the hashes read are kept even when a
   compare fails. A file the server won't open for overlapped reads (Windows error 87, seen on a share for a few
-  files a plain open reads fine) is opened plainly instead and read the same (since v1.0.128).
+  files a plain open reads fine) is opened plainly instead and read the same (since v1.0.132).
 - Trees that stop answering are not 28,000 unreadable files. After any failed read the compare checks that each
   tree's root is still there and that a file it read earlier still opens. If they do, the file alone is at fault:
   it is tried again (after 1 s, then 4 s; a vanished file at once is final) and then listed `[unreadable]` as above.
