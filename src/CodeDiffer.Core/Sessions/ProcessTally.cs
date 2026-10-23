@@ -21,9 +21,11 @@ public static class ProcessTally
         AppDomain.CurrentDomain.FirstChanceException += (_, e) => Add(s_exceptions, Key(e.Exception));
     }
 
-    /// <summary>The type, and the Windows error code when the exception carries one (an IOException from a file call).</summary>
+    /// <summary>The type, and the Windows error code when a file call's exception carries one. Only those: every
+    /// ArgumentException's HResult (E_INVALIDARG) reads as Windows error 87 too, and isn't one.</summary>
     internal static string Key(Exception ex)
-        => (ex.HResult >> 16 & 0x1FFF) == 7 /* FACILITY_WIN32 */ ? $"{ex.GetType().Name} {ex.HResult & 0xFFFF}" : ex.GetType().Name;
+        => ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception && (ex.HResult >> 16 & 0x1FFF) == 7 /* FACILITY_WIN32 */
+            ? $"{ex.GetType().Name} {ex.HResult & 0xFFFF}" : ex.GetType().Name;
 
     internal static void Stat(string way) => Add(s_stats, way);
 

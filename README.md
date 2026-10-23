@@ -39,7 +39,8 @@ outside the tree with the file's size, modified time, change time and id. Every 
 that tree (a **warm run**) takes the hash from the cache for each file that hasn't changed, and reads only
 the files that did. So after the first run, a compare costs what changed, not what the tree weighs.
 It also remembers why each changed pair differs (content, whitespace, line endings, noise), keyed by both
-files' hashes, so a warm run doesn't reopen a modified file to classify it again either.
+files' hashes, so a warm run doesn't reopen a modified file to classify it again either. That memory is kept
+across upgrades, so the first run after one is warm too, unless a release changes how pairs are classified.
 
 On CodeSpawner's `death` corpus over SMB (68,661 files, ~94 GB a tree, a 1 Gbit link): base→v1 cold reads
 188.8 GB in 33 min; warm it reads nothing and takes under 2 min. A full `compare3` goes from 51 min to 2:13.

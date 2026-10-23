@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Reflection;
 using CodeDiffer.Core.Model;
 
 namespace CodeDiffer.Core.Ledger;
@@ -8,7 +7,9 @@ namespace CodeDiffer.Core.Ledger;
 /// Why two files differ, remembered by what they hold: a modified pair's reason and noise, keyed by both sides'
 /// XxHash128 and file names (a name picks the comment syntax and string rules). A warm compare then finds a modified
 /// pair's verdict without opening either file, as it finds an identical one's. Being keyed by content it can't go
-/// stale: an edit is another hash. It is kept per build and classify size, since a new release may classify anew.
+/// stale: an edit is another hash. It is kept per classifier version and classify size: a release that classifies anew
+/// bumps <see cref="ClassifierVersion"/>, and one that doesn't keeps every verdict (re-classifying them all cost a first
+/// run after each install gigabytes of allocation and a read of every modified pair).
 /// One file beside the ledgers, shared by every compare; merged on save, so compares running at once each add theirs.
 /// </summary>
 public sealed class VerdictStore
@@ -38,15 +39,15 @@ public sealed class VerdictStore
     {
         if (off) return null;
         var dir = cacheBaseDir ?? HashCache.DefaultBaseDir("CODEDIFFER_CACHE_DIR", "CodeDiffer");
-        var stamp = $"{BuildStamp}|{maxClassifyBytes}";
+        var stamp = $"classifier {ClassifierVersion}|{maxClassifyBytes}";
         var path = Path.Combine(dir, FileName);
         return new VerdictStore(path, stamp, lookup, lookup ? Load(path, stamp) : new(StringComparer.Ordinal));
     }
 
-    /// <summary>This build: a release that classifies differently never reads an older one's verdicts.</summary>
-    internal static string BuildStamp { get; } =
-        typeof(VerdictStore).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-        ?? typeof(VerdictStore).Assembly.ManifestModule.ModuleVersionId.ToString();
+    /// <summary>How pairs are classified: bump it with any change to a reason or noise any pair gets, so a release that
+    /// classifies differently never reads an older one's verdicts. The classifier pin test holds the classifier's answers over a
+    /// generated set of pairs (ClassifierPinTests), and fails until this is bumped (and the pin updated) when any of them change.</summary>
+    internal const int ClassifierVersion = 1;
 
     private static string Key(ContentId l, string leftName, ContentId r, string rightName)
         => $"{l.XxHash}\0{leftName}\0{r.XxHash}\0{rightName}";
@@ -108,7 +109,7 @@ public sealed class VerdictStore
         }
     }
 
-    /// <summary>What's on disk for this build, or nothing: missing, another build's, or unreadable (a store is only
+    /// <summary>What's on disk for this classifier, or nothing: missing, another classifier's, or unreadable (a store is only
     /// ever a shortcut, so a bad one costs a re-read, never a wrong answer).</summary>
     private static ConcurrentDictionary<string, Verdict> Load(string path, string stamp)
     {

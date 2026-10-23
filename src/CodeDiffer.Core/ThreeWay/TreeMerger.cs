@@ -68,6 +68,8 @@ public sealed class ThreeWayReport
     /// <summary>Every path either side changed, sorted by path (ordinal). Untouched paths are not listed.</summary>
     public required IReadOnlyList<Merge3Entry> Entries { get; init; }
     public IReadOnlyList<(string Phase, TimeSpan Elapsed)> Timings { get; init; } = [];
+    /// <summary>Bytes the process allocated in the classify and merge, after both compares.</summary>
+    public long MergeAllocated { get; init; }
 
     public int Count(Merge3Outcome o) => Entries.Count(e => e.Outcome == o);
     public int DroppedDirectories => V1Report.LeftDroppedDirectories + V1Report.RightDroppedDirectories
@@ -104,6 +106,7 @@ public static class TreeMerger
         sharedBase = null!; // the base listing and its hashes: done with, not held through the classify
         timings.Add(("compare base->v2", sw.Elapsed));
         sw.Restart();
+        long allocated = GC.GetTotalAllocatedBytes();
 
         // Key each change by its BASE path (renames by their source); an add has no base path, so it is keyed
         // by its own path in a separate namespace (an added path can't also be a base path, or it'd be modified).
@@ -172,7 +175,8 @@ public static class TreeMerger
                     : entries[i] with { Outcome = Merge3Outcome.Conflict, ConflictKind = "file/directory clash", Note = why };
 
         timings.Add(("classify + merge", sw.Elapsed));
-        return new ThreeWayReport { V1Report = r1, V2Report = r2, Entries = entries, Timings = timings };
+        return new ThreeWayReport { V1Report = r1, V2Report = r2, Entries = entries, Timings = timings,
+                                    MergeAllocated = GC.GetTotalAllocatedBytes() - allocated };
     }
 
     /// <summary>Whose file is the merge, whole: 1 when v2 only moved it (byte-identical) and v1 changed it in place, 2 the

@@ -87,6 +87,8 @@ public static class RunSummary
                     sb.AppendLine($"            hashes saved mid-run {cps:0} time(s), {Num(x, "checkpointSeconds"):0.#} s in all{last}");
                 }
             }
+            if (r.TryGetProperty("merge", out var mg))
+                sb.AppendLine($"  merge     {Num(mg, "entries"):N0} changed paths classified and merged in {Clock(Num(mg, "seconds"))} · allocated {Num(mg, "allocatedMB"):N0} MB");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or KeyNotFoundException
                                        or InvalidOperationException or FormatException)

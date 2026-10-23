@@ -155,7 +155,7 @@ public abstract class Session
             }
             _finished = _clock.Elapsed;
             Persist(result!);
-            _record?.End(SaveError is null ? "done" : "done (result not saved)", null);
+            _record?.End(SaveError is null ? "done" : "done (result not saved)", null, result);
             return result;
         }, _cts.Token);
         // Also covers a cancel that lands before the work even started (Task.Run then never runs it).

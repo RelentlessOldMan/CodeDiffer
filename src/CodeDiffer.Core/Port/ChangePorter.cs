@@ -502,8 +502,11 @@ public static class ChangePorter
                 _ => (Encoding)new UTF8Encoding(false, true),
             };
             text = null!;
+            int skip = enc.GetPreamble().Length;
+            // Not UTF-8 (a legacy code page): said without throwing, which cost more than the decode.
+            if (enc is UTF8Encoding && !System.Text.Unicode.Utf8.IsValid(bytes.AsSpan(skip))) return false;
             string s;
-            try { s = enc.GetString(bytes, enc.GetPreamble().Length, bytes.Length - enc.GetPreamble().Length); }
+            try { s = enc.GetString(bytes, skip, bytes.Length - skip); }
             catch (DecoderFallbackException) { return false; }
             text = new Text { Content = s, Encoding = enc, Eol = EolOf(s) };
             return text.Encode(s).AsSpan().SequenceEqual(bytes);

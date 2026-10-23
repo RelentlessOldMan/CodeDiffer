@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using CodeDiffer.Core.Compare;
+using CodeDiffer.Core.ThreeWay;
 
 namespace CodeDiffer.Core.Sessions;
 
@@ -23,6 +24,7 @@ internal sealed class RunRecord : IDisposable
     private readonly object _gate = new();
     private long _peakGcHeap, _peakLive;
     private bool _ended;
+    private object? _result;
     private readonly (Dictionary<string, long> Exceptions, Dictionary<string, long> Stats) _tallyAtStart;
 
     public RunRecord(Session session)
@@ -39,13 +41,15 @@ internal sealed class RunRecord : IDisposable
         lock (_gate) if (!_ended) Write(null, null);
     }
 
-    /// <summary>The last record: <paramref name="how"/> is done, failed, cancelled, or why it was stopped.</summary>
-    public void End(string how, string? errorType)
+    /// <summary>The last record: <paramref name="how"/> is done, failed, cancelled, or why it was stopped;
+    /// <paramref name="result"/> the finished compare's (its task isn't done yet, so the session can't give it).</summary>
+    public void End(string how, string? errorType, object? result = null)
     {
         lock (_gate)
         {
             if (_ended) return;
             _ended = true;
+            _result = result;
             Write(how, errorType);
         }
         _timer.Dispose();
@@ -195,6 +199,14 @@ internal sealed class RunRecord : IDisposable
                     w.WriteEndObject();
                 }
                 w.WriteEndArray();
+                if (_result is ThreeWayReport r3)
+                {
+                    w.WriteStartObject("merge");
+                    w.WriteNumber("seconds", Math.Round(r3.Timings.FirstOrDefault(t => t.Phase == "classify + merge").Elapsed.TotalSeconds, 1));
+                    w.WriteNumber("allocatedMB", r3.MergeAllocated >> 20);
+                    w.WriteNumber("entries", r3.Entries.Count);
+                    w.WriteEndObject();
+                }
                 w.WriteEndObject();
             }
             File.Move(tmp, Path.Combine(dir, FileName), overwrite: true);

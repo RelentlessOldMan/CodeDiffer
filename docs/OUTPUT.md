@@ -190,6 +190,11 @@ profiler: every exception thrown during it, caught or not (`exceptions`: by type
 the message); which way each live stat of a file went (`liveStats`: answered by name, one query on a handle,
 separate queries, a query the server refused and its status, and files opened plainly after a server refused an
 overlapped open with error 87); and what each phase allocated (`phaseAllocatedMB`, the whole process's).
+Since v1.0.134 a Windows error code is given only for a file error (`IOException 87`); every other exception
+is its type alone, because an `ArgumentException`'s own code reads as Windows error 87 as well. A compare's
+`starting` and `done` aren't counted either: in a compare3 the second compare is starting while the first runs,
+and the first is done while the second runs and the merge after, so those phases showed the other's bytes (a
+first compare's `done` of 4–8 GB). The merge's own time and bytes are a line of their own (`merge`).
 `codediffer runs [--max N]` and the MCP tool `get_run_telemetry` print it, newest first.
 
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh

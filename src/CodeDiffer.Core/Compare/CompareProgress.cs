@@ -46,13 +46,15 @@ public sealed class CompareProgress
     }
 
     /// <summary>Bytes the process allocated during each phase so far, the current one included (the whole process's:
-    /// a compare3's two compares run one after the other, so each phase is its own).</summary>
+    /// a compare3's two compares run one after the other, so each working phase is its own). Starting and done aren't
+    /// counted: a compare3's second compare starts while the first one runs, and the first is done while the second
+    /// runs and the merge after, so those were the other's bytes (the merge's are its own, in the report).</summary>
     public IReadOnlyList<(ComparePhase Phase, long Bytes)> PhaseAllocated()
     {
         lock (_gate)
         {
             long now = GC.GetTotalAllocatedBytes() - _phaseAllocStart;
-            return [.. _phaseAllocated.Select((b, i) => ((ComparePhase)i, (ComparePhase)i == _phase ? b + now : b)).Where(x => x.Item2 > 0)];
+            return [.. _phaseAllocated.Select((b, i) => ((ComparePhase)i, (ComparePhase)i == _phase && Counted(_phase) ? b + now : b)).Where(x => x.Item2 > 0)];
         }
     }
 
@@ -211,6 +213,8 @@ public sealed class CompareProgress
             return _sampleOldT < 0 || now <= _sampleOldT ? null : (PairsDone - _sampleOldPairs) / (now - _sampleOldT);
     }
 
+    private static bool Counted(ComparePhase phase) => phase is not (ComparePhase.Starting or ComparePhase.Done);
+
     internal void SetPhase(ComparePhase phase)
     {
         if (phase == ComparePhase.Contents) _contentClock.Start();
@@ -220,7 +224,7 @@ public sealed class CompareProgress
             _phaseTimes[(int)_phase] += _phaseClock.Elapsed;
             _phaseClock.Restart();
             long alloc = GC.GetTotalAllocatedBytes();
-            _phaseAllocated[(int)_phase] += alloc - _phaseAllocStart;
+            if (Counted(_phase)) _phaseAllocated[(int)_phase] += alloc - _phaseAllocStart;
             _phaseAllocStart = alloc;
             _phase = phase;
         }
