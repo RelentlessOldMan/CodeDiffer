@@ -39,11 +39,16 @@ public readonly record struct FileStat(long Length, long LastWriteUtcTicks, long
             var b = new byte[AllInfoBytes];
             int st = NtQueryInformationFile(h, out _, b, (uint)b.Length, FileAllInformationClass);
             if (st == 0 || st == StatusBufferOverflow) // overflow: only the name didn't fit, the fixed part is whole
+            {
+                Sessions.ProcessTally.Stat("handle: one query");
                 return new FileStat(BitConverter.ToInt64(b, 48), DirectoryLister.FileTimeToUtcTicks(BitConverter.ToInt64(b, 16)),
                     DirectoryLister.FileTimeToUtcTicks(BitConverter.ToInt64(b, 24)), BitConverter.ToInt64(b, 64));
+            }
+            Sessions.ProcessTally.Stat($"handle: one query refused 0x{st:X8}");
             if (Unsupported(st)) s_noAllInfo = true;
         }
 
+        Sessions.ProcessTally.Stat("handle: separate queries");
         if (!GetFileInformationByHandleEx(h, FileBasicInfoClass, out var basic, (uint)Marshal.SizeOf<FileBasicInfo>()))
             throw new IOException($"cannot stat {path} (win32 error {Marshal.GetLastWin32Error()})");
         long fileId = GetFileInformationByHandle(h, out var byHandle)
@@ -81,7 +86,7 @@ public readonly record struct FileStat(long Length, long LastWriteUtcTicks, long
     {
         if (s_noByName) return null;
         var root = Path.GetPathRoot(longPath) ?? "";
-        if (s_byNameUnsupported.ContainsKey(root)) return null;
+        if (s_byNameUnsupported.ContainsKey(root)) { Sessions.ProcessTally.Stat("by name: not asked"); return null; }
         var nt = @"\??\" + longPath[4..]; // \\?\C:\x -> \??\C:\x, \\?\UNC\s\x -> \??\UNC\s\x
         if (nt.Length > 32_000) return null;
         int strBytes = Marshal.SizeOf<UnicodeString>();
@@ -92,6 +97,7 @@ public readonly record struct FileStat(long Length, long LastWriteUtcTicks, long
             Marshal.StructureToPtr(new UnicodeString { Length = (ushort)(nt.Length * 2), MaximumLength = (ushort)(nt.Length * 2), Buffer = mem + strBytes }, mem, false);
             var oa = new ObjectAttributes { Length = Marshal.SizeOf<ObjectAttributes>(), ObjectName = mem, Attributes = 0x40 /*OBJ_CASE_INSENSITIVE*/ };
             int st = NtQueryInformationByName(ref oa, out _, out var info, (uint)Marshal.SizeOf<FileStatInformation>(), FileStatInformationClass);
+            Sessions.ProcessTally.Stat(st == 0 ? "by name: answered" : $"by name: refused 0x{st:X8}");
             if (st == 0)
                 return new FileStat(info.EndOfFile, DirectoryLister.FileTimeToUtcTicks(info.LastWriteTime),
                     DirectoryLister.FileTimeToUtcTicks(info.ChangeTime), info.FileId);

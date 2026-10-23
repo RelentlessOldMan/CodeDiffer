@@ -25,6 +25,8 @@ public sealed class CompareProgress
     private volatile ComparePhase _phase = ComparePhase.Starting;
     private readonly Stopwatch _phaseClock = Stopwatch.StartNew();
     private readonly TimeSpan[] _phaseTimes = new TimeSpan[Enum.GetValues<ComparePhase>().Length];
+    private readonly long[] _phaseAllocated = new long[Enum.GetValues<ComparePhase>().Length];
+    private long _phaseAllocStart = GC.GetTotalAllocatedBytes();
     private long _checkpoints, _checkpointTicks, _lastCheckpointUtc;
 
     /// <summary>Read failures by cause, and the pauses (see <see cref="ShareGuard"/>).</summary>
@@ -40,6 +42,17 @@ public sealed class CompareProgress
         {
             var now = _phaseClock.Elapsed;
             return [.. _phaseTimes.Select((t, i) => ((ComparePhase)i, (ComparePhase)i == _phase ? t + now : t)).Where(x => x.Item2 > TimeSpan.Zero)];
+        }
+    }
+
+    /// <summary>Bytes the process allocated during each phase so far, the current one included (the whole process's:
+    /// a compare3's two compares run one after the other, so each phase is its own).</summary>
+    public IReadOnlyList<(ComparePhase Phase, long Bytes)> PhaseAllocated()
+    {
+        lock (_gate)
+        {
+            long now = GC.GetTotalAllocatedBytes() - _phaseAllocStart;
+            return [.. _phaseAllocated.Select((b, i) => ((ComparePhase)i, (ComparePhase)i == _phase ? b + now : b)).Where(x => x.Item2 > 0)];
         }
     }
 
@@ -206,6 +219,9 @@ public sealed class CompareProgress
         {
             _phaseTimes[(int)_phase] += _phaseClock.Elapsed;
             _phaseClock.Restart();
+            long alloc = GC.GetTotalAllocatedBytes();
+            _phaseAllocated[(int)_phase] += alloc - _phaseAllocStart;
+            _phaseAllocStart = alloc;
             _phase = phase;
         }
     }

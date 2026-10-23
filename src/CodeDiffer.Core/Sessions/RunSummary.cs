@@ -43,6 +43,8 @@ public static class RunSummary
                           (p.TryGetProperty("peakLiveAfterGcMB", out _) ? $" ({Num(p, "peakLiveAfterGcMB"):N0} MB in use after a GC, {Num(p, "allocatedMB"):N0} MB allocated in all)" : "") +
                           $" · {Num(p, "gen2Collections"):0} full GCs");
             sb.AppendLine($"  cpu       {Clock(Num(p, "cpuSeconds"))} CPU over {Clock(elapsed)} · {Num(p, "threads"):0} threads · {Num(p, "handles"):N0} handles");
+            if (Counts(p, "exceptions") is { } ex) sb.AppendLine($"  errors    thrown (caught or not): {ex}");
+            if (Counts(p, "liveStats") is { } ls) sb.AppendLine($"  stats     file stats and opens by way: {ls}");
 
             foreach (var x in r.GetProperty("compares").EnumerateArray())
             {
@@ -68,6 +70,8 @@ public static class RunSummary
                 }
                 var ph = x.GetProperty("phaseSeconds").EnumerateObject().Select(q => $"{q.Name} {Clock(q.Value.GetDouble())}");
                 sb.AppendLine($"            time: {string.Join(" · ", ph)}");
+                if (x.TryGetProperty("phaseAllocatedMB", out var pa))
+                    sb.AppendLine($"            allocated: {string.Join(" · ", pa.EnumerateObject().Select(q => $"{q.Name} {q.Value.GetDouble():N0} MB"))}");
                 var io = x.GetProperty("contentWorkerSeconds");
                 double open = Num(io, "opening"), wait = Num(io, "waitingForBytes"), work = Num(io, "comparingAndHashing"), all = open + wait + work;
                 double contents = x.GetProperty("phaseSeconds").TryGetProperty("contents", out var cs) ? cs.GetDouble() : 0;
@@ -91,6 +95,12 @@ public static class RunSummary
         }
         return sb.ToString();
     }
+
+    /// <summary>A record's counts by key as one line ("IOException 87 2 · ..."), or null when it has none.</summary>
+    private static string? Counts(JsonElement e, string k)
+        => e.TryGetProperty(k, out var o) && o.ValueKind == JsonValueKind.Object && o.EnumerateObject().Any()
+            ? string.Join(" · ", o.EnumerateObject().Select(q => $"{q.Name} ×{q.Value.GetDouble():N0}"))
+            : null;
 
     private static double Num(JsonElement e, string k) => e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : 0;
     private static string Str(JsonElement e, string k) => e.TryGetProperty(k, out var v) ? v.GetString() ?? "" : "";

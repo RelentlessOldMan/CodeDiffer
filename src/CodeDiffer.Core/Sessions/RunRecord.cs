@@ -23,10 +23,13 @@ internal sealed class RunRecord : IDisposable
     private readonly object _gate = new();
     private long _peakGcHeap, _peakLive;
     private bool _ended;
+    private readonly (Dictionary<string, long> Exceptions, Dictionary<string, long> Stats) _tallyAtStart;
 
     public RunRecord(Session session)
     {
         _session = session;
+        ProcessTally.Install();
+        _tallyAtStart = ProcessTally.Snapshot();
         Write(null, null);
         _timer = new Timer(_ => Beat(), null, Interval, Interval);
     }
@@ -128,6 +131,13 @@ internal sealed class RunRecord : IDisposable
                 w.WriteNumber("threads", me.Threads.Count);
                 w.WriteNumber("handles", me.HandleCount);
                 w.WriteNumber("gen2Collections", GC.CollectionCount(2));
+                var tally = ProcessTally.Snapshot();
+                w.WriteStartObject("exceptions"); // thrown since the run started, caught or not: type and Windows error code
+                foreach (var (k, v) in ProcessTally.Since(tally.Exceptions, _tallyAtStart.Exceptions)) w.WriteNumber(k, v);
+                w.WriteEndObject();
+                w.WriteStartObject("liveStats"); // which way each live stat (and fallback open) of a file went
+                foreach (var (k, v) in ProcessTally.Since(tally.Stats, _tallyAtStart.Stats)) w.WriteNumber(k, v);
+                w.WriteEndObject();
                 w.WriteEndObject();
 
                 w.WriteStartObject("machine");
@@ -168,6 +178,9 @@ internal sealed class RunRecord : IDisposable
                     }
                     w.WriteStartObject("phaseSeconds");
                     foreach (var (ph, t) in p.PhaseTimes()) w.WriteNumber(ph.ToString().ToLowerInvariant(), Math.Round(t.TotalSeconds, 1));
+                    w.WriteEndObject();
+                    w.WriteStartObject("phaseAllocatedMB");
+                    foreach (var (ph, b) in p.PhaseAllocated()) w.WriteNumber(ph.ToString().ToLowerInvariant(), b >> 20);
                     w.WriteEndObject();
                     w.WriteStartObject("contentWorkerSeconds");
                     w.WriteNumber("opening", Math.Round(p.Io.Opening.TotalSeconds, 1));

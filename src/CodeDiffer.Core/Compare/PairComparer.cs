@@ -328,7 +328,22 @@ public static class PairComparer
             typeof(IncrementalHash).GetMethod("Clone", Type.EmptyTypes)?.CreateDelegate<Func<IncrementalHash, IncrementalHash>>();
     }
 
+    /// <summary>Open for overlapped reads; a server that refuses that for a file (Windows error 87, seen on a share for
+    /// files a plain open reads fine) gets a plain open instead, which reads the same bytes, one call at a time.</summary>
     private static SafeFileHandle Open(string path)
-        => File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+    {
+        try
+        {
+            return File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+        }
+        catch (IOException ex) when (ShareGuard.WindowsCode(ex) == ErrorInvalidParameter)
+        {
+            var h = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            Sessions.ProcessTally.Stat("open: plain, after error 87 for overlapped");
+            return h;
+        }
+    }
+
+    private const int ErrorInvalidParameter = 87;
 }
