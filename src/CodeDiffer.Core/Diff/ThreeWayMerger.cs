@@ -313,14 +313,13 @@ public static class ThreeWayMerger
         {
             int r1 = r0 + 1;
             while (r1 < a.Count && string.Equals(a[r1], a[r0], StringComparison.Ordinal)) r1++;
-            string line = a[r0];
-            if (r1 - r0 > 1) moved |= PairRun(map, r0, r1, b, j => Resembles(line, b[j]));
+            if (r1 - r0 > 1) moved |= PairRun(map, r0, r1, b, a[r0]);
             r0 = r1;
         }
         return moved;
     }
 
-    private static bool PairRun(int[] map, int r0, int r1, IReadOnlyList<string> b, Func<int, bool> pairs)
+    private static bool PairRun(int[] map, int r0, int r1, IReadOnlyList<string> b, string line)
     {
         int bCount = b.Count;
         // The run's kept lines (their b lines in order) and the deletes in each gap around them: gap k is before kept k.
@@ -341,7 +340,7 @@ public static class ThreeWayMerger
         int Room(int lo, int hi)
         {
             int n = 0;
-            for (int j = lo; j < hi; j++) if (pairs(j)) n++;
+            for (int j = lo; j < hi; j++) if (Resembles(line, b[j])) n++;
             return n;
         }
         var room = new int[c + 1];

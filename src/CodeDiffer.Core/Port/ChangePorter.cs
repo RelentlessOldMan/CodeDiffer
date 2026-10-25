@@ -422,7 +422,7 @@ public static class ChangePorter
     internal static List<string> Lines(string text, bool normalizeEol)
     {
         if (normalizeEol) text = text.Replace("\r\n", "\n"); // CRLF only: a lone CR is content, it stays in its line
-        var lines = new List<string>();
+        var lines = new List<string>(text.AsSpan().Count('\n') + 1);
         int start = 0;
         for (int i = 0; i < text.Length; i++)
             if (text[i] == '\n') { lines.Add(text[start..(i + 1)]); start = i + 1; }
@@ -509,7 +509,8 @@ public static class ChangePorter
             try { s = enc.GetString(bytes, skip, bytes.Length - skip); }
             catch (DecoderFallbackException) { return false; }
             text = new Text { Content = s, Encoding = enc, Eol = EolOf(s) };
-            return text.Encode(s).AsSpan().SequenceEqual(bytes);
+            // Valid UTF-8 (checked above) reads back to its own bytes: only the wider forms are encoded again to see.
+            return enc is UTF8Encoding || text.Encode(s).AsSpan().SequenceEqual(bytes);
         }
 
         /// <summary>

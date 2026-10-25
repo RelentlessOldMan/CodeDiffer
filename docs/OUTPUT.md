@@ -201,6 +201,10 @@ time and bytes are a line of their own (`merge`), and since v1.0.135 so is the r
 after the last compare's last phase). Since v1.0.135 a `Win32Exception` is counted with its own code (its HResult is
 a generic failure), CodeDiffer's own stat and listing errors carry their Windows code (they were a bare
 `IOException`), and `runs` says where the CPU time came from (`cycles` or `sampled`).
+Since v1.0.136 the merge allocates about half what it did (death_1.3.1's 1,985 merged files: 1,418 MB → 734 MB, the
+same merge): a line diff's exact pass keeps one bit per diagonal and step where it kept a copy of each step's
+diagonals (D²/2 bits, not D² ints: ~560 KB, not ~36 MB, for a diff of 3,000 changed lines), valid UTF-8 isn't encoded
+again to see it reads back, and pairing runs of identical lines makes no closure per line.
 `codediffer runs [--max N]` and the MCP tool `get_run_telemetry` print it, newest first.
 
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
@@ -689,6 +693,7 @@ Measured on death 1.0.9 (68,661 files, ~94 GB a tree), the share on a 1 Gbit lin
 | Compare reading CodeCompass ledgers (only uncached big + changed files read, e.g. 17 GB) | several minutes at link speed |
 | Cold compare of large local trees | reads the trees end to end, at disk speed; hashing keeps up |
 | CPU of a cold local compare (counted by cycles, files in the OS cache, i7-8700) | ~5–6 CPU-s per GB of tree: one SHA-256 pass per identical pair, ~0.25 GB/s a core without SHA instructions; compare3's v2 adds ~1 CPU-s per GB (read beside base: XxHash128 only). death_1.3.1 slice, 5.5 GB × 3: `compare` 6 s wall / ~25–34 CPU-s, `compare3` 10.5 s / ~29–39 CPU-s |
+| compare3's merge (the files both sides changed, read and merged line by line) | about 7 times their three versions' bytes allocated (death_1.3.1: 1,985 files, 102 MB read, 734 MB allocated, 3–4 s on one core); only the files' own text and lines, not held after |
 | Warm `compare` / `compare3` (cache hits) | ~0 bytes read, a stat per file: 1–4 min, a few % CPU |
 | `verify` against the delta / conflict manifests | a warm compare of the two trees plus the changed files: 30 s–2 min |
 | `apply` dry run or `--write` after a warm compare | reads the changed files of three trees: ~1–2 min |

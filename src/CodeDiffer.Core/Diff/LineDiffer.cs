@@ -20,8 +20,8 @@ public static class LineDiffer
     private enum Edit { Equal, Delete, Insert }
 
     /// <summary>
-    /// Exact-trace budget. The classic forward Myers keeps a backtrack trace of ~D² ints (D = number of
-    /// differing lines), so 3000 caps it near 36 MB. Past it, the linear-space (divide-and-conquer,
+    /// Exact-trace budget. The classic forward Myers keeps a backtrack trace of ~D²/2 bits (D = number of
+    /// differing lines), so 3000 caps it near 560 KB, and its search near D² steps. Past it, the linear-space (divide-and-conquer,
     /// middle-snake) Myers takes over: O(N+M) memory whatever D is, still a minimal diff. Small diffs never
     /// reach it, so their hunks are byte-identical to before (the Spawner contract tests depend on that).
     /// </summary>
@@ -98,8 +98,8 @@ public static class LineDiffer
             coarse = false;
             return CoarseHunks(a, b);
         }
-        // The edit distance is at least the difference in length: past the budget, the exact pass would fill its
-        // trace (up to ~36 MB) only to give up.
+        // The edit distance is at least the difference in length: past the budget, the exact pass would search
+        // only to give up.
         var moves = (Math.Abs(a.Count - b.Count) > maxEditDistance ? null : ShortestEdit(a, b, maxEditDistance, ct))
                     ?? LinearSpace.Moves(a, b, maxWork ?? WorkCap(a.Count, b.Count), ct);
         coarse = moves is null;
@@ -300,61 +300,95 @@ public static class LineDiffer
 
     /// <summary>
     /// Myers O(ND) shortest edit script as a forward list of Equal/Delete/Insert moves, or null if the edit
-    /// distance exceeds <paramref name="maxD"/>. The trace keeps only each step's live diagonals (k ∈ [-d, d],
-    /// 2d+3 ints) instead of a full copy of V, so memory is O(D²), not O(D·(N+M)) — same moves, same output.
+    /// distance exceeds <paramref name="maxD"/>. The backtrack needs, of each step's furthest reach on each diagonal, only
+    /// which neighbour it came from (diagonal k+1, a line inserted, or k−1, one deleted): one bit per diagonal and step,
+    /// so D²/2 bits (~560 KB at the 3,000 budget) where a copy of each step's diagonals took D² ints (~36 MB), the most a
+    /// 3-way merge of a few thousand files allocated. The bits give the path's diagonal at every step, back from the end;
+    /// replayed forward, each step's move and then its run of equal lines, it is the same path — same moves, same output.
     /// </summary>
     private static List<Edit>? ShortestEdit(IReadOnlyList<string> a, IReadOnlyList<string> b, int maxD, CancellationToken ct)
     {
         int n = a.Count, m = b.Count, max = n + m;
-        var moves = new List<Edit>();
-        if (max == 0) return moves;
+        if (max == 0) return [];
 
-        int off = max + 1; // one spare diagonal each side: step 0's backtrack reads diagonal +1
-        var v = new int[2 * max + 3];
-        var trace = new List<int[]>();
-
-        bool done = false;
-        for (int d = 0; d <= max && !done; d++)
+        int off = max + 1; // one spare diagonal each side: step 0 reads diagonal +1
+        var v = Rent(2 * max + 3);
+        var fromAbove = System.Buffers.ArrayPool<ulong>.Shared.Rent(64); // bit (d, k) at d(d+1)/2 + (k+d)/2
+        try
         {
-            if (d > maxD) return null;
-            // Halfway through the budget, check the bound the line counts give: every line one side has more
-            // copies of than the other is a delete or an insert. Past the budget, the rest of the trace is waste.
-            if (d == maxD / 2 && maxD >= 64 && CountBound(a, b) > maxD) return null;
-            ct.ThrowIfCancellationRequested();
-            trace.Add(v.AsSpan(off - d - 1, 2 * d + 3).ToArray()); // diagonals -d-1..d+1 (state after step d-1)
-            for (int k = -d; k <= d; k += 2)
+            Array.Clear(v, 0, 2 * max + 3);
+            int last = -1;
+            for (int d = 0; d <= max && last < 0; d++)
             {
-                int x = k == -d || (k != d && v[off + k - 1] < v[off + k + 1])
-                    ? v[off + k + 1]   // down move = insertion
-                    : v[off + k - 1] + 1; // right move = deletion
-                int y = x - k;
-                while (x < n && y < m && a[x] == b[y]) { x++; y++; } // diagonal = equal
-                v[off + k] = x;
-                if (x >= n && y >= m) { done = true; break; }
+                if (d > maxD) return null;
+                // Halfway through the budget, check the bound the line counts give: every line one side has more
+                // copies of than the other is a delete or an insert. Past the budget, the rest of the search is waste.
+                if (d == maxD / 2 && maxD >= 64 && CountBound(a, b) > maxD) return null;
+                ct.ThrowIfCancellationRequested();
+                long at = (long)d * (d + 1) / 2;
+                int words = (int)((at + d + 64) >> 6);
+                if (words > fromAbove.Length)
+                {
+                    var grown = System.Buffers.ArrayPool<ulong>.Shared.Rent(Math.Max(2 * fromAbove.Length, words));
+                    Array.Copy(fromAbove, grown, fromAbove.Length);
+                    System.Buffers.ArrayPool<ulong>.Shared.Return(fromAbove);
+                    fromAbove = grown;
+                }
+                for (int k = -d; k <= d; k += 2)
+                {
+                    bool down = k == -d || (k != d && v[off + k - 1] < v[off + k + 1]);
+                    long bit = at + ((k + d) >> 1);
+                    if (down) fromAbove[bit >> 6] |= 1UL << (int)(bit & 63);
+                    else fromAbove[bit >> 6] &= ~(1UL << (int)(bit & 63));
+                    int x = down
+                        ? v[off + k + 1]   // down move = insertion
+                        : v[off + k - 1] + 1; // right move = deletion
+                    int y = x - k;
+                    while (x < n && y < m && a[x] == b[y]) { x++; y++; } // diagonal = equal
+                    v[off + k] = x;
+                    if (x >= n && y >= m) { last = d; break; }
+                }
             }
-        }
 
-        // Backtrack through the saved traces to recover the moves (collected reversed, then flipped).
-        int px = n, py = m;
-        for (int d = trace.Count - 1; d >= 0; d--)
+            // The path's diagonal at each step, back from the end (n, m).
+            var ks = new int[last + 1];
+            for (int d = last, k = n - m; d >= 0; d--)
+            {
+                ks[d] = k;
+                long bit = (long)d * (d + 1) / 2 + ((k + d) >> 1);
+                k = ((fromAbove[bit >> 6] >> (int)(bit & 63)) & 1) != 0 ? k + 1 : k - 1;
+            }
+            // Forward along it: each step's move, then its equal lines (step 0 has only those).
+            var moves = new List<Edit>((max + last) / 2);
+            int px = 0, py = 0;
+            for (int d = 0; d <= last; d++)
+            {
+                if (d > 0)
+                {
+                    if (ks[d - 1] == ks[d] + 1) { moves.Add(Edit.Insert); py++; }
+                    else { moves.Add(Edit.Delete); px++; }
+                }
+                while (px < n && py < m && a[px] == b[py]) { moves.Add(Edit.Equal); px++; py++; }
+            }
+            System.Diagnostics.Debug.Assert(px == n && py == m);
+            return moves;
+        }
+        finally
         {
-            var vd = trace[d];
-            int k = px - py;
-            // vd is the -d-1..d+1 slice, so diagonal j lives at vd[j + d + 1].
-            int prevK = k == -d || (k != d && vd[k + d] < vd[k + d + 2]) ? k + 1 : k - 1;
-            int prevX = vd[prevK + d + 1];
-            int prevY = prevX - prevK;
-
-            while (px > prevX && py > prevY) { moves.Add(Edit.Equal); px--; py--; }
-            if (d > 0)
-            {
-                moves.Add(px == prevX ? Edit.Insert : Edit.Delete);
-                px = prevX;
-                py = prevY;
-            }
+            System.Buffers.ArrayPool<ulong>.Shared.Return(fromAbove);
+            Return(v);
         }
-
-        moves.Reverse();
-        return moves;
     }
+
+    /// <summary>A pooled buffer. One past <see cref="PooledInts"/> is a giant file's: allocated, and left to the GC after,
+    /// so the pool (one per thread and core) never holds megabytes between diffs.</summary>
+    private static int[] Rent(int length) => length > PooledInts ? new int[length] : System.Buffers.ArrayPool<int>.Shared.Rent(length);
+
+    private static void Return(int[] buffer)
+    {
+        if (buffer.Length <= PooledInts) System.Buffers.ArrayPool<int>.Shared.Return(buffer);
+    }
+
+    /// <summary>1 MB of ints: the V array of two files of 130,000 lines between them.</summary>
+    private const int PooledInts = 1 << 18;
 }
