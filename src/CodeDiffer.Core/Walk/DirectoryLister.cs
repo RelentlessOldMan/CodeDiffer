@@ -48,6 +48,11 @@ internal static class DirectoryLister
         return full.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + full[2..] : @"\\?\" + full;
     }
 
+    /// <summary>An IOException for a failed Windows call that carries its error code as .NET's own do (HRESULT
+    /// 0x8007xxxx), so its cause and the run record's error count can name it.</summary>
+    internal static IOException Win32IOException(string message, int err)
+        => err > 0 ? new IOException(message, unchecked((int)0x80070000) | (err & 0xFFFF)) : new IOException(message);
+
     private static List<DirRow> ListWindows(string dir)
     {
         const uint ListDirectory = 0x0001, ShareAll = 0x7, OpenExisting = 3, BackupSemantics = 0x02000000;
@@ -59,7 +64,7 @@ internal static class DirectoryLister
             int err = Marshal.GetLastWin32Error();
             throw err == ErrorAccessDenied
                 ? new UnauthorizedAccessException($"cannot list {dir} (access denied)")
-                : new IOException($"cannot list {dir} (win32 error {err})");
+                : Win32IOException($"cannot list {dir} (win32 error {err})", err);
         }
 
         var rows = new List<DirRow>();
@@ -73,7 +78,7 @@ internal static class DirectoryLister
                 {
                     int err = Marshal.GetLastWin32Error();
                     if (err == ErrorNoMoreFiles) break;
-                    throw new IOException($"listing {dir} failed (win32 error {err})");
+                    throw Win32IOException($"listing {dir} failed (win32 error {err})", err);
                 }
                 cls = FileIdBothDirectoryInfo;
                 int off = 0;

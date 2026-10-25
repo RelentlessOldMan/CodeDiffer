@@ -14,7 +14,14 @@ namespace CodeDiffer.Core.Ledger;
 /// </summary>
 public sealed class VerdictStore
 {
-    internal const string FileName = "verdicts.bin";
+    /// <summary>A release's store; a build from source keeps its own, so a classifier mid-change (its pin not yet
+    /// updated) never leaves verdicts a release would trust.</summary>
+    internal static readonly string FileName = IsRelease ? "verdicts.bin" : "verdicts-dev.bin";
+
+    /// <summary>Built by build-plugin.ps1 (CDRelease), not from source.</summary>
+    internal static bool IsRelease => typeof(VerdictStore).Assembly
+        .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
+        .OfType<System.Reflection.AssemblyMetadataAttribute>().Any(a => a.Key == "CDRelease" && a.Value == "true");
     private const int Magic = 0x31545644; // "DVT1"
     /// <summary>The most kept: the least recently used go first (about 150 B each).</summary>
     internal const int MaxEntries = 200_000;
@@ -48,6 +55,8 @@ public sealed class VerdictStore
     /// classifies differently never reads an older one's verdicts. The classifier pin test holds the classifier's answers over a
     /// generated set of pairs (ClassifierPinTests), and fails until this is bumped (and the pin updated) when any of them change.</summary>
     internal const int ClassifierVersion = 1;
+
+    private static readonly ChangeNoise AllNoise = Enum.GetValues<ChangeNoise>().Aggregate(ChangeNoise.None, (a, b) => a | b);
 
     private static string Key(ContentId l, string leftName, ContentId r, string rightName)
         => $"{l.XxHash}\0{leftName}\0{r.XxHash}\0{rightName}";
@@ -96,7 +105,7 @@ public sealed class VerdictStore
                 foreach (var (k, v) in keep)
                 {
                     w.Write(k);
-                    w.Write((byte)v.Reason);
+                    w.Write((byte)v.Reason); // the enums' numbers: the classifier pin holds them
                     w.Write((byte)v.Noise);
                     w.Write(v.UsedTicks);
                 }
@@ -124,7 +133,9 @@ public sealed class VerdictStore
                 var k = r.ReadString();
                 var reason = (ChangeReason)r.ReadByte();
                 var noise = (ChangeNoise)r.ReadByte();
-                d[k] = new Verdict(reason, noise, r.ReadInt64());
+                long used = r.ReadInt64();
+                if (!Enum.IsDefined(reason) || (noise & ~AllNoise) != 0) return new(StringComparer.Ordinal); // not a store this wrote
+                d[k] = new Verdict(reason, noise, used);
             }
             return d;
         }

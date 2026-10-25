@@ -190,11 +190,17 @@ profiler: every exception thrown during it, caught or not (`exceptions`: by type
 the message); which way each live stat of a file went (`liveStats`: answered by name, one query on a handle,
 separate queries, a query the server refused and its status, and files opened plainly after a server refused an
 overlapped open with error 87); and what each phase allocated (`phaseAllocatedMB`, the whole process's).
+All of these are the process's counts since the run started: a run's own when it runs alone (the CLI, or an MCP
+server running one compare at a time); compares an MCP server runs at once each count the others' too.
 Since v1.0.134 a Windows error code is given only for a file error (`IOException 87`); every other exception
 is its type alone, because an `ArgumentException`'s own code reads as Windows error 87 as well. A compare's
 `starting` and `done` aren't counted either: in a compare3 the second compare is starting while the first runs,
 and the first is done while the second runs and the merge after, so those phases showed the other's bytes (a
-first compare's `done` of 4–8 GB). The merge's own time and bytes are a line of their own (`merge`).
+first compare's `done` of many gigabytes, and the second's held the merge and the result's save). The merge's own
+time and bytes are a line of their own (`merge`), and since v1.0.135 so is the result's save (`save`, written
+after the last compare's last phase). Since v1.0.135 a `Win32Exception` is counted with its own code (its HResult is
+a generic failure), CodeDiffer's own stat and listing errors carry their Windows code (they were a bare
+`IOException`), and `runs` says where the CPU time came from (`cycles` or `sampled`).
 `codediffer runs [--max N]` and the MCP tool `get_run_telemetry` print it, newest first.
 
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh
@@ -421,8 +427,9 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 - A file that can't be read (locked, gone since the walk, access denied) never stops the compare and is never
   called identical: it is listed `[unreadable]` with why (a pair as modified with no reason, an add or remove
   as itself, left out of rename matching), every summary warns, and the CLI exits 3. Since v1.0.127 the why
-  starts with its side and cause, `[right, in use] …` (causes: denied, in use, missing, path too long, offline,
-  network, disk error, else the Windows error code), and the warning ends with them counted, no names:
+  starts with its cause, and a pair's with its side, `[right, in use] …` (causes: denied, in use, missing, path too
+  long, offline (a cloud file's errors only, since v1.0.135), network, disk error, else the Windows error code, or
+  the error's type when it has none); an add or remove is its one side's file. The warning ends with them counted, no names:
   `By side and cause: v1 denied 2 · base in use 1` (compare3 names the trees base / v1 / v2). A pair's side is
   the one that fails to open again; `a side` when both open by then. Files are opened so a
   writer can keep writing (a log being appended to is still read), and the hashes read are kept even when a
@@ -692,7 +699,8 @@ Memory stays small throughout: compares stream and hold only the verdicts (peak 
 
 Threads (since v1.0.127): `compare`, `compare3`, `apply` and `apply-overlay`, and the MCP server's `start_compare` /
 `start_compare3`, run 32 threads when any tree is on a share (a UNC path, a mapped or network drive) and
-min(cores, 8) otherwise; `--threads N` (MCP `threads`, up to 64) sets it for a run. Over a share a file is mostly a
+min(cores, 8) otherwise (a drive Windows can't identify counts as a share); `--threads N` (MCP `threads`, up to
+64) sets it for a run. Over a share a file is mostly a
 wait on the server, so more threads overlap more waits: a warm compare of ~30k files over a work share took 2:08
 at 8 threads and 0:32 at 32, the same verdicts. On a local disk more threads only queue.
 

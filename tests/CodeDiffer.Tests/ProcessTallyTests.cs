@@ -17,6 +17,10 @@ public sealed class ProcessTallyTests
         Assert.Equal("InvalidOperationException", ProcessTally.Key(new InvalidOperationException("secret path")));
         // An ArgumentException's HResult (E_INVALIDARG) reads as Windows error 87, and isn't one.
         Assert.Equal("DecoderFallbackException", ProcessTally.Key(new System.Text.DecoderFallbackException("x")));
+        // A plain IOException's HResult (COR_E_IO, 0x80131620) carries no Windows code; its low half isn't one.
+        Assert.Equal("IOException", ProcessTally.Key(new IOException("x")));
+        // A Win32Exception's HResult is E_FAIL: its code is its own.
+        Assert.Equal("Win32Exception 1450", ProcessTally.Key(new System.ComponentModel.Win32Exception(1450)));
     }
 
     [Fact]
@@ -68,6 +72,8 @@ public sealed class ProcessTallyTests
         Assert.Equal(2, allocated.Count);
         Assert.All(allocated, l => Assert.DoesNotMatch("starting|done", l));
         Assert.Matches(@"merge +1 changed paths classified and merged in .* · allocated [\d,]+ MB", r.Stdout);
+        Assert.Matches(@"save +result saved in .* · allocated [\d,]+ MB", r.Stdout);
+        Assert.Matches(@"CPU over .* \((cycles|sampled)\) ·", r.Stdout);
     }
 
     [Fact]

@@ -20,6 +20,10 @@ public sealed class ReadFailureTests
         Assert.Equal("path too long", ReadFailure.Cause(new PathTooLongException("x")));
         Assert.Equal("offline", ReadFailure.Cause(Win32(4350)));
         Assert.Equal("offline", ReadFailure.Cause(Win32(362)));
+        Assert.Equal("missing", ReadFailure.Cause(Win32(2)));
+        Assert.Equal("Windows error 359", ReadFailure.Cause(Win32(359))); // a device in maintenance, not a cloud file
+        // CodeDiffer's own stat and listing errors carry their code too.
+        Assert.Equal("network", ReadFailure.Cause(CodeDiffer.Core.Walk.DirectoryLister.Win32IOException("cannot stat x (win32 error 64)", 64)));
         Assert.Equal("network", ReadFailure.Cause(Win32(64)));
         Assert.Equal("disk error", ReadFailure.Cause(Win32(1117)));
         Assert.Equal("Windows error 1920", ReadFailure.Cause(Win32(1920)));

@@ -6,26 +6,39 @@ namespace CodeDiffer.Core.Sessions;
 /// Counts by key for the whole process, for a run record to show what a run did underneath: every exception thrown
 /// (caught or not; by type and Windows error code, never its message) and which way each live stat went
 /// (<see cref="Walk.FileStat"/>). A record takes a <see cref="Snapshot"/> as it starts and writes the difference, so a
-/// server that runs several compares shows each one's own.
+/// server that runs compares one after another shows each one's own; compares that overlap each count the others' too
+/// (the counts are the process's, not a compare's).
 /// </summary>
 public static class ProcessTally
 {
     private static readonly ConcurrentDictionary<string, long> s_exceptions = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, long> s_stats = new(StringComparer.Ordinal);
     private static int s_installed;
+    [ThreadStatic] private static bool t_counting;
 
     /// <summary>Start counting exceptions (once per process; later calls do nothing).</summary>
     public static void Install()
     {
         if (Interlocked.Exchange(ref s_installed, 1) != 0) return;
-        AppDomain.CurrentDomain.FirstChanceException += (_, e) => Add(s_exceptions, Key(e.Exception));
+        AppDomain.CurrentDomain.FirstChanceException += (_, e) =>
+        {
+            if (t_counting) return; // counting threw (out of memory): never count the counting
+            t_counting = true;
+            try { Add(s_exceptions, Key(e.Exception)); }
+            finally { t_counting = false; }
+        };
     }
 
     /// <summary>The type, and the Windows error code when a file call's exception carries one. Only those: every
-    /// ArgumentException's HResult (E_INVALIDARG) reads as Windows error 87 too, and isn't one.</summary>
-    internal static string Key(Exception ex)
-        => ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception && (ex.HResult >> 16 & 0x1FFF) == 7 /* FACILITY_WIN32 */
-            ? $"{ex.GetType().Name} {ex.HResult & 0xFFFF}" : ex.GetType().Name;
+    /// ArgumentException's HResult (E_INVALIDARG) reads as Windows error 87 too, and isn't one. A Win32Exception's code is its
+    /// own (its HResult is E_FAIL).</summary>
+    internal static string Key(Exception ex) => ex switch
+    {
+        System.ComponentModel.Win32Exception w => $"{ex.GetType().Name} {w.NativeErrorCode}",
+        IOException or UnauthorizedAccessException when (ex.HResult >> 16 & 0x1FFF) == 7 /* FACILITY_WIN32 */
+            => $"{ex.GetType().Name} {ex.HResult & 0xFFFF}",
+        _ => ex.GetType().Name,
+    };
 
     internal static void Stat(string way) => Add(s_stats, way);
 

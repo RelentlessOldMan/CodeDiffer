@@ -19,6 +19,11 @@
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
+  <!-- A release build (build-plugin.ps1 passes CDRelease=true) says so: a build from source keeps its own verdict store. -->
+  <ItemGroup Condition="'$(CDRelease)' == 'true'">
+    <AssemblyMetadata Include="CDRelease" Value="true" />
+  </ItemGroup>
+
   <!-- Only stamp when this is actually a git repo, so a pre-git source drop builds clean with no
        MSB3073 warnings; falls back to the 1.0 prefix until then. Once committed, the stamp kicks in. -->
   <Target Name="CDStampVersion"

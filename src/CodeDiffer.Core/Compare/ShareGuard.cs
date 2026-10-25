@@ -282,7 +282,8 @@ internal sealed class ShareGuard
     /// <summary>The failure as a line: its message and, for a Windows error, its code (what tells a dropped session
     /// from a timeout or a denial).</summary>
     internal static string Describe(Exception ex)
-        => WindowsCode(ex) is > 0 and var code ? $"{ex.Message.TrimEnd()} [Windows error {code}]" : ex.Message.TrimEnd();
+        => WindowsCode(ex) is > 0 and var code && !ex.Message.Contains($"(win32 error {code})", StringComparison.Ordinal) // CodeDiffer's own say it
+            ? $"{ex.Message.TrimEnd()} [Windows error {code}]" : ex.Message.TrimEnd();
 
     /// <summary>A failure's cause as tallied: its Windows error code, else its type's name.</summary>
     internal static string Cause(Exception ex) => WindowsCode(ex) is > 0 and var code ? code.ToString(System.Globalization.CultureInfo.InvariantCulture) : ex.GetType().Name;

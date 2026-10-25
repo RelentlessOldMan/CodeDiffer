@@ -51,6 +51,9 @@ public static class FileTypes
         return Extensions.TryGetValue(name[dot..], out var t) ? t : FileType.Docs;
     }
 
+    /// <summary>Every name and extension the tables know (for the classifier pin).</summary>
+    internal static IEnumerable<string> Known => Names.Keys.Concat(Extensions.Keys);
+
     private static readonly Dictionary<string, FileType> Names = Table(
         (FileType.Build, ["CMakeLists.txt", "Makefile", "GNUmakefile", "Kbuild", "Kconfig", "Dockerfile", "Containerfile",
             "Jenkinsfile", "Vagrantfile", "Rakefile", "Gemfile", "Gemfile.lock", "Pipfile", "Pipfile.lock", "SConstruct", "SConscript",

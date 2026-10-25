@@ -21,7 +21,8 @@ public static class ReadFailure
         {
             32 or 33 => "in use",                                    // sharing / lock violation
             2 or 3 => "missing",
-            4350 or (>= 358 and <= 406) => "offline",                 // ERROR_FILE_OFFLINE, ERROR_CLOUD_FILE_*
+            4350 or 358 or (>= 362 and <= 366) or (>= 374 and <= 383) or (>= 386 and <= 398) or 404 or 405
+                => "offline",                                        // ERROR_FILE_OFFLINE, ERROR_CLOUD_FILE_* (winerror.h)
             53 or 59 or 64 or 67 or 121 or 1231 or 1236 => "network", // path gone, net error, timeout, unreachable
             23 or 1117 or 1392 => "disk error",                       // CRC, device I/O, corrupt file
             > 0 => $"Windows error {code}",

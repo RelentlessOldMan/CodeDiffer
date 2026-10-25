@@ -50,7 +50,10 @@ public readonly record struct FileStat(long Length, long LastWriteUtcTicks, long
 
         Sessions.ProcessTally.Stat("handle: separate queries");
         if (!GetFileInformationByHandleEx(h, FileBasicInfoClass, out var basic, (uint)Marshal.SizeOf<FileBasicInfo>()))
-            throw new IOException($"cannot stat {path} (win32 error {Marshal.GetLastWin32Error()})");
+        {
+            int err = Marshal.GetLastWin32Error();
+            throw DirectoryLister.Win32IOException($"cannot stat {path} (win32 error {err})", err);
+        }
         long fileId = GetFileInformationByHandle(h, out var byHandle)
             ? ((long)byHandle.FileIndexHigh << 32) | byHandle.FileIndexLow
             : 0;
@@ -72,7 +75,11 @@ public readonly record struct FileStat(long Length, long LastWriteUtcTicks, long
         var full = DirectoryLister.LongPath(path);
         if (ByName(full) is { } quick) return quick;
         using var h = CreateFileW(full, FileReadAttributes, 7 /*share all*/, IntPtr.Zero, 3 /*OPEN_EXISTING*/, 0, IntPtr.Zero);
-        if (h.IsInvalid) throw new IOException($"cannot open {path} (win32 error {Marshal.GetLastWin32Error()})");
+        if (h.IsInvalid)
+        {
+            int err = Marshal.GetLastWin32Error();
+            throw DirectoryLister.Win32IOException($"cannot open {path} (win32 error {err})", err);
+        }
         return Of(h, path);
     }
 

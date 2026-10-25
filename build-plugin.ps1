@@ -28,7 +28,7 @@ if (Test-Path $binDir) {
 }
 New-Item -ItemType Directory -Path $binDir | Out-Null
 
-$common = @("-c", "Release", "-r", "win-x64", "--self-contained", "true", "--nologo", "-p:DebugType=none", "-o", $binDir)
+$common = @("-c", "Release", "-r", "win-x64", "--self-contained", "true", "--nologo", "-p:DebugType=none", "-p:CDRelease=true", "-o", $binDir)
 
 Write-Host "Publishing MCP server ..."
 dotnet publish (Join-Path $root "src/CodeDiffer.Mcp/CodeDiffer.Mcp.csproj") @common

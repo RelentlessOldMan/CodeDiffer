@@ -25,6 +25,7 @@ internal sealed class RunRecord : IDisposable
     private long _peakGcHeap, _peakLive;
     private bool _ended;
     private object? _result;
+    private (TimeSpan Elapsed, long Allocated)? _save;
     private readonly (Dictionary<string, long> Exceptions, Dictionary<string, long> Stats) _tallyAtStart;
 
     public RunRecord(Session session)
@@ -42,14 +43,16 @@ internal sealed class RunRecord : IDisposable
     }
 
     /// <summary>The last record: <paramref name="how"/> is done, failed, cancelled, or why it was stopped;
-    /// <paramref name="result"/> the finished compare's (its task isn't done yet, so the session can't give it).</summary>
-    public void End(string how, string? errorType, object? result = null)
+    /// <paramref name="result"/> the finished compare's (its task isn't done yet, so the session can't give it), and
+    /// <paramref name="save"/> what saving it took.</summary>
+    public void End(string how, string? errorType, object? result = null, (TimeSpan Elapsed, long Allocated)? save = null)
     {
         lock (_gate)
         {
             if (_ended) return;
             _ended = true;
             _result = result;
+            _save = save;
             Write(how, errorType);
         }
         _timer.Dispose();
@@ -205,6 +208,13 @@ internal sealed class RunRecord : IDisposable
                     w.WriteNumber("seconds", Math.Round(r3.Timings.FirstOrDefault(t => t.Phase == "classify + merge").Elapsed.TotalSeconds, 1));
                     w.WriteNumber("allocatedMB", r3.MergeAllocated >> 20);
                     w.WriteNumber("entries", r3.Entries.Count);
+                    w.WriteEndObject();
+                }
+                if (_save is var (saveTime, saveBytes))
+                {
+                    w.WriteStartObject("save"); // the result written to the results folder, after the compare's last phase
+                    w.WriteNumber("seconds", Math.Round(saveTime.TotalSeconds, 1));
+                    w.WriteNumber("allocatedMB", saveBytes >> 20);
                     w.WriteEndObject();
                 }
                 w.WriteEndObject();

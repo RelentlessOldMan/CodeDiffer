@@ -154,8 +154,10 @@ public abstract class Session
                 throw;
             }
             _finished = _clock.Elapsed;
+            long saveStart = System.Diagnostics.Stopwatch.GetTimestamp(), saveAllocated = GC.GetTotalAllocatedBytes();
             Persist(result!);
-            _record?.End(SaveError is null ? "done" : "done (result not saved)", null, result);
+            var save = (System.Diagnostics.Stopwatch.GetElapsedTime(saveStart), GC.GetTotalAllocatedBytes() - saveAllocated);
+            _record?.End(SaveError is null ? "done" : "done (result not saved)", null, result, save);
             return result;
         }, _cts.Token);
         // Also covers a cancel that lands before the work even started (Task.Run then never runs it).

@@ -42,7 +42,9 @@ public static class RunSummary
                           $".NET heap peak {Num(p, "peakGcHeapMB"):N0} MB" +
                           (p.TryGetProperty("peakLiveAfterGcMB", out _) ? $" ({Num(p, "peakLiveAfterGcMB"):N0} MB in use after a GC, {Num(p, "allocatedMB"):N0} MB allocated in all)" : "") +
                           $" · {Num(p, "gen2Collections"):0} full GCs");
-            sb.AppendLine($"  cpu       {Clock(Num(p, "cpuSeconds"))} CPU over {Clock(elapsed)} · {Num(p, "threads"):0} threads · {Num(p, "handles"):N0} handles");
+            sb.AppendLine($"  cpu       {Clock(Num(p, "cpuSeconds"))} CPU over {Clock(elapsed)}" +
+                          (Str(p, "cpuFrom") is { Length: > 0 } from ? $" ({from})" : "") +
+                          $" · {Num(p, "threads"):0} threads · {Num(p, "handles"):N0} handles");
             if (Counts(p, "exceptions") is { } ex) sb.AppendLine($"  errors    thrown (caught or not): {ex}");
             if (Counts(p, "liveStats") is { } ls) sb.AppendLine($"  stats     file stats and opens by way: {ls}");
 
@@ -89,6 +91,8 @@ public static class RunSummary
             }
             if (r.TryGetProperty("merge", out var mg))
                 sb.AppendLine($"  merge     {Num(mg, "entries"):N0} changed paths classified and merged in {Clock(Num(mg, "seconds"))} · allocated {Num(mg, "allocatedMB"):N0} MB");
+            if (r.TryGetProperty("save", out var sv))
+                sb.AppendLine($"  save      result saved in {Clock(Num(sv, "seconds"))} · allocated {Num(sv, "allocatedMB"):N0} MB");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or KeyNotFoundException
                                        or InvalidOperationException or FormatException)

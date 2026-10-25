@@ -65,6 +65,9 @@ public sealed record CommentSyntax(string[] Line, (string Open, string Close)[] 
         ["Doxyfile"] = Hash, ["Jenkinsfile"] = C,
     };
 
+    /// <summary>Every name and extension the tables know (for the classifier pin).</summary>
+    internal static IEnumerable<string> Known => ByName.Keys.Concat(ByExtension.Keys);
+
     /// <summary>A file's comment syntax by its name, then its extension; null when not known (prose, JSON, data).</summary>
     public static CommentSyntax? For(string path)
     {
