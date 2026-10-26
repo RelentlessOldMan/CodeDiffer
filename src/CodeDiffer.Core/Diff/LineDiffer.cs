@@ -1,4 +1,5 @@
 using CodeDiffer.Core.Model;
+using CodeDiffer.Core.ThreeWay;
 
 namespace CodeDiffer.Core.Diff;
 
@@ -89,6 +90,14 @@ public static class LineDiffer
     public static List<Hunk> Diff(IReadOnlyList<string> a, IReadOnlyList<string> b, int maxEditDistance, out bool coarse,
         long? maxWork = null, CancellationToken ct = default)
     {
+        var was = MergeSteps.Enter(MergeStep.Diff);
+        try { return Search(a, b, maxEditDistance, out coarse, maxWork, ct); }
+        finally { MergeSteps.Enter(was); }
+    }
+
+    private static List<Hunk> Search(IReadOnlyList<string> a, IReadOnlyList<string> b, int maxEditDistance, out bool coarse,
+        long? maxWork, CancellationToken ct)
+    {
         // One side is the other's prefix (an added or removed file, an append): every exact pass ends in the same
         // single hunk after the common lines, so skip them. Classic Myers was quadratic here.
         int pre = 0;
@@ -96,12 +105,19 @@ public static class LineDiffer
         if (pre == a.Count || pre == b.Count)
         {
             coarse = false;
+            MergeSteps.Diffed(DiffWay.Prefix);
             return CoarseHunks(a, b);
         }
         // The edit distance is at least the difference in length: past the budget, the exact pass would search
         // only to give up.
-        var moves = (Math.Abs(a.Count - b.Count) > maxEditDistance ? null : ShortestEdit(a, b, maxEditDistance, ct))
-                    ?? LinearSpace.Moves(a, b, maxWork ?? WorkCap(a.Count, b.Count), ct);
+        var moves = Math.Abs(a.Count - b.Count) > maxEditDistance ? null : ShortestEdit(a, b, maxEditDistance, ct);
+        var way = DiffWay.Exact;
+        if (moves is null)
+        {
+            moves = LinearSpace.Moves(a, b, maxWork ?? WorkCap(a.Count, b.Count), ct);
+            way = moves is null ? DiffWay.Coarse : DiffWay.LinearSpace;
+        }
+        MergeSteps.Diffed(way);
         coarse = moves is null;
         return moves is null ? CoarseHunks(a, b) : BuildHunks(moves);
     }

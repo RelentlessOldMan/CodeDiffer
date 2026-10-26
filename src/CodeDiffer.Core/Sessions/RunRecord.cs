@@ -208,6 +208,24 @@ internal sealed class RunRecord : IDisposable
                     w.WriteNumber("seconds", Math.Round(r3.Timings.FirstOrDefault(t => t.Phase == "classify + merge").Elapsed.TotalSeconds, 1));
                     w.WriteNumber("allocatedMB", r3.MergeAllocated >> 20);
                     w.WriteNumber("entries", r3.Entries.Count);
+                    if (r3.Steps is { } st)
+                    {
+                        w.WriteStartObject("steps"); // thread time and bytes, each step's own
+                        foreach (var s in Enum.GetValues<MergeStep>())
+                        {
+                            w.WriteStartObject(s.ToString().ToLowerInvariant());
+                            w.WriteNumber("seconds", Math.Round(st.Time(s).TotalSeconds, 1));
+                            w.WriteNumber("allocatedMB", st.Allocated(s) >> 20);
+                            w.WriteEndObject();
+                        }
+                        w.WriteEndObject();
+                        w.WriteStartObject("diffs");
+                        foreach (var d in Enum.GetValues<DiffWay>()) w.WriteNumber(d.ToString(), st.Diffs(d));
+                        w.WriteEndObject();
+                        w.WriteNumber("filesMerged", st.Files);
+                        w.WriteNumber("linesMerged", st.Lines);
+                        w.WriteNumber("readMB", st.BytesRead >> 20);
+                    }
                     w.WriteEndObject();
                 }
                 if (_save is var (saveTime, saveBytes))

@@ -70,6 +70,8 @@ public sealed class ThreeWayReport
     public IReadOnlyList<(string Phase, TimeSpan Elapsed)> Timings { get; init; } = [];
     /// <summary>Bytes the process allocated in the classify and merge, after both compares.</summary>
     public long MergeAllocated { get; init; }
+    /// <summary>The classify and merge's thread time and bytes by step, and how its line diffs were made.</summary>
+    public MergeSteps? Steps { get; init; }
 
     public int Count(Merge3Outcome o) => Entries.Count(e => e.Outcome == o);
     public int DroppedDirectories => V1Report.LeftDroppedDirectories + V1Report.RightDroppedDirectories
@@ -118,7 +120,8 @@ public static class TreeMerger
         var keys = side1.Keys.Union(side2.Keys).OrderBy(k => k.Path, StringComparer.Ordinal).ThenBy(k => k.Added).ToList();
 
         var entries = new Merge3Entry[keys.Count];
-        Parallel.For(0, keys.Count, new ParallelOptions { MaxDegreeOfParallelism = opt.Parallelism, CancellationToken = ct }, i =>
+        var steps = new MergeSteps();
+        Parallel.For(0, keys.Count, new ParallelOptions { MaxDegreeOfParallelism = opt.Parallelism, CancellationToken = ct }, steps.Begin, (i, _, tally) =>
         {
             var k = keys[i];
             side1.TryGetValue(k, out var c1);
@@ -135,7 +138,9 @@ public static class TreeMerger
             {
                 entries[i] = new Merge3Entry(k.Path, c1, c2, Merge3Outcome.Conflict, "unreadable", 0, 0, null, ex.Message);
             }
-        });
+            MergeSteps.Enter(MergeStep.Other);
+            return tally;
+        }, steps.End);
 
         // Two different files landing on one destination (a rename on one side, an add or another rename on
         // the other) can't both be kept: flag every entry involved — a content conflict too, or its marker file
@@ -176,7 +181,7 @@ public static class TreeMerger
 
         timings.Add(("classify + merge", sw.Elapsed));
         return new ThreeWayReport { V1Report = r1, V2Report = r2, Entries = entries, Timings = timings,
-                                    MergeAllocated = GC.GetTotalAllocatedBytes() - allocated };
+                                    MergeAllocated = GC.GetTotalAllocatedBytes() - allocated, Steps = steps };
     }
 
     /// <summary>Whose file is the merge, whole: 1 when v2 only moved it (byte-identical) and v1 changed it in place, 2 the
@@ -266,12 +271,15 @@ public static class TreeMerger
         {
             // Never loaded whole: a same-size pair is compared in chunks, up to its first difference (a cancel is seen
             // between them). Two SHA-256 passes cost about 20 times the CPU and always read both to the end.
+            MergeSteps.Enter(MergeStep.Read);
             bool same = c1.RightSize == c2.RightSize && TextInspector.SameBytes(f1, f2, ct);
             return same ? new(path, c1, c2, Merge3Outcome.Agreed, null, 0, 0, dest, null)
                 : Whole() ?? Conflict("large", "both changed a large file differently — not merged line by line");
         }
+        MergeSteps.Enter(MergeStep.Read);
         var bytes1 = File.ReadAllBytes(f1);
         var bytes2 = File.ReadAllBytes(f2);
+        MergeSteps.Read(bytes1.Length + bytes2.Length);
         if (bytes1.AsSpan().SequenceEqual(bytes2))
             return new(path, c1, c2, Merge3Outcome.Agreed, null, 0, 0, dest, null);
 
@@ -283,23 +291,31 @@ public static class TreeMerger
         const string largeBase = "both changed it differently and the base file is large — not merged line by line";
         if (!added && Math.Max(c1.LeftSize, c2.LeftSize) > maxText) return Whole() ?? Conflict("large", largeBase);
         var baseBytes = added ? [] : File.ReadAllBytes(Full(b, path));
+        MergeSteps.Read(baseBytes.Length);
         if (baseBytes.Length > maxText) return Whole() ?? Conflict("large", largeBase); // grown since it was listed
+        MergeSteps.Enter(MergeStep.Decode);
         if (!ChangePorter.Text.TryReadAll(baseBytes, bytes1, bytes2, out var tb, out var t1, out var t2)
             || LooksBinary(bytes1) || LooksBinary(bytes2) || LooksBinary(baseBytes))
             return Whole() ?? Conflict(added ? "add/add (binary)" : "binary", "both changed a binary (or non-text) file differently");
 
         var form = FormOf(tb, t1, t2, added);
+        MergeSteps.Enter(MergeStep.Split);
         var lb = Split(tb.Content, form.Normalize);
         var l1 = Split(t1.Content, form.Normalize);
         var l2 = Split(t2.Content, form.Normalize);
+        MergeSteps.Merged(lb.Count + l1.Count + l2.Count);
+        MergeSteps.Enter(MergeStep.Align); // the diffs inside are the diff's
         var regions = ThreeWayMerger.Regions(lb, l1, l2, ct);
+        MergeSteps.Enter(MergeStep.Other);
         int conflicts = regions.Count(r => r.Kind == RegionKind.Conflict);
         int clean = regions.Count - conflicts;
         // Conflicting lines are written with markers; a conflict in the encoding or line endings too must not vanish
         // behind them — the note says so, and that the markers file is written in v1's form.
         if (conflicts > 0)
         {
+            MergeSteps.Enter(MergeStep.Stamps);
             var bare = StampsMerge(lb, l1, l2, ct);
+            MergeSteps.Enter(MergeStep.Other);
             if (bare is not null && resolveStamps && form.Conflict is null && !(form.Normalize && form.Eol == "mixed"))
                 return new(path, c1, c2, Merge3Outcome.Merged, null, 0, bare.Count, dest, form.Note is { } n ? $"{StampsResolved}; {n}" : StampsResolved);
             var ck = bare is not null ? StampsConflict : added ? "add/add" : "content";

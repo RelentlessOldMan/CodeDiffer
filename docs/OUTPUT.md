@@ -205,6 +205,10 @@ Since v1.0.136 the merge allocates about half what it did (death_1.3.1's 1,985 m
 same merge): a line diff's exact pass keeps one bit per diagonal and step where it kept a copy of each step's
 diagonals (D²/2 bits, not D² ints: ~560 KB, not ~36 MB, for a diff of 3,000 changed lines), valid UTF-8 isn't encoded
 again to see it reads back, and pairing runs of identical lines makes no closure per line.
+Since v1.0.137 the `merge` line has two under it: each step's thread time and bytes (`other` · `read` · `decode` ·
+`split` · `diff` · `align` · `stamps`: each step's own, so a diff inside the stamps' merge is the diff's, and the times add
+up to the workers' time, not the wall), and the files merged line by line (their lines, the MB read) with how their line
+diffs were made (one side a prefix, exact, linear-space past the exact pass's budget, coarse past the work cap).
 `codediffer runs [--max N]` and the MCP tool `get_run_telemetry` print it, newest first.
 
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh

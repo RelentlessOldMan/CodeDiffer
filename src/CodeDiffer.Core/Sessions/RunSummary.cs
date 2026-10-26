@@ -90,7 +90,15 @@ public static class RunSummary
                 }
             }
             if (r.TryGetProperty("merge", out var mg))
+            {
                 sb.AppendLine($"  merge     {Num(mg, "entries"):N0} changed paths classified and merged in {Clock(Num(mg, "seconds"))} · allocated {Num(mg, "allocatedMB"):N0} MB");
+                if (mg.TryGetProperty("steps", out var st))
+                {
+                    sb.AppendLine($"            by step (thread time, allocated): {string.Join(" · ", st.EnumerateObject().Select(q => $"{q.Name} {Clock(Num(q.Value, "seconds"))} {Num(q.Value, "allocatedMB"):N0} MB"))}");
+                    var ways = mg.GetProperty("diffs").EnumerateObject().Select(q => $"{q.Value.GetDouble():N0} {Way(q.Name)}");
+                    sb.AppendLine($"            {Num(mg, "filesMerged"):N0} files merged line by line ({Num(mg, "linesMerged"):N0} lines, {Num(mg, "readMB"):N0} MB read) · line diffs: {string.Join(" · ", ways)}");
+                }
+            }
             if (r.TryGetProperty("save", out var sv))
                 sb.AppendLine($"  save      result saved in {Clock(Num(sv, "seconds"))} · allocated {Num(sv, "allocatedMB"):N0} MB");
         }
@@ -111,6 +119,7 @@ public static class RunSummary
     private static double Num(JsonElement e, string k) => e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : 0;
     private static string Str(JsonElement e, string k) => e.TryGetProperty(k, out var v) ? v.GetString() ?? "" : "";
     private static double Gb(double mb) => mb / 1024;
+    private static string Way(string w) => w switch { "Prefix" => "one side a prefix", "Exact" => "exact", "LinearSpace" => "linear-space", "Coarse" => "coarse", _ => w };
     private static string Pct(double part, double all) => $"{100 * part / all:0}%";
 
     private static string Clock(double seconds)

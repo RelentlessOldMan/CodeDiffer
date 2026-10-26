@@ -72,6 +72,8 @@ public sealed class ProcessTallyTests
         Assert.Equal(2, allocated.Count);
         Assert.All(allocated, l => Assert.DoesNotMatch("starting|done", l));
         Assert.Matches(@"merge +1 changed paths classified and merged in .* · allocated [\d,]+ MB", r.Stdout);
+        Assert.Matches(@"by step \(thread time, allocated\): other .* · read .* · decode .* · split .* · diff .* · align .* · stamps ", r.Stdout);
+        Assert.Matches(@"1 files merged line by line \(9 lines, 0 MB read\) · line diffs: 0 one side a prefix · 2 exact · 0 linear-space · 0 coarse", r.Stdout);
         Assert.Matches(@"save +result saved in .* · allocated [\d,]+ MB", r.Stdout);
         Assert.Matches(@"CPU over .* \((cycles|sampled)\) ·", r.Stdout);
     }
