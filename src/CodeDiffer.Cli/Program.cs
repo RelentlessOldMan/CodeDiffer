@@ -1,4 +1,5 @@
 using System.Reflection;
+using CodeDiffer.Cli;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Giant;
 using CodeDiffer.Core.Ledger;
@@ -70,6 +71,8 @@ static int Dispatch(string[] args)
             return Runs(args);
         case "statcheck":
             return StatCheckCmd(args);
+        case "selftest":
+            return SelfTest.Run(args);
         case "help" or "--help" or "-h":
             PrintUsage();
             return 0;
@@ -1268,6 +1271,13 @@ static void PrintUsage()
                                          Opening a file refreshes its listing: a second run reads fewer.
           codediffer runs [--max N]      how recent compares ran: how each ended, peak memory, time per phase,
                                          network vs work (numbers only, safe to share)
+          codediffer selftest <left> <right> [<v2>] [--name NAME] [--out DIR] [--sample N] [--threads N] [--cold]
+                                         every feature run on trees you name (2-way, or base v1 v2 for 3-way;
+                                         the trees are only read), each result checked against the files or
+                                         another way of getting it; writes an HTML report with the checks and
+                                         the metrics under DIR (default: beside the saved results, selftest\
+                                         <name>\<time>\index.html). Exit 0 all passed, 1 a check failed.
+                                         --sample N files per check (25); --cold rereads every byte first.
           codediffer results --prune [--keep N] [--older-than DAYS] [--yes]
                                        delete all but the newest N (default 20) saved compares,
                                        only those older than DAYS if given. Dry run unless --yes.

@@ -27,9 +27,28 @@ public sealed class NoInternetTests
     public void TheSource_HasNoNetworkCallsOrLaunchedPrograms()
     {
         var banned = new Regex(@"System\.Net\b|HttpClient|WebClient|WebRequest|\bSocket\b|TcpClient|UdpClient|\bDns\.|ProcessStartInfo|Process\.Start|https?://");
-        var hits = Shipped("*.cs").SelectMany(f => File.ReadLines(f).Select((line, i) => (f, i, line)))
+        var hits = Shipped("*.cs").Where(f => f != SelfTestFile).SelectMany(f => File.ReadLines(f).Select((line, i) => (f, i, line)))
             .Where(t => banned.IsMatch(t.line)).Select(t => $"{Path.GetRelativePath(Root, t.f)}:{t.i + 1}: {t.line.Trim()}").ToList();
         Assert.True(hits.Count == 0, "network code in the shipped source:\n" + string.Join("\n", hits));
+    }
+
+    private static string SelfTestFile => Path.Combine(Root, "src", "CodeDiffer.Cli", "SelfTest.cs");
+
+    /// <summary>The one file allowed to launch programs: `selftest` runs this CLI and the MCP server beside it, as a user
+    /// and an agent would. It launches nothing else, and reaches no network.</summary>
+    [Fact]
+    public void TheSelfTest_LaunchesOnlyCodeDiffersOwnExes()
+    {
+        var lines = File.ReadAllLines(SelfTestFile);
+        var net = new Regex(@"System\.Net\b|HttpClient|WebClient|WebRequest|\bSocket\b|TcpClient|UdpClient|\bDns\.|https?://");
+        Assert.DoesNotContain(lines, l => net.IsMatch(l));
+        Assert.Equal(2, lines.Count(l => l.Contains("new ProcessStartInfo(exe)")));
+        Assert.Equal(2, lines.Count(l => l.Contains("new ProcessStartInfo")));
+        Assert.Equal(2, lines.Count(l => l.Contains("Process.Start(psi)")));
+        var text = string.Join("\n", lines);
+        Assert.Contains("var cli = Environment.ProcessPath!;", text);
+        Assert.Contains("Path.Combine(AppContext.BaseDirectory, \"CodeDiffer.Mcp.exe\")", text);
+        Assert.DoesNotContain("UseShellExecute = true", text);
     }
 
     [Fact]

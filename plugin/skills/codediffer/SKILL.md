@@ -34,5 +34,12 @@ files over 1 GB, locally or on a network share, and every answer is bounded so t
   killed outright, peak memory, time per phase, and network vs work. A killed or stopped compare resumes by
   running the same compare again: the hashes it saved while reading are not read again.
 
+**Selftest** ("run the selftest on repo X", "test CodeDiffer on these versions"): run the CLI next to the MCP
+server, `"<plugin>/bin/CodeDiffer.Cli.exe" selftest <left> <right> [<v2>] --name X` (a 3rd tree makes the first
+base, then v1, v2). It runs every feature on those trees (only reads them), checks each result against the files
+or another way of getting it (CLI vs MCP, warm vs first compare, a patch re-applied by its own applier), and
+prints `report: <path>\index.html`, an HTML page of the checks and the metrics (time, MB read, peak memory per
+compare; history of earlier runs on that repo). Exit 0 all passed, 1 a check failed. Give the user the report path.
+
 Start with the summary and list_files, then open only the files you need. Never pass write=true unless the
 user asked for the change to be written.

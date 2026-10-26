@@ -100,7 +100,9 @@ From source: `./build-plugin.ps1` builds `plugin\bin`, then point at `<repo>\plu
   conflict; `--merge-out DIR` writes the merge as an overlay on v1), `apply-overlay <dir> <target> [--write]`
   (apply that overlay), `apply <left> <right> <target> [--write]` (port a change set onto a third tree), `diff <a> <b>`,
   `blockdiff`, `verify`, `report <id>` (HTML report of a saved compare; or `--html` on `compare`/`compare3`),
-  `results` (saved compares; `--prune` deletes all but the newest N, a dry run unless `--yes`). `help` lists the flags.
+  `results` (saved compares; `--prune` deletes all but the newest N, a dry run unless `--yes`), `selftest <left> <right> [<v2>]`
+  (every feature run on trees you name, each result checked against the files or another way of getting it, and an
+  HTML report of the checks and the metrics, with a history per repo). `help` lists the flags.
 - **`CodeDiffer.Mcp.exe`** — the stdio MCP server for agents, registered by the plugin. Tools: `start_compare` / `start_compare3`
   (background, return an id), `get_summary` (constant size; while running: progress, time left and the
   differences found so far, which `list_files` / `get_file_diff` can already open), `list_files` (paged/filtered), `get_file_diff`

@@ -8,6 +8,7 @@ namespace CodeDiffer.Tests;
 /// CodeDiffer.Mcp.exe end to end over stdio, as an agent host starts it: the initialize handshake, tools/list (the 13
 /// tools, no CancellationToken leaking into a schema) and a real tools/call of a compare.
 /// </summary>
+[Collection("ServerProcesses")]
 public sealed class McpServerProcessTests : IDisposable
 {
     private readonly TempDir _t = new();

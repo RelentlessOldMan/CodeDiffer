@@ -681,7 +681,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 | Code | Meaning |
 |---|---|
 | 0 | done: nothing conflicts and nothing is missing |
-| 1 | done, with conflicts (`compare3`, `apply`), a file that failed (`apply-overlay`), a `verify` gate failed, or a prune that could not delete everything |
+| 1 | done, with conflicts (`compare3`, `apply`), a file that failed (`apply-overlay`), a `verify` gate or a `selftest` check failed, or a prune that could not delete everything |
 | 2 | error: a tree or file not found, a refused directory, an unreadable manifest, a failed `--html` / `--merge-out`, a file or directory that could not be read or written where the command can't go on without it (denied, a share lost) |
 | 3 | done but INCOMPLETE: a directory could not be listed or a file could not be read (the warnings say which), or a report written with a diff it could not read or render (listed with why); or a compare stopped because the trees stopped answering for longer than `--share-wait` (what it read is cached: run it again) |
 | 64 | usage: a missing argument, an unknown option, a flag without its value |
@@ -703,6 +703,7 @@ Measured on death 1.0.9 (68,661 files, ~94 GB a tree), the share on a 1 Gbit lin
 | `apply` dry run or `--write` after a warm compare | reads the changed files of three trees: ~1–2 min |
 | HTML report (`--html`, `report <id>`, `write_report`) | seconds, a ~20 MB write |
 | `report --large` / `blockdiff` | trivial, unless many giant files mean tens of GB to read |
+| `selftest` (5 compares, 3 dry-run applies, the MCP server's run of each tool, 3 reports) | warm, about 2 warm compares' worth of each per tree: death_1.3.1 base / v1 / v2, 3:00 on one core (1:40 on 8); a `--cold` first compare adds one full read |
 
 Memory stays small throughout: compares stream and hold only the verdicts (peak working set about 160–380 MB).
 
