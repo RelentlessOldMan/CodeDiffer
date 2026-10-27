@@ -209,6 +209,12 @@ Since v1.0.137 the `merge` line has two under it: each step's thread time and by
 `split` · `diff` · `align` · `stamps`: each step's own, so a diff inside the stamps' merge is the diff's, and the times add
 up to the workers' time, not the wall), and the files merged line by line (their lines, the MB read) with how their line
 diffs were made (one side a prefix, exact, linear-space past the exact pass's budget, coarse past the work cap).
+Since v1.0.139 a third: the files both sides modified that the merge didn't open. A file both modified in place is
+merged from the three versions' hashes, which the compares know: agreed when v1 and v2 hold the same, else as the merge
+store (`merges.bin` beside the ledgers) remembers those three versions merging, kept per merger version, classify size
+and stamp resolving. A warm compare3 over unchanged trees then reads no file in its merge. The store is never trusted
+with the cache off or a tree rehashed. And the lines a merge splits are cut straight from the UTF-8 bytes, the lines a
+side shares with the base's head and tail reusing the base's strings, not decoded whole and split again.
 `codediffer runs [--max N]` and the MCP tool `get_run_telemetry` print it, newest first.
 
 **Result store (built):** every finished compare — MCP or CLI — is saved to a fresh

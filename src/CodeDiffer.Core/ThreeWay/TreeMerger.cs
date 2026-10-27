@@ -3,6 +3,7 @@ using System.Text;
 using CodeDiffer.Core.Compare;
 using CodeDiffer.Core.Diff;
 using CodeDiffer.Core.Hashing;
+using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Port;
 
@@ -121,6 +122,11 @@ public static class TreeMerger
 
         var entries = new Merge3Entry[keys.Count];
         var steps = new MergeSteps();
+        // A file both modified, merged before: its merge by the three versions' content, which the compares know.
+        bool trust = opt.CacheFor(baseDir) == CacheMode.On && opt.CacheFor(v1Dir) == CacheMode.On && opt.CacheFor(v2Dir) == CacheMode.On;
+        var store = MergeStore.Open(opt.CacheBaseDir, opt.MaxClassifyBytes, opt.ResolveStamps, lookup: trust, off: opt.Cache == CacheMode.Off);
+        var ids1 = r1.ContentIds;
+        var ids2 = r2.ContentIds;
         Parallel.For(0, keys.Count, new ParallelOptions { MaxDegreeOfParallelism = opt.Parallelism, CancellationToken = ct }, steps.Begin, (i, _, tally) =>
         {
             var k = keys[i];
@@ -128,7 +134,9 @@ public static class TreeMerger
             side2.TryGetValue(k, out var c2);
             try
             {
-                var e = Classify(k.Path, c1, c2, baseDir, v1Dir, v2Dir, opt.MaxClassifyBytes, opt.ResolveStamps, ct);
+                var e = Known(k.Path, c1, c2, ids1, ids2, store, out var key)
+                        ?? Classify(k.Path, c1, c2, baseDir, v1Dir, v2Dir, opt.MaxClassifyBytes, opt.ResolveStamps, ct);
+                if (key is not null) store!.Record(key, e);
                 // A held rename, merged as its remove and its add: the entry says why it wasn't followed.
                 var held = (c1?.RenameHeld is { } h1 ? $"v1: {h1}" : null) is { } n1 && c2?.RenameHeld is { } h2 ? $"{n1}; v2: {h2}"
                          : c1?.RenameHeld is { } only1 ? $"v1: {only1}" : c2?.RenameHeld is { } only2 ? $"v2: {only2}" : null;
@@ -179,9 +187,39 @@ public static class TreeMerger
                     ? entries[i] with { Note = (entries[i].Note is { } n ? n + "; " : "") + why }
                     : entries[i] with { Outcome = Merge3Outcome.Conflict, ConflictKind = "file/directory clash", Note = why };
 
+        // Only a shortcut: one that can't be saved costs the next run a read of the files both changed, no more.
+        try { store?.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         timings.Add(("classify + merge", sw.Elapsed));
         return new ThreeWayReport { V1Report = r1, V2Report = r2, Entries = entries, Timings = timings,
                                     MergeAllocated = GC.GetTotalAllocatedBytes() - allocated, Steps = steps };
+    }
+
+    /// <summary>
+    /// A file both sides modified in place, merged without opening it: agreed when v1 and v2 hold the same, else as the
+    /// store remembers these three versions merging. Null to merge it from the files; then <paramref name="key"/> is where
+    /// to remember the merge (null when a version's content isn't known).
+    /// </summary>
+    private static Merge3Entry? Known(string path, FileChange? c1, FileChange? c2, IReadOnlyDictionary<string, (ContentId Left, ContentId Right)>? ids1,
+        IReadOnlyDictionary<string, (ContentId Left, ContentId Right)>? ids2, MergeStore? store, out string? key)
+    {
+        key = null;
+        if (c1 is not { Status: ChangeStatus.Modified, Unreadable: null, BehindLink: false } || c2 is not { Status: ChangeStatus.Modified, Unreadable: null, BehindLink: false }
+            || ids1 is null || ids2 is null || !ids1.TryGetValue(path, out var a) || !ids2.TryGetValue(path, out var b) || ContentId.Same(a.Left, b.Left) != true)
+            return null;
+        if (ContentId.Same(a.Right, b.Right) == true)
+        {
+            MergeSteps.SameHashes();
+            return new(path, c1, c2, Merge3Outcome.Agreed, null, 0, 0, path, null);
+        }
+        if (store is null || MergeStore.Key(a.Left, a.Right, b.Right) is not { } k) return null;
+        if (store.TryGet(k, out var m))
+        {
+            MergeSteps.FromStore();
+            return new(path, c1, c2, m.Outcome, m.ConflictKind, m.ConflictRegions, m.CleanRegions, path, m.Note);
+        }
+        key = k;
+        return null;
     }
 
     /// <summary>Whose file is the merge, whole: 1 when v2 only moved it (byte-identical) and v1 changed it in place, 2 the
@@ -300,9 +338,7 @@ public static class TreeMerger
 
         var form = FormOf(tb, t1, t2, added);
         MergeSteps.Enter(MergeStep.Split);
-        var lb = Split(tb.Content, form.Normalize);
-        var l1 = Split(t1.Content, form.Normalize);
-        var l2 = Split(t2.Content, form.Normalize);
+        var (lb, l1, l2) = ChangePorter.Text.LinesAll(tb, t1, t2, form.Normalize);
         MergeSteps.Merged(lb.Count + l1.Count + l2.Count);
         MergeSteps.Enter(MergeStep.Align); // the diffs inside are the diff's
         var regions = ThreeWayMerger.Regions(lb, l1, l2, ct);
@@ -418,9 +454,7 @@ public static class TreeMerger
         if (!ChangePorter.Text.TryReadAll(added ? [] : File.ReadAllBytes(Full(b, e.Path)), File.ReadAllBytes(Full(v1, e.V1.RelativePath)),
                 File.ReadAllBytes(Full(v2, e.V2.RelativePath)), out var tb, out var t1, out var t2)) return null;
         var form = FormOf(tb, t1, t2, added);
-        var lb = Split(tb.Content, form.Normalize);
-        var l1 = Split(t1.Content, form.Normalize);
-        var l2 = Split(t2.Content, form.Normalize);
+        var (lb, l1, l2) = ChangePorter.Text.LinesAll(tb, t1, t2, form.Normalize);
         var regions = ThreeWayMerger.Regions(lb, l1, l2, ct);
         // Merged though its lines conflict: only keyword stamps collide (--resolve-stamps). Merged on the bare stamps, each
         // unchanged line taken from the side that changed its stamp (v2's where both did), and an agreed region from v2.
@@ -431,7 +465,7 @@ public static class TreeMerger
         // A "mixed" result has no one line ending to convert to: emit each side's own lines as they are (only CRLF was
         // collapsed to compare them, so the line numbers match), the unchanged ones from the side whose style won.
         bool raw = form.Normalize && form.Eol == "mixed";
-        var (ob, o1, o2) = raw ? (Split(tb.Content, false), Split(t1.Content, false), Split(t2.Content, false)) : (lb, l1, l2);
+        var (ob, o1, o2) = raw ? ChangePorter.Text.LinesAll(tb, t1, t2, false) : (lb, l1, l2);
         var gap = form.GapSide switch { 1 when raw => o1, 2 when raw => o2, _ => ob };
 
         var o = new StringBuilder();
@@ -543,9 +577,6 @@ public static class TreeMerger
         }
         return new(side != 0, eol, enc, side, conflict, notes.Count > 0 ? string.Join("; ", notes) : null);
     }
-
-    /// <summary>Lines, each with its ending; <paramref name="normalize"/> reads CRLF as LF (a lone CR stays content).</summary>
-    private static List<string> Split(string text, bool normalize) => ChangePorter.Lines(normalize ? text.Replace("\r\n", "\n") : text, false);
 
     private static bool LooksBinary(byte[] bytes) => TextInspector.LooksBinary(bytes); // read whole: sniffed whole
 

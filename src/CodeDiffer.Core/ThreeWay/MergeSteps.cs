@@ -50,7 +50,7 @@ public sealed class MergeSteps
     private readonly long[] _ticks = new long[Steps];
     private readonly long[] _bytes = new long[Steps];
     private readonly long[] _diffs = new long[Ways];
-    private long _bytesRead, _files, _lines;
+    private long _bytesRead, _files, _lines, _remembered, _same;
 
     /// <summary>Thread time spent in a step.</summary>
     public TimeSpan Time(MergeStep s) => TimeSpan.FromSeconds((double)Interlocked.Read(ref _ticks[(int)s]) / Stopwatch.Frequency);
@@ -63,6 +63,10 @@ public sealed class MergeSteps
     /// <summary>Files merged line by line, and their lines (base and both sides).</summary>
     public long Files => Interlocked.Read(ref _files);
     public long Lines => Interlocked.Read(ref _lines);
+    /// <summary>Files both modified, merged without opening them: as the merge store remembers their three versions
+    /// merging, or agreed because v1 and v2 hold the same.</summary>
+    public long Remembered => Interlocked.Read(ref _remembered);
+    public long SameContent => Interlocked.Read(ref _same);
 
     /// <summary>Starts this thread's tally, in <see cref="MergeStep.Other"/>.</summary>
     internal object Begin()
@@ -87,6 +91,8 @@ public sealed class MergeSteps
         Interlocked.Add(ref _bytesRead, t.BytesRead);
         Interlocked.Add(ref _files, t.Files);
         Interlocked.Add(ref _lines, t.Lines);
+        Interlocked.Add(ref _remembered, t.Remembered);
+        Interlocked.Add(ref _same, t.Same);
     }
 
     /// <summary>Charges the step this thread was in, and moves it to <paramref name="s"/>: the step it was in, to switch
@@ -115,12 +121,22 @@ public sealed class MergeSteps
         if (t_tally is { } t) { t.Files++; t.Lines += lines; }
     }
 
+    internal static void FromStore()
+    {
+        if (t_tally is { } t) t.Remembered++;
+    }
+
+    internal static void SameHashes()
+    {
+        if (t_tally is { } t) t.Same++;
+    }
+
     private sealed class Tally
     {
         public readonly long[] Ticks = new long[Steps];
         public readonly long[] Bytes = new long[Steps];
         public readonly long[] Diffs = new long[Ways];
-        public long BytesRead, Files, Lines;
+        public long BytesRead, Files, Lines, Remembered, Same;
         public MergeStep Step;
         private long _at = Stopwatch.GetTimestamp(), _allocated = GC.GetAllocatedBytesForCurrentThread();
 

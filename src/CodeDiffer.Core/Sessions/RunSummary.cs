@@ -97,6 +97,8 @@ public static class RunSummary
                     sb.AppendLine($"            by step (thread time, allocated): {string.Join(" · ", st.EnumerateObject().Select(q => $"{q.Name} {Clock(Num(q.Value, "seconds"))} {Num(q.Value, "allocatedMB"):N0} MB"))}");
                     var ways = mg.GetProperty("diffs").EnumerateObject().Select(q => $"{q.Value.GetDouble():N0} {Way(q.Name)}");
                     sb.AppendLine($"            {Num(mg, "filesMerged"):N0} files merged line by line ({Num(mg, "linesMerged"):N0} lines, {Num(mg, "readMB"):N0} MB read) · line diffs: {string.Join(" · ", ways)}");
+                    if (mg.TryGetProperty("filesRemembered", out _))
+                        sb.AppendLine($"            not opened: {Num(mg, "filesRemembered"):N0} files' merge remembered · {Num(mg, "filesSameContent"):N0} the same in v1 and v2 by their hashes");
                 }
             }
             if (r.TryGetProperty("save", out var sv))

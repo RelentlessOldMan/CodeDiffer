@@ -225,6 +225,8 @@ internal sealed class RunRecord : IDisposable
                         w.WriteNumber("filesMerged", st.Files);
                         w.WriteNumber("linesMerged", st.Lines);
                         w.WriteNumber("readMB", st.BytesRead >> 20);
+                        w.WriteNumber("filesRemembered", st.Remembered);
+                        w.WriteNumber("filesSameContent", st.SameContent);
                     }
                     w.WriteEndObject();
                 }

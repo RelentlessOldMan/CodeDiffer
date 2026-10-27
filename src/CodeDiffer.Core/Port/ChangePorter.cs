@@ -314,12 +314,10 @@ public static class ChangePorter
         bool normalize = aEol != tEol && tEol is not ("mixed" or "none") && aEol != "none";
         bool converts = !normalize && aEol == tEol && bEol != aEol && bEol is "LF" or "CRLF";
         if (converts) (normalize, outEol) = (true, bEol);
-        var al = Lines(a.Content, normalize);
-        var bl = Lines(b.Content, normalize);
-        var tl = Lines(t.Content, normalize);
+        var (al, bl, tl) = Text.LinesAll(a, b, t, normalize);
 
         var hunks = new List<PortHunk>();
-        var merged = new StringBuilder(t.Content.Length + 256);
+        var merged = new StringBuilder(t.Length + 256);
         int cursor = 0; // base position; lines between regions are identical in all three
         var regions = ThreeWayMerger.Regions(al, bl, tl, ct);
         // --resolve-stamps: lines that collide only in keyword stamps ($Id: … $) are merged on the bare stamps. Between
@@ -466,9 +464,95 @@ public static class ChangePorter
     /// <summary>Decoded text that re-encodes to its exact original bytes (so writing it back is lossless).</summary>
     internal sealed class Text
     {
-        public required string Content { get; init; }
+        private string? _content;
+        // UTF-8 read without decoding it whole: its lines are cut from these bytes ('\n' and '\r' are those bytes alone).
+        private byte[]? _bytes;
+        private int _skip;
+
+        /// <summary>The whole text, decoded when first asked for (a UTF-8 file's lines never need it).</summary>
+        public string Content { get => _content ??= Encoding.GetString(_bytes!, _skip, _bytes!.Length - _skip); init => _content = value; }
         public required Encoding Encoding { get; init; }
         public required string Eol { get; init; }
+
+        /// <summary>About the text's length in chars (its bytes, for UTF-8 not decoded): for sizing a buffer.</summary>
+        public int Length => _content?.Length ?? _bytes!.Length - _skip;
+
+        /// <summary>The lines of <see cref="Lines(string, bool)"/>, each with its ending.</summary>
+        public List<string> Lines(bool normalizeEol) => _bytes is null ? ChangePorter.Lines(Content, normalizeEol) : Cut(_skip, _bytes.Length, normalizeEol, null);
+
+        /// <summary>
+        /// Three versions' lines, as <see cref="Lines(bool)"/> gives each, but where a side's bytes start or end as the base's
+        /// (<paramref name="a"/>) do, those lines are the base's own strings, not decoded again: a side that edits a few
+        /// lines, or appends, costs only the lines it changed.
+        /// </summary>
+        public static (List<string> A, List<string> B, List<string> C) LinesAll(Text a, Text b, Text c, bool normalizeEol)
+        {
+            if (a._bytes is null) return (a.Lines(normalizeEol), b.Lines(normalizeEol), c.Lines(normalizeEol));
+            var ends = new List<int>(a._bytes.AsSpan(a._skip).Count((byte)'\n') + 1);
+            var la = a.Cut(a._skip, a._bytes.Length, normalizeEol, ends);
+            return (la, b.LinesLike(a, la, ends, normalizeEol), c.LinesLike(a, la, ends, normalizeEol));
+        }
+
+        /// <summary>This text's lines, those it shares with <paramref name="o"/>'s first and last bytes taken from
+        /// <paramref name="lo"/> (o's lines, ending at <paramref name="ends"/>).</summary>
+        private List<string> LinesLike(Text o, List<string> lo, List<int> ends, bool normalizeEol)
+        {
+            if (_bytes is null || o._skip != _skip || o.Encoding.CodePage != Encoding.CodePage) return Lines(normalizeEol);
+            byte[] b = _bytes, ob = o._bytes!;
+            // The lines o and this start with alike: each whole in the common prefix, its own '\n' included (a last line
+            // with none may go on here).
+            int prefix = _skip + b.AsSpan(_skip).CommonPrefixLength(ob.AsSpan(_skip));
+            int head = 0;
+            while (head < lo.Count && ends[head] <= prefix && ob[ends[head] - 1] == '\n') head++;
+            int mid = head == 0 ? _skip : ends[head - 1];
+            // The lines they end with alike: each whole in the common suffix, and so is the '\n' before it (here too, it
+            // starts a line). Past the head's lines only.
+            int suffix = CommonSuffix(b.AsSpan(mid), ob.AsSpan(mid));
+            int tail = lo.Count;
+            while (tail > head && tail - 1 > 0 && ends[tail - 2] - 1 >= ob.Length - suffix) tail--;
+            int shift = b.Length - ob.Length;
+            int midEnd = tail < lo.Count ? ends[tail - 1] + shift : b.Length;
+            var lines = new List<string>(head + (lo.Count - tail) + b.AsSpan(mid, midEnd - mid).Count((byte)'\n') + 1);
+            lines.AddRange(lo.GetRange(0, head));
+            lines.AddRange(Cut(mid, midEnd, normalizeEol, null));
+            lines.AddRange(lo.GetRange(tail, lo.Count - tail));
+            return lines;
+        }
+
+        private static int CommonSuffix(ReadOnlySpan<byte> x, ReadOnlySpan<byte> y)
+        {
+            int n = Math.Min(x.Length, y.Length), i = 0;
+            while (i < n && x[x.Length - 1 - i] == y[y.Length - 1 - i]) i++;
+            return i;
+        }
+
+        /// <summary>The lines in bytes [from, to) (from a line start; to the end, or past a '\n'), each decoded on its own;
+        /// <paramref name="ends"/> gets where each ends.</summary>
+        private List<string> Cut(int from, int to, bool normalizeEol, List<int>? ends)
+        {
+            var b = _bytes!;
+            var lines = new List<string>(b.AsSpan(from, to - from).Count((byte)'\n') + 1);
+            for (int start = from; start < to;)
+            {
+                int nl = b.AsSpan(start, to - start).IndexOf((byte)'\n');
+                int end = nl < 0 ? to : start + nl + 1;
+                lines.Add(normalizeEol && end - start >= 2 && b[end - 1] == '\n' && b[end - 2] == '\r' ? Lf(start, end - 2) : Encoding.GetString(b, start, end - start));
+                ends?.Add(end);
+                start = end;
+            }
+            return lines;
+        }
+
+        /// <summary>Bytes [start, end) decoded, and '\n' after: a CRLF line read as LF, in one string.</summary>
+        private string Lf(int start, int end)
+        {
+            int n = Encoding.GetCharCount(_bytes!, start, end - start);
+            return string.Create(n + 1, (this, start, end), static (span, s) =>
+            {
+                s.Item1.Encoding.GetChars(s.Item1._bytes.AsSpan(s.start, s.end - s.start), span);
+                span[^1] = '\n';
+            });
+        }
 
         /// <summary>The encoding as a reader would name it: "UTF-8", "UTF-8 with BOM", "UTF-16LE"…</summary>
         public string Kind => Encoding switch
@@ -504,13 +588,18 @@ public static class ChangePorter
             text = null!;
             int skip = enc.GetPreamble().Length;
             // Not UTF-8 (a legacy code page): said without throwing, which cost more than the decode.
-            if (enc is UTF8Encoding && !System.Text.Unicode.Utf8.IsValid(bytes.AsSpan(skip))) return false;
+            if (enc is UTF8Encoding)
+            {
+                if (!System.Text.Unicode.Utf8.IsValid(bytes.AsSpan(skip))) return false;
+                // Valid UTF-8 reads back to its own bytes: kept as bytes, decoded a line at a time when split.
+                text = new Text { Encoding = enc, Eol = EolOf(bytes.AsSpan(skip)), _bytes = bytes, _skip = skip };
+                return true;
+            }
             string s;
             try { s = enc.GetString(bytes, skip, bytes.Length - skip); }
             catch (DecoderFallbackException) { return false; }
             text = new Text { Content = s, Encoding = enc, Eol = EolOf(s) };
-            // Valid UTF-8 (checked above) reads back to its own bytes: only the wider forms are encoded again to see.
-            return enc is UTF8Encoding || text.Encode(s).AsSpan().SequenceEqual(bytes);
+            return text.Encode(s).AsSpan().SequenceEqual(bytes); // the wider forms: encoded again to see
         }
 
         /// <summary>
@@ -570,6 +659,13 @@ public static class ChangePorter
             for (int i = 0; i < s.Length; i++)
                 if (s[i] == '\n') { if (i > 0 && s[i - 1] == '\r') crlf++; else lf++; }
             return crlf > 0 && lf > 0 ? "mixed" : crlf > 0 ? "CRLF" : lf > 0 ? "LF" : "none"; // none: no line break at all
+        }
+
+        /// <summary>The same, of UTF-8 bytes.</summary>
+        private static string EolOf(ReadOnlySpan<byte> s)
+        {
+            int all = s.Count((byte)'\n'), crlf = s.IndexOf("\r\n"u8) < 0 ? 0 : s.Count("\r\n"u8), lf = all - crlf;
+            return crlf > 0 && lf > 0 ? "mixed" : crlf > 0 ? "CRLF" : lf > 0 ? "LF" : "none";
         }
     }
 }

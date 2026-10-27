@@ -130,6 +130,9 @@ public sealed class CompareReport
     public long BytesRead { get; init; }
     /// <summary>Wall time per compare phase, in order (for --timings).</summary>
     public IReadOnlyList<(string Phase, TimeSpan Elapsed)> Timings { get; init; } = [];
+    /// <summary>Both sides' content of the modified pairs whose content the compare knew (from the ledgers, or read
+    /// now), by path: compare3 merges a pair it merged before by these alone (<see cref="ThreeWay.MergeStore"/>). Not saved.</summary>
+    internal IReadOnlyDictionary<string, (Ledger.ContentId Left, Ledger.ContentId Right)>? ContentIds { get; init; }
 
     public CompareReport(IReadOnlyList<FileChange> changes, int leftDroppedDirectories = 0, int rightDroppedDirectories = 0)
     {

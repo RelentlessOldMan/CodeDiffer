@@ -177,6 +177,8 @@ public sealed class DirectoryComparer
         var verdictStore = VerdictStore.Open(_options.CacheBaseDir, _options.MaxClassifyBytes, lookup: trustVerdicts,
             off: _options.Cache == CacheMode.Off);
         long bytesRead = 0;
+        // Both sides' content of each modified pair whose content is known: compare3 merges by it (MergeStore).
+        var contentIds = new System.Collections.Concurrent.ConcurrentDictionary<string, (ContentId Left, ContentId Right)>(StringComparer.Ordinal);
         int retriedAtEnd = 0;
         // Hash an uncached file beside its cached twin: on local trees only, and never when a side is named for a
         // rehash (--rehash-side reads that tree alone, so it can be checked or timed cold without the rest).
@@ -269,7 +271,7 @@ public sealed class DirectoryComparer
             FileChange Resized(FileEntry le, FileEntry re)
             {
                 // A rehash reads what it reads anyway (a size-changed file isn't hashed): nothing to look up, nothing to key.
-                if (verdictStore is null || !trustVerdicts) return Modified(classifier, le, re, null, null, null, ct);
+                if (verdictStore is null || !trustVerdicts) return Modified(classifier, le, re, null, null, null, null, ct);
                 ContentId? Id(FileEntry e, HashCache cache)
                 {
                     if (cache.TryGet(e, out var id, count: false)) return id;
@@ -279,7 +281,7 @@ public sealed class DirectoryComparer
                     Interlocked.Add(ref bytesRead, e.Length);
                     return h.Stable ? new ContentId(h.XxHash128, h.Sha256) : null;
                 }
-                return Modified(classifier, le, re, Id(le, leftCache), Id(re, rightCache), verdictStore, ct);
+                return Modified(classifier, le, re, Id(le, leftCache), Id(re, rightCache), verdictStore, contentIds, ct);
             }
 
             // Same-size pairs: the only place bytes cross the wire. Biggest first so a 1.5 GB header starts
@@ -383,7 +385,7 @@ public sealed class DirectoryComparer
                     ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
                     : readL is not null && readR is not null
                         ? FromBytes(le, readL, re, readR, provenL, idR)
-                        : Modified(classifier, le, re, provenL, idR, verdictStore, ct);
+                        : Modified(classifier, le, re, provenL, idR, verdictStore, contentIds, ct);
                 return (verdict, hasL, hasR);
             }
 
@@ -391,7 +393,11 @@ public sealed class DirectoryComparer
             FileChange FromBytes(FileEntry le, byte[] readL, FileEntry re, byte[] readR, ContentId? idL, ContentId? idR)
             {
                 var reason = classifier.Classify(le.FullPath, readL, re.FullPath, readR, out var noise, ct);
-                if (idL is { } l && idR is { } r) verdictStore?.Record(l, le.RelativePath, r, re.RelativePath, reason, noise);
+                if (idL is { } l && idR is { } r)
+                {
+                    verdictStore?.Record(l, le.RelativePath, r, re.RelativePath, reason, noise);
+                    contentIds[le.RelativePath] = (l, r);
+                }
                 return new FileChange(le.RelativePath, ChangeStatus.Modified, reason, le.Length, re.Length, Noise: noise);
             }
 
@@ -456,6 +462,7 @@ public sealed class DirectoryComparer
             ComparedPairs = sameSize.Count,
             BytesRead = bytesRead,
             Timings = timings,
+            ContentIds = contentIds,
         };
     }
 
@@ -516,13 +523,17 @@ public sealed class DirectoryComparer
     /// <summary>A pair the listing or the ledgers say differs: its verdict from <paramref name="verdicts"/> when both
     /// sides' content is known and was classified before, else from the bytes (and then remembered).</summary>
     private static FileChange Modified(ReasonClassifier classifier, FileEntry le, FileEntry re, ContentId? idL, ContentId? idR,
-        VerdictStore? verdicts, CancellationToken ct)
+        VerdictStore? verdicts, System.Collections.Concurrent.ConcurrentDictionary<string, (ContentId, ContentId)>? ids, CancellationToken ct)
     {
         bool known = verdicts is not null && idL is not null && idR is not null;
+        if (ids is not null && idL is { } l && idR is { } r) ids[le.RelativePath] = (l, r); // not kept if it turns out identical
         if (known && verdicts!.TryGet(idL!.Value, le.RelativePath, idR!.Value, re.RelativePath, out var was, out var wasNoise))
             return new(le.RelativePath, ChangeStatus.Modified, was, le.Length, re.Length, Noise: wasNoise);
         if (classifier.ClassifyResized(le.FullPath, le.Length, re.FullPath, re.Length, out long same, out var noise, ct) is not { } reason)
+        {
+            ids?.TryRemove(le.RelativePath, out _);
             return new(le.RelativePath, ChangeStatus.Identical, null, same, same);
+        }
         if (known) verdicts!.Record(idL!.Value, le.RelativePath, idR!.Value, re.RelativePath, reason, noise);
         return new(le.RelativePath, ChangeStatus.Modified, reason, le.Length, re.Length, Noise: noise);
     }

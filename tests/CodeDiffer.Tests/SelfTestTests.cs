@@ -4,9 +4,9 @@ using System.Text.RegularExpressions;
 
 namespace CodeDiffer.Tests;
 
-/// <summary>The tests that start an MCP server and wait on its replies run one at a time: on one core, the selftest's
-/// children starved the stdio test's server past its 180 s wait.</summary>
-[CollectionDefinition("ServerProcesses")]
+/// <summary>The tests that start an MCP server and wait on its replies run one at a time, and after the rest, alone: on
+/// one core, the selftest's children (and then the other test classes) starved the stdio test's server past its 180 s wait.</summary>
+[CollectionDefinition("ServerProcesses", DisableParallelization = true)]
 public sealed class ServerProcessesCollection;
 
 /// <summary>
