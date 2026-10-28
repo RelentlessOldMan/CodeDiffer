@@ -16,4 +16,10 @@
     <RootNamespace>CodeDiffer.Cli</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Classifying large changed files churns 14 MB strings: the GC compacts them away rather than keep the space
+         (64 workers on 7 MB pairs: peak working set 1,644 MB -> 851 MB, the same CPU). -->
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="7" />
+  </ItemGroup>
+
 </Project>

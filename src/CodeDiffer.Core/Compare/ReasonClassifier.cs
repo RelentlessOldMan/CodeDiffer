@@ -18,12 +18,52 @@ namespace CodeDiffer.Core.Compare;
 /// </summary>
 public sealed class ReasonClassifier
 {
-    private readonly long _maxClassifyBytes, _maxStreamBytes;
+    private readonly long _maxClassifyBytes, _maxStreamBytes, _wholeBudget;
+    private readonly object _gate = new();
+    private long _held;
 
-    public ReasonClassifier(long maxClassifyBytes = 8L * 1024 * 1024, long maxStreamBytes = 64L * 1024 * 1024)
+    /// <param name="wholeBudgetBytes">How many bytes of files read whole may be classified at once, both sides counted
+    /// (a pair larger than it alone). A pair read whole costs some twenty times its size while classified (its text
+    /// decoded, normalized and stripped of each kind of noise in turn): 64 workers on 7 MB pairs held 2.9 GB.</param>
+    public ReasonClassifier(long maxClassifyBytes = 8L * 1024 * 1024, long maxStreamBytes = 64L * 1024 * 1024,
+        long wholeBudgetBytes = 64L * 1024 * 1024)
     {
         _maxClassifyBytes = maxClassifyBytes;
         _maxStreamBytes = maxStreamBytes;
+        _wholeBudget = Math.Max(1, wholeBudgetBytes);
+    }
+
+    /// <summary>The most bytes of files read whole that were being classified at once.</summary>
+    internal long PeakHeld { get; private set; }
+
+    /// <summary>A share of <see cref="_wholeBudget"/> for a pair of <paramref name="bytes"/>, waited for while others hold it.</summary>
+    private Hold Take(long bytes, CancellationToken ct)
+    {
+        bytes = Math.Clamp(bytes, 0, _wholeBudget);
+        lock (_gate)
+        {
+            if (_held > 0 && _held + bytes > _wholeBudget) Sessions.ProcessTally.Stat("classify: waited for memory");
+            while (_held > 0 && _held + bytes > _wholeBudget)
+            {
+                ct.ThrowIfCancellationRequested();
+                Monitor.Wait(_gate, 200);
+            }
+            _held += bytes;
+            if (_held > PeakHeld) PeakHeld = _held;
+        }
+        return new Hold(this, bytes);
+    }
+
+    private readonly struct Hold(ReasonClassifier owner, long bytes) : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (owner._gate)
+            {
+                owner._held -= bytes;
+                Monitor.PulseAll(owner._gate);
+            }
+        }
     }
 
     /// <param name="ct">Checked per 64 KB read when streamed (up to three passes over 64 MB), and before reading.</param>
@@ -38,9 +78,10 @@ public sealed class ReasonClassifier
         noise = ChangeNoise.None;
         // One open per side: a small file is read whole (its head is a prefix of it); a large one only its head.
         bool large = leftLength > _maxClassifyBytes || rightLength > _maxClassifyBytes;
-        var leftBytes = large ? TextInspector.ReadHead(leftPath) : TextInspector.ReadAll(leftPath);
-        var rightBytes = large ? TextInspector.ReadHead(rightPath) : TextInspector.ReadAll(rightPath);
-        return large ? Large(leftPath, leftLength, leftBytes, rightPath, rightLength, rightBytes, ct) : Whole(leftPath, leftBytes, rightPath, rightBytes, out noise);
+        if (large)
+            return Large(leftPath, leftLength, TextInspector.ReadHead(leftPath), rightPath, rightLength, TextInspector.ReadHead(rightPath), ct);
+        using var hold = Take(leftLength + rightLength, ct);
+        return Whole(leftPath, TextInspector.ReadAll(leftPath), rightPath, TextInspector.ReadAll(rightPath), out noise);
     }
 
     /// <summary>
@@ -59,10 +100,11 @@ public sealed class ReasonClassifier
         noise = ChangeNoise.None;
         if (leftLength > _maxClassifyBytes || rightLength > _maxClassifyBytes)
             return SameBytes(leftPath, rightPath, out sameLength, ct) ? null : Classify(leftPath, leftLength, rightPath, rightLength, out noise, ct);
+        using var hold = Take(leftLength + rightLength, ct);
         var leftBytes = TextInspector.ReadAll(leftPath);
         var rightBytes = TextInspector.ReadAll(rightPath);
         sameLength = leftBytes.Length;
-        return leftBytes.AsSpan().SequenceEqual(rightBytes) ? null : Classify(leftPath, leftBytes, rightPath, rightBytes, out noise, ct);
+        return leftBytes.AsSpan().SequenceEqual(rightBytes) ? null : Held(leftPath, leftBytes, rightPath, rightBytes, out noise, ct);
     }
 
     /// <summary>Whether two files hold the same bytes, by their handles' lengths and then their bytes.</summary>
@@ -90,6 +132,17 @@ public sealed class ReasonClassifier
     public ChangeReason Classify(string leftPath, byte[] leftBytes, string rightPath, byte[] rightBytes, out ChangeNoise noise, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        noise = ChangeNoise.None;
+        if (leftBytes.Length > _maxClassifyBytes || rightBytes.Length > _maxClassifyBytes)
+            return Classify(leftPath, leftBytes.Length, rightPath, rightBytes.Length, out noise, ct);
+        using var hold = Take((long)leftBytes.Length + rightBytes.Length, ct);
+        return Whole(leftPath, leftBytes, rightPath, rightBytes, out noise);
+    }
+
+    /// <summary><see cref="Classify(string, byte[], string, byte[], out ChangeNoise, CancellationToken)"/> for bytes
+    /// read under a hold already taken.</summary>
+    private ChangeReason Held(string leftPath, byte[] leftBytes, string rightPath, byte[] rightBytes, out ChangeNoise noise, CancellationToken ct)
+    {
         noise = ChangeNoise.None;
         return leftBytes.Length > _maxClassifyBytes || rightBytes.Length > _maxClassifyBytes
             ? Classify(leftPath, leftBytes.Length, rightPath, rightBytes.Length, out noise, ct)

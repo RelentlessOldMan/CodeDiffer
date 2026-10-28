@@ -19,11 +19,50 @@ public static class NoiseFinder
         // Comments only when both names read them alike (a rename to another language: not taken out).
         var syntax = CommentSyntax.For(leftPath);
         if (syntax != CommentSyntax.For(rightPath)) kinds &= ~ChangeNoise.Comments;
-        if (kinds == ChangeNoise.None || !Same(leftText, rightText, kinds, syntax, rules)) return ChangeNoise.None;
-        if (Same(leftText, rightText, ChangeNoise.None, syntax, rules)) return ChangeNoise.None;
+        if (kinds == ChangeNoise.None) return ChangeNoise.None;
+        var (left, right) = (new Stripper(leftText, syntax), new Stripper(rightText, syntax));
+        var compared = new List<(string A, string B, bool Same)>();
+        bool Same(ChangeNoise take)
+        {
+            var (a, b) = (left.Strip(take), right.Strip(take));
+            foreach (var c in compared)
+                if (ReferenceEquals(c.A, a) && ReferenceEquals(c.B, b)) return c.Same;
+            bool same = TextInspector.SameButWhitespace(a, b, rules);
+            compared.Add((a, b, same));
+            return same;
+        }
+        if (!Same(kinds) || Same(ChangeNoise.None)) return ChangeNoise.None;
         foreach (var set in Sets)
-            if ((set & kinds) == set && Same(leftText, rightText, set, syntax, rules)) return set;
+            if ((set & kinds) == set && Same(set)) return set;
         return kinds; // not reached: the whole set was the same
+    }
+
+    /// <summary>
+    /// <see cref="Strip"/> for one text, each step done once per input: a set whose kinds take nothing out of it (no stamp
+    /// in it, say) comes to a text already stripped, and that text and its comparison are reused, not built again (a
+    /// 7 MB pair cost some 325 MB, each set's texts built anew).
+    /// </summary>
+    private sealed class Stripper(string text, CommentSyntax? syntax)
+    {
+        private string? _comments;
+        private readonly Dictionary<string, string> _stamps = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<string, string> _numbers = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<string, string> _dropped = new(ReferenceEqualityComparer.Instance);
+
+        public string Strip(ChangeNoise take)
+        {
+            var t = text;
+            if (take.HasFlag(ChangeNoise.Comments) && syntax is not null) t = _comments ??= syntax.Strip(text);
+            if (take.HasFlag(ChangeNoise.Stamps)) t = Once(_stamps, t, Stamps);
+            if (take.HasFlag(ChangeNoise.Numbers)) t = Once(_numbers, t, Numbers);
+            return Once(_dropped, t, DropBlankLines);
+        }
+
+        private static string Once(Dictionary<string, string> done, string input, Func<string, string> step)
+        {
+            if (!done.TryGetValue(input, out var output)) done[input] = output = step(input);
+            return output;
+        }
     }
 
     /// <summary>The kinds that can apply to a file: numbers only to a file that isn't code, comments where its language's
@@ -41,9 +80,6 @@ public static class NoiseFinder
     /// <summary>Every non-empty set, smallest first, and in each size the earlier kinds first (the flags are in that order).</summary>
     private static readonly ChangeNoise[] Sets = Enumerable.Range(1, (1 << NoiseTokens.All.Length) - 1)
         .OrderBy(int.PopCount).ThenBy(m => m).Select(m => (ChangeNoise)m).ToArray();
-
-    private static bool Same(string a, string b, ChangeNoise take, CommentSyntax? syntax, StringRules rules)
-        => TextInspector.SameButWhitespace(Strip(a, take, syntax), Strip(b, take, syntax), rules);
 
     /// <summary>A text with <paramref name="take"/> taken out, and its blank lines: comments first (a stamp in one goes
     /// with it), then stamps, then numbers.</summary>

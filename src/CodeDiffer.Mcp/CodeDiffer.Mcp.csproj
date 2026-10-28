@@ -21,4 +21,9 @@
     <RootNamespace>CodeDiffer.Mcp</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- As the CLI: large changed files' strings compacted away, not kept (peak working set 1,644 MB -> 851 MB). -->
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="7" />
+  </ItemGroup>
+
 </Project>

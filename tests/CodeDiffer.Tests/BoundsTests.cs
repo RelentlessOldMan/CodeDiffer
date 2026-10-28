@@ -99,6 +99,35 @@ public sealed class BoundsTests : IDisposable
     }
 
     [Fact]
+    public void PairsReadWhole_AreClassifiedWithinTheMemoryBudget_HoweverManyAtOnce()
+    {
+        // A pair read whole costs some twenty times its size while classified: 64 workers on 7 MB pairs held 2.9 GB.
+        const int pairs = 12;
+        for (int i = 0; i < pairs; i++)
+        {
+            Put($"l{i}.c", Lines(1, 8000, $"f{i}"));
+            Put($"r{i}.c", Lines(1, 8000, $"f{i}").Replace($"f{i} 7000\n", "changed\n"));
+        }
+        long pair = new FileInfo(P("l0.c")).Length + new FileInfo(P("r0.c")).Length;
+        var classifier = new ReasonClassifier(wholeBudgetBytes: 2 * pair + pair / 2); // two pairs at once, not three
+        var reasons = new ChangeReason[pairs];
+        Parallel.For(0, pairs, new ParallelOptions { MaxDegreeOfParallelism = pairs }, i =>
+        {
+            long ll = new FileInfo(P($"l{i}.c")).Length, rl = new FileInfo(P($"r{i}.c")).Length;
+            reasons[i] = i % 2 == 0
+                ? classifier.Classify(P($"l{i}.c"), ll, P($"r{i}.c"), rl)
+                : classifier.ClassifyResized(P($"l{i}.c"), ll, P($"r{i}.c"), rl, out _)!.Value;
+        });
+        Assert.All(reasons, r => Assert.Equal(ChangeReason.Content, r));
+        Assert.InRange(classifier.PeakHeld, pair, 2 * pair + pair / 2);
+
+        // A pair larger than the whole budget is still classified, alone.
+        var tight = new ReasonClassifier(wholeBudgetBytes: 1024);
+        Assert.Equal(ChangeReason.Content, tight.Classify(P("l0.c"), File.ReadAllBytes(P("l0.c")), P("r0.c"), File.ReadAllBytes(P("r0.c"))));
+        Assert.Equal(1024, tight.PeakHeld);
+    }
+
+    [Fact]
     public void ARenameTakenAsDoneByLikeness_SaysSo()
     {
         // A pure rename p.c -> q/p.c; the target has no p.c, and a q/p.c much like it but not it.

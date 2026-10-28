@@ -33,6 +33,7 @@ public sealed class ClassifierPinTests
     [
         (1, "26AF27F50BD8C2B5", "125B4CEE867D6029"),
         (1, "26AF27F50BD8C2B5", "15C33058CC8EF099"), // TextInspector counts what its streams read
+        (1, "26AF27F50BD8C2B5", "074617683BF34643"), // pairs read whole classified within a memory budget, noise's strip steps done once: when and how often, not what
     ];
 
     [Fact]
