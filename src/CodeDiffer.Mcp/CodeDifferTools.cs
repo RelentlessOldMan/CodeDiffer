@@ -28,7 +28,7 @@ public static class CodeDifferTools
         [Description("Left (old/base) directory.")] string left,
         [Description("Right (new) directory.")] string right,
         [Description("Hash cache: on (default), off (byte-compare everything), rehash (re-read and refresh it).")] string cache = "on",
-        [Description("Concurrent file reads (default: 32 if a tree is on a network share, where each file is mostly a wait on the server; else min(cores, 8)). Max 64.")] int threads = 0,
+        [Description("Concurrent file reads (default: 64 if a tree is on a network share, where each file is mostly a wait on the server; else min(cores, 8)). Max 64.")] int threads = 0,
         [Description("Seconds to wait for completion before returning (default 30; 0 = return at once).")] int wait_seconds = 30)
     {
         if (Options(cache, threads, [left, right], out var options) is { } bad) return bad;
@@ -51,7 +51,7 @@ public static class CodeDifferTools
         [Description("First variant directory.")] string v1,
         [Description("Second variant directory.")] string v2,
         [Description("Hash cache: on (default), off, rehash.")] string cache = "on",
-        [Description("Concurrent file reads (default: 32 if a tree is on a network share, where each file is mostly a wait on the server; else min(cores, 8)). Max 64.")] int threads = 0,
+        [Description("Concurrent file reads (default: 64 if a tree is on a network share, where each file is mostly a wait on the server; else min(cores, 8)). Max 64.")] int threads = 0,
         [Description("Seconds to wait for completion before returning (default 30; 0 = return at once).")] int wait_seconds = 30,
         [Description("Merge a file whose colliding lines differ only in keyword stamps ($Id: ... $), each stamp from the side " +
                      "that changed it, v2's where both did (default false: a \"stamps\" conflict).")] bool resolve_stamps = false)

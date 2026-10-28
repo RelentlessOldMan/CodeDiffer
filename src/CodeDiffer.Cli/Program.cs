@@ -1224,7 +1224,7 @@ static void PrintUsage()
                                        [--patch [-U N] [--literal]] [--timings] [--no-save]
                                        [--html [--large] [--include-identical] [--max-diffs N] [--out DIR]]
                                        compare two trees (parallel; default min(cores,8) threads,
-                                       32 when a tree is on a share; --threads N for this run).
+                                       64 when a tree is on a share; --threads N for this run).
                                        Hash cache ON by default: a file whose size, mtime, ChangeTime
                                        and file id match a trusted ledger entry isn't re-read. --no-cache
                                        proves every byte; --rehash re-reads and refreshes it;

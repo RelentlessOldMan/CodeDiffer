@@ -40,8 +40,9 @@ public sealed class CompareOptions
 
     /// <summary>The thread count when a tree is on a share. A file there is mostly a wait on the server (a warm
     /// compare is a stat per file), so threads that overlap the waits are what speed it up, and each costs little:
-    /// a warm compare of ~30k files over a work share took 2:08 at 8 threads, 0:32 at 32.</summary>
-    public const int ShareThreads = 32;
+    /// a warm compare of ~30k files over a work share took 2:08 at 8 threads, 0:32 at 32; a warm compare3 of ~82k
+    /// took 1:03 at 32, 0:52 at 64 and 0:47 at 128 (work, D17). 64 gets most of that, with half the requests in flight on the server that 128 has.</summary>
+    public const int ShareThreads = 64;
 
     /// <summary>The default <see cref="Parallelism"/> for a run over these trees: <see cref="ShareThreads"/> if any is
     /// on a share, else <see cref="LocalThreads"/>.</summary>
