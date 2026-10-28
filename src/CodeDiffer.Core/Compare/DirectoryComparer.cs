@@ -377,6 +377,7 @@ public sealed class DirectoryComparer
                 }
                 else if (hasL != hasR)
                 {
+                    Sessions.ProcessTally.Stat(hasL ? (shared ? "pair read: right, left shared" : "pair read: right, left cached") : "pair read: left, right cached");
                     // One side cached: read only the other side, and compare hashes (SHA-256 when both have it).
                     var (e, cache, known) = hasL ? (re, rightCache, cl) : (le, leftCache, cr);
                     // On local trees beside the cached file: an unchanged file then costs XxHash128, not a SHA-256.
@@ -392,6 +393,7 @@ public sealed class DirectoryComparer
                 else
                 {
                     // Neither usable: read both at once, compare bytes, and keep both hashes for next time.
+                    Sessions.ProcessTally.Stat(hasL ? "pair read: both, ids not comparable" : "pair read: both, neither cached");
                     var r = await PairComparer.CompareAsync(le, re, hashes: true, ct, onChunk, io, keepSmall: true).ConfigureAwait(false);
                     leftCache.Record(le, r.Left!);
                     rightCache.Record(re, r.Right!);

@@ -67,10 +67,21 @@ public static class PairComparer
     public static async Task<PairResult> CompareAsync(FileEntry left, FileEntry right, bool hashes, CancellationToken ct = default, Action<int, int>? onChunk = null,
         IoMeter? meter = null, bool keepSmall = false)
     {
+        try { return await CompareAsync(left, right, hashes, ct, onChunk, meter, keepSmall, plain: false).ConfigureAwait(false); }
+        catch (IOException ex) when (ShareGuard.WindowsCode(ex) == ErrorInvalidParameter)
+        {
+            Sessions.ProcessTally.Stat("read: plain, after error 87 for overlapped");
+            return await CompareAsync(left, right, hashes, ct, onChunk, meter, keepSmall, plain: true).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<PairResult> CompareAsync(FileEntry left, FileEntry right, bool hashes, CancellationToken ct, Action<int, int>? onChunk,
+        IoMeter? meter, bool keepSmall, bool plain)
+    {
         long t0 = IoMeter.Now();
         string pathL = left.FullPath, pathR = right.FullPath;
-        using var lh = Open(pathL);
-        using var rh = Open(pathR);
+        using var lh = Open(pathL, plain);
+        using var rh = Open(pathR, plain);
         long hashedAt = DateTime.UtcNow.Ticks;
         var beforeL = hashes ? FileStat.Of(lh, pathL) : default;
         var beforeR = hashes ? FileStat.Of(rh, pathR) : default;
@@ -138,11 +149,22 @@ public static class PairComparer
     public static async Task<FileHashes> HashAsync(FileEntry file, CancellationToken ct = default, Action<int, int>? onChunk = null,
         IoMeter? meter = null)
     {
+        try { return await HashAsync(file, ct, onChunk, meter, plain: false).ConfigureAwait(false); }
+        catch (IOException ex) when (ShareGuard.WindowsCode(ex) == ErrorInvalidParameter)
+        {
+            Sessions.ProcessTally.Stat("read: plain, after error 87 for overlapped");
+            return await HashAsync(file, ct, onChunk, meter, plain: true).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<FileHashes> HashAsync(FileEntry file, CancellationToken ct, Action<int, int>? onChunk, IoMeter? meter, bool plain)
+    {
         long t0 = IoMeter.Now();
         string path = file.FullPath;
-        using var h = Open(path);
+        using var h = Open(path, plain);
         long hashedAt = DateTime.UtcNow.Ticks;
         var before = FileStat.Of(h, path);
+        long len = RandomAccess.GetLength(h);
         meter?.Opened(t0);
         var hasher = new Hasher();
         var buf = ArrayPool<byte>.Shared.Rent(ChunkBytes);
@@ -151,7 +173,9 @@ public static class PairComparer
             long off = 0;
             int n;
             long tRead = IoMeter.Now();
-            while ((n = await RandomAccess.ReadAsync(h, buf.AsMemory(0, ChunkBytes), off, ct).ConfigureAwait(false)) > 0)
+            // Never asked past the end, as a pair's read isn't: a work share refused an overlapped read of a 167-byte
+            // file asked for 1 MB with Windows error 87, on every try. A file that grew is caught by the after-stat.
+            while (off < len && (n = await RandomAccess.ReadAsync(h, buf.AsMemory(0, (int)Math.Min(ChunkBytes, len - off)), off, ct).ConfigureAwait(false)) > 0)
             {
                 meter?.Read(tRead, n);
                 onChunk?.Invoke(n, n);
@@ -329,9 +353,12 @@ public static class PairComparer
     }
 
     /// <summary>Open for overlapped reads; a server that refuses that for a file (Windows error 87, seen on a share for
-    /// files a plain open reads fine) gets a plain open instead, which reads the same bytes, one call at a time.</summary>
-    private static SafeFileHandle Open(string path)
+    /// files a plain open reads fine) gets a plain open instead, which reads the same bytes, one call at a time.
+    /// <paramref name="plain"/>: a plain open from the start, for a file whose overlapped READ was refused with 87 (seen
+    /// on a work share: the open worked, every read of it failed).</summary>
+    private static SafeFileHandle Open(string path, bool plain = false)
     {
+        if (plain) return File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         try
         {
             return File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
