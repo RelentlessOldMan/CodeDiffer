@@ -718,7 +718,10 @@ Threads (since v1.0.127): `compare`, `compare3`, `apply` and `apply-overlay`, an
 min(cores, 8) otherwise (a drive Windows can't identify counts as a share); `--threads N` (MCP `threads`, up to
 64) sets it for a run. Over a share a file is mostly a
 wait on the server, so more threads overlap more waits: a warm compare of ~30k files over a work share took 2:08
-at 8 threads and 0:32 at 32, the same verdicts. On a local disk more threads only queue.
+at 8 threads and 0:32 at 32, the same verdicts. On a local disk more threads only queue. Since v1.0.140 a run
+starts all its threads at once: each blocks on the server, and the runtime otherwise adds one only about every
+half second past its starting count, so a 20-second phase never reached them (at work, 64 and 128 threads both
+ran about 68 and timed the same).
 
 Net: the agent pays for a summary plus what it opens; the human gets a shareable shell that lazily
 loads; the 1 GB header is touched a few MB at a time and reported as a bounded, honest summary with the

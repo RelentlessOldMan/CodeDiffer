@@ -25,6 +25,17 @@ public sealed class ThreadDefaultTests
     }
 
     [Fact]
+    public void ACompare_LetsThePoolStartItsThreadsAtOnce_AndNeverLowersIt()
+    {
+        DirectoryComparer.EnoughPoolThreads(200);
+        ThreadPool.GetMinThreads(out int raised, out _);
+        Assert.True(raised >= 200 + Environment.ProcessorCount);
+        DirectoryComparer.EnoughPoolThreads(1);
+        ThreadPool.GetMinThreads(out int after, out _);
+        Assert.True(after >= raised); // other tests' compares may raise it meanwhile, never lower
+    }
+
+    [Fact]
     public void APathThatDoesNotParse_CountsAsLocal_AndDoesNotThrow()
         => Assert.Equal(CompareOptions.LocalThreads, CompareOptions.DefaultThreadsFor(Local, "bad\0path"));
 }

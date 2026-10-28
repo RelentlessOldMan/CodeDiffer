@@ -132,6 +132,17 @@ public sealed class DirectoryComparer
 
     public DirectoryComparer(CompareOptions? options = null) => _options = options ?? new CompareOptions();
 
+    /// <summary>Let the pool start <paramref name="parallelism"/> workers at once. A file's live stat and a listing
+    /// block their thread on the server, and past its minimum the pool adds a thread only every half second or so:
+    /// a 20 s phase over a share never reached its threads (work, D16: 64 and 128 threads both ran ~68, and timed the
+    /// same). Only ever raised, never lowered.</summary>
+    internal static void EnoughPoolThreads(int parallelism)
+    {
+        ThreadPool.GetMinThreads(out int workers, out int io);
+        int want = parallelism + Environment.ProcessorCount; // the run's workers, plus room for the rest of the process
+        if (workers < want) ThreadPool.SetMinThreads(want, io);
+    }
+
     /// <param name="progress">Optional live progress, including the differences found so far (see <see cref="CompareProgress"/>).</param>
     /// <param name="sharedLeft">Optional: the left tree shared with another compare of the same left root. The first
     /// compare fills it (listing + content ids proven this run); a later one reuses them instead of re-listing and
@@ -146,6 +157,7 @@ public sealed class DirectoryComparer
         void Phase(string name) { timings.Add((name, timer.Elapsed)); timer.Restart(); }
 
         InputValidation.ValidateTrees(left, right);
+        EnoughPoolThreads(_options.Parallelism);
         Phase("validate");
 
         // Walk both sides at once — two independent trees (often two shares) shouldn't queue behind each other.
