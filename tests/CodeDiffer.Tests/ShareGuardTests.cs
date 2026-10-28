@@ -157,6 +157,28 @@ public sealed class ShareGuardTests : IDisposable
     }
 
     [Fact]
+    public async Task AFailureTheSameEveryTry_IsGivenUpAtOnce_WithoutWaiting()
+    {
+        var opts = Opts();
+        var guard = new ShareGuard([P("L"), P("R")], new CompareOptions
+        {
+            Cache = opts.Cache, CacheBaseDir = opts.CacheBaseDir, CodeCompassBaseDir = opts.CodeCompassBaseDir,
+            RetryDelays = [TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30)],
+        }, progress: null);
+        int tries = 0;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await Assert.ThrowsAsync<IOException>(() => guard.RunAsync<int>(P("R/f020.c"), () =>
+        {
+            tries++;
+            throw new IOException("The parameter is incorrect.", unchecked((int)0x80070057)); // Windows error 87
+        }, CancellationToken.None));
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), clock.Elapsed.ToString());
+        Assert.Equal(1, tries);
+        var cause = Assert.Single(guard.Tally.ByCause());
+        Assert.Equal(("Windows error 87", 1, 0, 1), (cause.Label, cause.Failed, cause.Recovered, cause.GaveUp));
+    }
+
+    [Fact]
     public void AFileLockedForAMoment_IsReadOnARetry()
     {
         var hold = new FileStream(P("R/f020.c"), FileMode.Open, FileAccess.Read, FileShare.None);

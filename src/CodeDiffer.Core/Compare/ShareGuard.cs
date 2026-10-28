@@ -161,8 +161,9 @@ internal sealed class ShareGuard
                     Pause(ex);
                     continue; // a pause doesn't count as a retry: the read starts over once the trees answer
                 }
-                // The trees answer, so it's this file: a vanished one won't come back; a locked one may, shortly.
-                if (ex is FileNotFoundException or DirectoryNotFoundException || retry >= _retryDelays.Count)
+                // The trees answer, so it's this file: a vanished one won't come back, nor one the server refuses the
+                // same way every time; a locked one may, shortly.
+                if (ex is FileNotFoundException or DirectoryNotFoundException || Permanent(ex) || retry >= _retryDelays.Count)
                 {
                     _tally.GaveUp(failed);
                     throw;
@@ -289,4 +290,9 @@ internal sealed class ShareGuard
     internal static string Cause(Exception ex) => WindowsCode(ex) is > 0 and var code ? code.ToString(System.Globalization.CultureInfo.InvariantCulture) : ex.GetType().Name;
 
     internal static int WindowsCode(Exception ex) => (ex.HResult & 0xFFFF0000) == 0x80070000 ? ex.HResult & 0xFFFF : 0;
+
+    /// <summary>A failure that is the same however often it's tried: an invalid parameter (87), name (123) or path
+    /// (161), or a name too long (206). Seen on a work share: two files failing with 87 on every try cost a compare
+    /// ~15 s of waits before retries that never worked.</summary>
+    internal static bool Permanent(Exception ex) => WindowsCode(ex) is 87 or 123 or 161 or 206;
 }

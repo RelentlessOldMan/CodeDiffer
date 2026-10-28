@@ -335,18 +335,20 @@ public sealed class DirectoryComparer
                     }
                 }).GetAwaiter().GetResult();
             // One more try for each pair that couldn't be read, now that the rest is done: a file locked for a
-            // moment, or read while the trees were briefly unreachable, is usually readable by now.
-            for (int i = 0; i < verdicts.Length; i++)
-            {
-                if (verdicts[i].Unreadable is null) continue;
-                var (le, re) = (leftFiles[sameSize[i].L], rightFiles[sameSize[i].R]);
-                try
+            // moment, or read while the trees were briefly unreachable, is usually readable by now. All at once: each
+            // may wait out its retries, and those waits must overlap, not stack.
+            var unreadable = Enumerable.Range(0, verdicts.Length).Where(i => verdicts[i].Unreadable is not null).ToList();
+            Parallel.ForEachAsync(unreadable, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism, CancellationToken = ct },
+                async (i, ct) =>
                 {
-                    verdicts[i] = guard.RunAsync(le.FullPath, () => Pair(le, re, null, ct), ct).GetAwaiter().GetResult().Verdict;
-                    retriedAtEnd++;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { verdicts[i] = Unknown(le, re, ex); }
-            }
+                    var (le, re) = (leftFiles[sameSize[i].L], rightFiles[sameSize[i].R]);
+                    try
+                    {
+                        verdicts[i] = (await guard.RunAsync(le.FullPath, () => Pair(le, re, null, ct), ct).ConfigureAwait(false)).Verdict;
+                        Interlocked.Increment(ref retriedAtEnd);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { verdicts[i] = Unknown(le, re, ex); }
+                }).GetAwaiter().GetResult();
             changes.AddRange(verdicts);
 
             async Task<(FileChange Verdict, bool HasL, bool HasR)> Pair(FileEntry le, FileEntry re, Action<int, int>? onChunk, CancellationToken ct)
