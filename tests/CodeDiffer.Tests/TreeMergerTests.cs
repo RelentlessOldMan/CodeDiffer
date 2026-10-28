@@ -50,6 +50,30 @@ public class TreeMergerTests : IDisposable
     private static Merge3Entry E(ThreeWayReport r, string path) => r.Entries.Single(e => e.Path == path);
 
     [Fact]
+    public void V2IsListed_WhileBaseToV1Runs()
+    {
+        for (int i = 0; i < 5; i++) All3($"f{i}.c", $"file {i}\n");
+        var p2 = new CompareProgress();
+        bool listedEarly = false;
+        // At base->v1's first pair, v2's listing has already been begun beside it: wait for it to finish there.
+        var p1 = new CompareProgress { AfterPairChecked = n => { if (n == 1) listedEarly = SpinWait.SpinUntil(() => p2.ListedRight == 5, 10_000); } };
+        var r = TreeMerger.Run(B, V1, V2, new CompareOptions { Cache = CacheMode.Off }, p1, p2);
+        Assert.True(listedEarly);
+        Assert.Equal(5, p2.ListedRight); // counted once: the second compare used that listing, not one of its own
+        Assert.Equal(0, r.V2Report.UnreadableFiles);
+    }
+
+    [Fact]
+    public void ACancelledBaseToV1_StopsV2sListingToo()
+    {
+        for (int i = 0; i < 5; i++) All3($"f{i}.c", $"file {i}\n");
+        using var stop = new CancellationTokenSource();
+        var p1 = new CompareProgress { AfterPairChecked = n => { if (n == 1) stop.Cancel(); } };
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            TreeMerger.Run(B, V1, V2, new CompareOptions { Cache = CacheMode.Off }, p1, null, stop.Token));
+    }
+
+    [Fact]
     public void EveryOutcome_IsClassified()
     {
         var t = Lines(1, 30);

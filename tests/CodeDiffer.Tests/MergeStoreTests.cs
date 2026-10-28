@@ -216,6 +216,7 @@ public sealed class MergeStoreTests : IDisposable
     private static readonly (int Version, string Source)[] Pins =
     [
         (1, "EAA04C5140E70AFD"),
+        (1, "7ECB19DD12C3DE26"), // v2 listed while base->v1 runs: the same compares, sooner
     ];
 
     [Fact]

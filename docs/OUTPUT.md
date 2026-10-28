@@ -255,7 +255,8 @@ their text, it is skipped and a note says so — those files are listed as added
 
 `start_compare3(base, v1, v2)` (CLI `compare3`): base→v1 then base→v2, sequential, and the second reuses
 the first's base listing and the base hashes it proved (no re-listing, no re-reading, not even a per-file
-stat of the base; both compares judge the same snapshot of it), then every touched path is
+stat of the base; both compares judge the same snapshot of it; since v1.0.145 v2 is listed while base→v1
+runs), then every touched path is
 v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content, stamps (a content conflict whose colliding lines
 differ only in version-control keyword stamps, `$Id: … $`: with the stamps bare it merges cleanly; written with
 markers, a stamp to pick; with `--resolve-stamps`, MCP `resolve_stamps=true`, it is merged instead, each stamp

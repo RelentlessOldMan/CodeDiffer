@@ -151,7 +151,12 @@ public sealed class DirectoryComparer
     /// <param name="ct">Cancels the compare: it throws <see cref="OperationCanceledException"/> promptly (within a chunk
     /// per file in flight), after saving the hashes already read, so a re-run picks up from there.</param>
     public CompareReport Compare(string left, string right, CompareProgress? progress = null, SharedTree? sharedLeft = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default) => Compare(left, right, progress, sharedLeft, ct, rightListing: null);
+
+    /// <param name="rightListing">Optional: the right tree's listing, begun before this compare (compare3 lists v2 while
+    /// base->v1 runs); awaited where this compare would list the right tree itself.</param>
+    internal CompareReport Compare(string left, string right, CompareProgress? progress, SharedTree? sharedLeft,
+        CancellationToken ct, Task<WalkResult>? rightListing)
     {
         var timer = System.Diagnostics.Stopwatch.StartNew();
         var timings = new List<(string, TimeSpan)>();
@@ -169,7 +174,7 @@ public sealed class DirectoryComparer
         var leftFull = Path.GetFullPath(left);
         var reused = sharedLeft?.For(leftFull);
         var leftWalk = reused is not null ? Task.FromResult(reused) : Task.Run(() => walker.WalkAll(left, listedL, ct), ct);
-        var rightWalk = Task.Run(() => walker.WalkAll(right, listedR, ct), ct);
+        var rightWalk = rightListing ?? Task.Run(() => walker.WalkAll(right, listedR, ct), ct);
         var (lw, rw) = (leftWalk.GetAwaiter().GetResult(), rightWalk.GetAwaiter().GetResult());
         if (reused is not null) progress?.Listed(true, lw.Files.Count);
         else sharedLeft?.Begin(leftFull, lw);

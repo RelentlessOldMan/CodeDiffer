@@ -6,6 +6,7 @@ using CodeDiffer.Core.Hashing;
 using CodeDiffer.Core.Ledger;
 using CodeDiffer.Core.Model;
 using CodeDiffer.Core.Port;
+using CodeDiffer.Core.Walk;
 
 namespace CodeDiffer.Core.ThreeWay;
 
@@ -91,7 +92,8 @@ public sealed class ThreeWayReport
 public static class TreeMerger
 {
     /// <param name="progress1">Optional live progress of the base→v1 compare.</param>
-    /// <param name="progress2">Optional live progress of the base→v2 compare (it starts when the first one ends).</param>
+    /// <param name="progress2">Optional live progress of the base→v2 compare (it starts when the first one ends; its
+    /// right side's listing, v2's, while the first one runs).</param>
     /// <param name="ct">Cancels the run (throws <see cref="OperationCanceledException"/>); hashes read so far are kept.</param>
     public static ThreeWayReport Run(string baseDir, string v1Dir, string v2Dir, CompareOptions? options = null,
         CompareProgress? progress1 = null, CompareProgress? progress2 = null, CancellationToken ct = default)
@@ -102,10 +104,23 @@ public static class TreeMerger
         // The second compare reuses the first one's base listing and base hashes: the base is listed and
         // checked once, and both compares see the same snapshot of it.
         var sharedBase = new SharedTree();
-        var r1 = new DirectoryComparer(opt).Compare(baseDir, v1Dir, progress1, sharedBase, ct);
+        // v2 is listed while base->v1 runs: nothing of the first compare needs it, and over a share a listing is
+        // mostly waiting on round-trips (a third of a compare at work), which the two can overlap.
+        using var stopListing = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Action<int>? listed2 = progress2 is null ? null : n => progress2.Listed(false, n);
+        var v2Listing = Task.Run(() => new TreeWalker(opt.IgnoredDirectoryNames, opt.Parallelism).WalkAll(v2Dir, listed2, stopListing.Token),
+            stopListing.Token);
+        CompareReport r1;
+        try { r1 = new DirectoryComparer(opt).Compare(baseDir, v1Dir, progress1, sharedBase, ct); }
+        catch
+        {
+            stopListing.Cancel();
+            try { v2Listing.Wait(); } catch { } // its own failure, if any, is the first compare's to report
+            throw;
+        }
         timings.Add(("compare base->v1", sw.Elapsed));
         sw.Restart();
-        var r2 = new DirectoryComparer(opt).Compare(baseDir, v2Dir, progress2, sharedBase, ct);
+        var r2 = new DirectoryComparer(opt).Compare(baseDir, v2Dir, progress2, sharedBase, ct, v2Listing);
         sharedBase = null!; // the base listing and its hashes: done with, not held through the classify
         timings.Add(("compare base->v2", sw.Elapsed));
         sw.Restart();
