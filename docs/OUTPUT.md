@@ -178,7 +178,7 @@ so it can be shared as is): rewritten every 15 s while the compare runs and once
 its last heartbeat, so it says when it died (within 15 s), in which phase, how far it got and what it was using.
 It holds process memory (working set and its peak, private, .NET heap and its peak, full GCs), CPU time, threads,
 handles, the machine's cores and memory load, and per compare: files listed, same-size pairs and bytes checked,
-bytes read, cache hits, differences found, wall time per phase, mid-run hash saves, and the content phase's worker
+bytes read (since v1.0.142 with what the classifier read for a verdict it had no record of), cache hits, differences found, wall time per phase, mid-run hash saves, and the content phase's worker
 time split into opening files, waiting for bytes (the network, over a share) and comparing+hashing.
 Its CPU time (`cpuSeconds`, since v1.0.125) is the process's cycle count over the processor's rated clock
 (`cpuFrom: cycles`). Windows' own CPU time is sampled at the clock tick, and a compare's threads work in short

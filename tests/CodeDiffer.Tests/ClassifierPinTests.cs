@@ -32,6 +32,7 @@ public sealed class ClassifierPinTests
     private static readonly (int Version, string Answers, string Source)[] Pins =
     [
         (1, "26AF27F50BD8C2B5", "125B4CEE867D6029"),
+        (1, "26AF27F50BD8C2B5", "15C33058CC8EF099"), // TextInspector counts what its streams read
     ];
 
     [Fact]

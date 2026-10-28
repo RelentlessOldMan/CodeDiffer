@@ -69,8 +69,30 @@ internal static class TextInspector
 
     /// <summary>Open for reading without getting in a writer's way: a log being appended to, or a file being deleted,
     /// is still readable (asking for FileShare.Read alone fails on any file open for writing).</summary>
-    public static FileStream OpenShared(string path, int bufferSize = 4096)
-        => new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize, FileOptions.SequentialScan);
+    public static FileStream OpenShared(string path, int bufferSize = 4096) => new Counted(path, bufferSize);
+
+    [ThreadStatic] private static long t_read;
+
+    /// <summary>What the files <see cref="OpenShared"/> opened on this thread had read when they were closed (by their
+    /// position then). A caller takes the difference around a read that runs on one thread start to end: the
+    /// classifier's, which reads files no other count sees.</summary>
+    public static long ReadOnThisThread => t_read;
+
+    private sealed class Counted(string path, int bufferSize)
+        : FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize, FileOptions.SequentialScan)
+    {
+        private bool _counted;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && !_counted)
+            {
+                _counted = true;
+                t_read += Position;
+            }
+            base.Dispose(disposing);
+        }
+    }
 
     /// <summary>The whole file, opened as <see cref="OpenShared"/>.</summary>
     public static byte[] ReadAll(string path)

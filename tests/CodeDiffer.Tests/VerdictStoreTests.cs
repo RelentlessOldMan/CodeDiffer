@@ -71,6 +71,16 @@ public class VerdictStoreTests : IDisposable
     }
 
     [Fact]
+    public void AColdClassify_CountsWhatItRead()
+    {
+        Put("L/grow.c", "int a;\n");  Put("R/grow.c", "int a;\nint b;\n"); // size-changed: classified from both sides whole
+        Put("L/eol.txt", "one\ntwo\n"); Put("R/eol.txt", "one\r\ntwo\r\n");
+        var cold = Run();
+        Assert.Equal(2 * (7 + 14 + 8 + 10), cold.BytesRead);
+        Assert.Equal(0, Run().BytesRead); // warm: the verdicts are remembered, nothing is opened
+    }
+
+    [Fact]
     public void AnEdit_IsClassifiedAnew()
     {
         MakeTrees();
