@@ -4,11 +4,11 @@
 network share — built agent-first so an AI coding agent can diff two trees, see what changed, and port a
 change from one to another without being crushed by the scale or drowned in output.**
 
-> ⚠️ **WIP — not yet real-world tested.** The design is locked ([`DESIGN.txt`](DESIGN.txt)) and the
-> ground-truth contract with [CodeSpawner](https://github.com/RelentlessOldMan/CodeSpawner) is frozen
-> ([`docs/diff-delta-contract.md`](docs/diff-delta-contract.md)). Validated at full scale on CodeSpawner's
-> synthetic `death` corpus over SMB (68,661 files, ~90 GB; the 3-way merge reproduces its conflict oracle
-> exactly), but **not yet on a genuine production tree.**
+> **Tested two ways.** Against ground truth: at full scale on CodeSpawner's synthetic `death` corpus over SMB
+> (68,661 files, ~90 GB; the 3-way merge reproduces its conflict oracle exactly), under the frozen contract with
+> [CodeSpawner](https://github.com/RelentlessOldMan/CodeSpawner) ([`docs/diff-delta-contract.md`](docs/diff-delta-contract.md)).
+> And in real use: 2-way and 3-way compares of a production tree over a network share, first runs and warm ones.
+> Design: [`DESIGN.txt`](DESIGN.txt).
 
 Classic diff tools (`diff -r`, `git diff --no-index`, WinMerge/Meld/Beyond Compare) are built for
 human-scale trees and for humans or shell pipelines. Point one at a dozens-of-GB firmware tree with 1 GB
