@@ -30,7 +30,8 @@ exactly this case.
 - **Change porting is first-class** — diff A→B, dry-run onto C with per-hunk `applied\|fuzzy\|conflict`;
   3-way merge under diff3 conflict semantics.
 
-Full output model: [`docs/OUTPUT.md`](docs/OUTPUT.md).
+How to do each task (2-way and 3-way compares, merges, porting a change, selftest), and how it differs from other
+diff tools: [`docs/GUIDE.md`](docs/GUIDE.md). Full output model: [`docs/OUTPUT.md`](docs/OUTPUT.md).
 
 ## Compare again in minutes, not hours
 

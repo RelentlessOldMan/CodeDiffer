@@ -62,4 +62,5 @@ commands above).
 ## The command line
 
 `bin\CodeDiffer.Cli.exe help` lists the commands: `compare`, `compare3`, `apply`, `apply-overlay`, `diff`,
-`blockdiff`, `report`, `results`, `verify`. Docs: https://github.com/RelentlessOldMan/CodeDiffer
+`blockdiff`, `report`, `results`, `runs`, `selftest`, `verify`. How to do each task:
+https://github.com/RelentlessOldMan/CodeDiffer/blob/main/docs/GUIDE.md. Docs: https://github.com/RelentlessOldMan/CodeDiffer
