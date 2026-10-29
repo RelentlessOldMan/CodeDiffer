@@ -115,7 +115,7 @@ CodeDiffer routes on `deltaKind == "diff"` **and** `_meta.shardSize`, refuses a 
 each page against the catalog (beside the index, by file name only; sha256, `shardIndex`, `count`, first and last
 path), the records ascending across pages with no path twice, and no `<corpus>-delta.shard-*.json` beside the
 index that the catalog leaves out. The pages in order are `modified`, and the digest must reproduce. A missing,
-extra, altered or misplaced page is a hard error, never a partial verify. Fixture: `\\IRISH\TestHole\codediffer-fixtures\sharded-delta`
+extra, altered or misplaced page is a hard error, never a partial verify. Fixture: a sharded delta
 (250 modified in 3 pages of 100; the monolithic delta beside it carries the same `diffTruthSha`).
 
 ## Bookkeeping (manifestVersion 2, CodeSpawner 1.3.2)

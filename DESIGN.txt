@@ -7,7 +7,7 @@ two trees, understand what changed, and port a change from one tree to another w
 crushed by the scale or drowned in output.
 
 This document is the north star and the record of why. Where a decision has a non-obvious "why",
-it is written down, because the reasons matter more than the code. Sister tools in C:\Playground\
+it is written down, because the reasons matter more than the code. Sister tools
 (CodeCompass, CodeCarver, CodeSpawner) share the author, the stack, and several hard-won patterns;
 this file notes where we borrow from them.
 

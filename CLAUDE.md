@@ -25,7 +25,7 @@ full contract is in [`docs/diff-delta-contract.md`](docs/diff-delta-contract.md)
   two exes over one Core; the CLI does not reference the MCP project.
 - `tests/CodeDiffer.Tests` — xUnit, **net10.0** (it references the MCP and CLI projects to test them, like
   CodeCompass.Core.Tests); seed it from the prototype-review regression bugs (see DESIGN.txt).
-- Public-repo conventions live in `C:\Playground\RelentlessOldMan\Project_Instructions\REPO-SETUP.md`.
+- Public-repo conventions live in `Project_Instructions/REPO-SETUP.md` in the RelentlessOldMan profile repo.
 
 ## Resource needs
 - Compares stream and hold only the verdicts: peak working set ~160–380 MB on death.
