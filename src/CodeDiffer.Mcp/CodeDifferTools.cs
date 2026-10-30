@@ -316,6 +316,52 @@ public static class CodeDifferTools
         }
     }
 
+    [McpServerTool(Name = "list_conflicts")]
+    [Description("A merge overlay's conflicts (write_merge's directory): how many are undecided and decided, the undecided " +
+                 "ones grouped by kind, folder and file type, so whole groups can be settled with one resolve_conflicts; with " +
+                 "list=true, the matching conflicts one per line (bounded). Reads only the overlay.")]
+    public static string ListConflicts(
+        [Description("The overlay directory write_merge (or compare3 --merge-out) wrote.")] string overlay_dir,
+        [Description("Only conflicts matching any of these path patterns ('/'-separated; *, ?, **; one without '/' is a file " +
+                     "or folder name at any depth, like *.h or generated; one with '/' is from the top, like src/gen).")] string[]? patterns = null,
+        [Description("Only these conflict kinds (content, add/add, stamps, binary, large, delete/modify, modify/delete, " +
+                     "rename/rename, encoding, line endings, path collision, file/directory clash).")] string[]? kinds = null,
+        [Description("Folder depth to group by (default 1).")] int depth = 1,
+        [Description("Also list the matching conflicts, one per line.")] bool list = false,
+        [Description("Most to list of each, undecided and decided (default 50).")] int max = 50)
+    {
+        try { return OverlayConflicts.Load(overlay_dir).Text(patterns ?? [], kinds ?? [], Math.Max(1, depth), list, Math.Max(1, max)); }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            return $"error: {ex.Message}";
+        }
+    }
+
+    [McpServerTool(Name = "resolve_conflicts")]
+    [Description("Settle a merge overlay's conflicts in bulk before it is applied: every conflict the patterns and kinds pick " +
+                 "is taken from v1, taken from v2 (only if v2's file is still what the overlay saw), or kept as v1's to " +
+                 "regenerate; undo takes choices back. Recorded in the overlay itself (files\\, deletes.txt, decisions.json), " +
+                 "so applying the overlay applies the choices. A conflict already decided is left alone until undone. Dry run " +
+                 "unless write=true. Pick with patterns and/or kinds, or all=true for every conflict.")]
+    public static string ResolveConflicts(
+        [Description("The overlay directory write_merge (or compare3 --merge-out) wrote.")] string overlay_dir,
+        [Description("v1, v2, regenerate (keep v1's file until it is regenerated) or undo.")] string choice,
+        [Description("Path patterns, as list_conflicts takes them.")] string[]? patterns = null,
+        [Description("Conflict kinds, as list_conflicts takes them.")] string[]? kinds = null,
+        [Description("Every conflict (instead of patterns and kinds).")] bool all = false,
+        [Description("Record it (default false: a dry run that says what it would do).")] bool write = false)
+    {
+        patterns ??= [];
+        kinds ??= [];
+        if (all == (patterns.Length > 0 || kinds.Length > 0))
+            return "error: give patterns and/or kinds, or all=true — not both, not neither";
+        try { return ConflictResolver.Text(ConflictResolver.Run(overlay_dir, choice, patterns, kinds, write)); }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            return $"error: {ex.Message}";
+        }
+    }
+
     [McpServerTool(Name = "write_report")]
     [Description("Write a browsable HTML report of a compare (2- or 3-way) into its result directory and return the path to " +
                  "open — for a human. A folder tree with filters; each file's diff loads when expanded (inline or side by side; " +

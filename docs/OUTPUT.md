@@ -326,6 +326,24 @@ once done with nothing failed — after a failure it stays unapplied, so the sam
 cause is fixed; a second finished apply to the same target is refused unless `--again`, since it would
 overwrite conflicts resolved since. On death 1.0.9 the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
 
+**Conflicts settled in bulk (built):** the overlay also holds `conflicts.json`, the conflicts for a program: each
+one's base path, kind, note, its markers file in `files\` and the delete made for it (a rename), where v1 and v2
+have the file, and v2's file's size and time. `codediffer conflicts <overlay-dir> [<pattern>...] [--kind K]
+[--depth N] [--list]` (MCP `list_conflicts`) counts the undecided and decided ones and groups the undecided by kind,
+folder and file type. `codediffer resolve <overlay-dir> v1|v2|regenerate|undo <pattern>... [--kind K] [--all]
+[--write]` (MCP `resolve_conflicts`) settles every conflict a rule picks, in the overlay itself, so `apply-overlay`
+applies it unchanged: `v1` and `regenerate` move a markers file to `set-aside\` and drop a rename's delete, so v1's
+file stays; `v2` does the same, then copies v2's file into `files\` at v2's path (refused if its size or time changed
+since the overlay was written) and lists v1's copy at another path, or one v2 deleted, in `deletes.txt`; `undo` takes
+choices back, exactly. `decisions.json` records each choice, the rule and what it changed. Dry run unless
+`--write`. A pattern is `/`-separated with `*`, `?` and `**`; without a `/` it is a name at any depth, with one it
+is anchored at the top and takes what is under it; a conflict matches by its base path or either side's. A
+conflict already decided is left alone until undone, one the overlay failed to write is refused (write it again),
+and a path collision or file/directory clash can't be taken from v2 (another change lands on its path). An
+overlay that is applied or being applied is refused. While a resolve writes, the overlay holds `RESOLVING.json`
+(what it is doing): `apply-overlay` refuses it, and the next `resolve --write` finishes it first. Exit 1 when a
+conflict the rule picked was refused. An overlay from before v1.0.150 has no `conflicts.json`: write it again.
+
 Full-scale check (2026-10-05, CodeSpawner `death` 1.0.9 base / v1 / v2 on a share, 68,661 base
 files, `--threads 4`, warm hash cache): `compare3` in 3:59 (base→v1 124 s, base→v2 109 s, merge 5 s; 0 bytes
 re-hashed), 1,723 touched paths → 369 v1 only · 162 v2 only · 251 merged · 941 conflict, 11,371 conflict
@@ -688,7 +706,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 | Code | Meaning |
 |---|---|
 | 0 | done: nothing conflicts and nothing is missing |
-| 1 | done, with conflicts (`compare3`, `apply`), a file that failed (`apply-overlay`), a `verify` gate or a `selftest` check failed, or a prune that could not delete everything |
+| 1 | done, with conflicts (`compare3`, `apply`), a file that failed (`apply-overlay`), a conflict refused (`resolve`), a `verify` gate or a `selftest` check failed, or a prune that could not delete everything |
 | 2 | error: a tree or file not found, a refused directory, an unreadable manifest, a failed `--html` / `--merge-out`, a file or directory that could not be read or written where the command can't go on without it (denied, a share lost) |
 | 3 | done but INCOMPLETE: a directory could not be listed or a file could not be read (the warnings say which), or a report written with a diff it could not read or render (listed with why); or a compare stopped because the trees stopped answering for longer than `--share-wait` (what it read is cached: run it again) |
 | 64 | usage: a missing argument, an unknown option, a flag without its value |

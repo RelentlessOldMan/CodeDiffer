@@ -29,6 +29,9 @@ files over 1 GB, locally or on a network share, and every answer is bounded so t
 - **export_changeset**: the whole patch to a file. **apply_changeset**: port the changes onto a third tree
   by 3-way merge (dry run unless write=true).
 - **write_merge**: a 3-way compare's merge as an overlay on v1. **write_report**: the HTML report, for a human.
+- **list_conflicts** / **resolve_conflicts**: an overlay's conflicts grouped by kind, folder and file type; then
+  settle a whole group at once (take v1, take v2, regenerate, undo) before the overlay is applied. Dry run unless
+  write=true. Choosing for the user's code is the user's call: propose the groups and choices, and ask before writing.
 - **list_compares**: saved compares (any id reopens without re-comparing). **cancel_compare**: stop one.
 - **get_run_telemetry**: how recent compares ran, numbers only (safe to share): how each ended, including a run
   killed outright, peak memory, time per phase, and network vs work. A killed or stopped compare resumes by

@@ -23,6 +23,8 @@ public sealed class OverlayDirTakenException(string dir)
 ///   surrogate written <c>\uXXXX</c>).</item>
 /// <item><c>conflicts.txt</c> — the conflicts: those in <c>files\</c> with markers, and those that can't be written
 ///   as one file (binary, large, modify/delete, rename/rename, path collision, encoding, line endings) with each side's file to choose from.</item>
+/// <item><c>conflicts.json</c> — the same conflicts for <see cref="ConflictResolver"/>, which records choices made in
+///   bulk (take v1, take v2, regenerate) by editing <c>files\</c> and <c>deletes.txt</c>.</item>
 /// <item><c>OVERLAY.txt</c> — what this is and how to apply it.</item>
 /// </list>
 /// Applying it: delete the paths in <c>deletes.txt</c> from v1, remove the directories that left empty, then copy
@@ -192,6 +194,10 @@ public static class MergeOverlay
             c.Append($"    v2: {Side(e.V2, v2, e.Path)}\n");
         }
         File.WriteAllText(Path.Combine(dir, "conflicts.txt"), c.ToString(), new UTF8Encoding(false));
+        var failedSet = failed.Select(f => f.E).ToHashSet(ReferenceEqualityComparer.Instance);
+        OverlayConflicts.Write(dir, baseDir, v1, v2,
+            markers.Select(w => Recorded(w.E, v1, v2, w.Dest, w.AlsoDelete, false))
+                .Concat(unresolved.Select(u => Recorded(u.E, v1, v2, null, null, failedSet.Contains(u.E)))));
 
         var result = new OverlayResult(dir, done.Count(w => w.Kind == Kind.FromV2), done.Count(w => w.Kind == Kind.Merged),
             markers.Count, done.Count(w => w.Kind == Kind.Moved), deletes.Count, unresolved.Count, bytes, failed.Count, r.DroppedDirectories);
@@ -209,6 +215,9 @@ public static class MergeOverlay
             Or let CodeDiffer do all three (dry run first; safe to stop and run again):
               codediffer apply-overlay "{dir}" <v1 or a copy of it> --write
             Paths only v1 changed need nothing (v1 already has them).
+            To settle conflicts in bulk first (take v1, take v2 or regenerate, by folder, pattern or kind):
+              codediffer conflicts "{dir}"
+              codediffer resolve "{dir}" v1|v2|regenerate <pattern>... [--kind K] --write
 
               files\       {result.FromV2:N0} from v2 (only v2 changed them) · {result.Merged:N0} merged cleanly · {result.Markers:N0} with conflict markers · {result.Moved:N0} moved by v2's rename ({Bytes(bytes)})
               deletes.txt  {result.Deletes:N0} path(s)
@@ -242,6 +251,26 @@ public static class MergeOverlay
     {
         if (c is null) return File.Exists(Full(root, basePath)) ? $"{Full(root, basePath)} (unchanged)" : "(not present)";
         return c.Status == ChangeStatus.Removed ? "(deleted)" : Full(root, c.RelativePath);
+    }
+
+    /// <summary>A conflict as conflicts.json records it: where each side has the file, and v2's size and time, so a later
+    /// "take v2" copies only the file the compare saw.</summary>
+    private static OverlayConflict Recorded(Merge3Entry e, string v1, string v2, string? markers, string? alsoDelete, bool failed)
+    {
+        string? inV1 = e.V1 is null ? e.Path : e.V1.Status == ChangeStatus.Removed ? null : e.V1.RelativePath;
+        string? inV2 = e.V2 is null ? e.Path : e.V2.Status == ChangeStatus.Removed ? null : e.V2.RelativePath;
+        long size = -1, ticks = 0;
+        if (inV2 is not null)
+            try
+            {
+                var fi = new FileInfo(Full(v2, inV2));
+                if (!fi.Exists) inV2 = null; // untouched by v2, and not in it (another change's path)
+                else (size, ticks) = (fi.Length, fi.LastWriteTimeUtc.Ticks);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } // size -1: never taken
+        if (inV1 is not null && e.V1 is null && !File.Exists(Full(v1, inV1))) inV1 = null;
+        return new OverlayConflict(e.Path, failed ? "not written" : e.ConflictKind ?? "conflict", e.Note, markers, alsoDelete,
+            inV1, inV2, size, ticks, failed);
     }
 
     private static string Bytes(long b) => AgentViews.Bytes(b);

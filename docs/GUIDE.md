@@ -14,6 +14,7 @@ Nothing here writes inside a compared tree unless you say `--write`. Results are
 - [Make the HTML report](#make-the-html-report)
 - [Compare three trees (base, v1, v2)](#compare-three-trees-base-v1-v2)
 - [Write the 3-way merge and apply it](#write-the-3-way-merge-and-apply-it)
+- [Settle conflicts in bulk before applying](#settle-conflicts-in-bulk-before-applying)
 - [Port a change onto another tree](#port-a-change-onto-another-tree)
 - [Compare again later (the hash cache)](#compare-again-later-the-hash-cache)
 - [Compare over a network share](#compare-over-a-network-share)
@@ -132,6 +133,59 @@ codediffer apply-overlay D:\merge D:\work\team-a-copy --write
 `apply-overlay` does those steps in order. It's a dry run unless `--write`, and it's safe to stop and run again. Apply it
 to a copy of v1, or to v1 itself if that's what you mean to change. From an agent: `write_merge`.
 
+To settle whole groups of conflicts first, see the next section.
+
+## Settle conflicts in bulk before applying
+
+On a big tree there can be thousands of conflicts, and most come in groups with one answer: take v2 for everything
+under `generated/`, keep v1 for the deletes in `tests/`, regenerate the register headers. Settle those groups first,
+then open only what's left.
+
+```powershell
+codediffer conflicts D:\merge                                  # what's undecided, grouped
+codediffer resolve D:\merge v2 --kind delete/modify,content    # dry run: says what it would do
+codediffer resolve D:\merge v2 --kind delete/modify,content --write
+codediffer conflicts D:\merge --list
+```
+
+```
+3 conflict(s) in D:\merge · 3 undecided · 0 decided
+undecided, by kind:
+  add/add (markers in files\)        1
+  content (markers in files\)        1
+  delete/modify                      1
+undecided, by folder (depth 1; --depth N for more):
+  src/        3
+undecided, by file type:
+  .py        3
+settle a group: codediffer resolve "D:\merge" v1|v2|regenerate <pattern>... [--kind K]   (dry run; --write records it)
+```
+
+```
+RESOLVED · take v2 · rule --kind "delete/modify,content" · overlay D:\merge
+2 conflict(s) decided
+  v2           src/old_api.py  (v2's src/old_api.py copied in)
+  v2           src/shipping.py  (markers set aside · v2's src/shipping.py copied in)
+1 conflict(s) left undecided
+apply-overlay now applies these choices (codediffer conflicts lists what is left)
+```
+
+- The choices are `v1` (keep v1's file), `v2` (take v2's file, or its delete), `regenerate` (keep v1's file for now,
+  and list it as one to regenerate, for machine-generated files where the right merge is neither side), and `undo`.
+- Pick conflicts by pattern, by kind (`--kind`), or both; `--all` picks every one. A pattern without a `/` is a name
+  at any depth (`*.h`, `generated`); one with a `/` starts at the top and takes everything under it (`src/gen`,
+  `src/**/regs_*.h`).
+- The choice is written into the overlay itself: a markers file moves to `set-aside\`, v2's file is copied into
+  `files\`, and `deletes.txt` gains or loses the paths that go with it. `apply-overlay` then applies it as usual, and
+  `decisions.json` records each choice and the rule that made it.
+- `v2` copies v2's file only if it's still the one the overlay saw (same size and time); a changed one is refused.
+  A path collision can't be taken from v2 this way, since another change lands on the same path.
+- A conflict already decided is left alone until you `undo` it. `undo` puts the overlay back the way it was written.
+- An overlay that has been applied is refused: a choice made after that wouldn't reach the tree.
+
+What's left after that are the text conflicts with markers, to edit in `files\`, and any others to decide by hand.
+From an agent: `list_conflicts` and `resolve_conflicts`.
+
 ## Port a change onto another tree
 
 The change from `left` to `right` (a fix on one branch, say) applied to a third tree by 3-way merge:
@@ -217,7 +271,7 @@ trees of ~100 GB with single files over a gigabyte, often on a network share, an
 | Why a file changed | that it changed (flags can ignore whitespace) | the patch; `--stat` counts lines | highlights; some mark minor differences | a reason on every change: content, whitespace, line endings, encoding, binary, plus noise (stamps, numbers, comments) |
 | A 1 GB file | a line diff of the whole file | a line diff, or "binary" | loads it, or calls it binary | content-defined blocks, reported as changed byte ranges |
 | Renames | no | yes, by similarity | varies | yes, by similarity, followed through 3-way merges and apply |
-| 3-way | no (`diff3` is per file) | no | some do, mostly per file | whole trees: v1 only, v2 only, agreed, merged, conflict, plus a merge overlay to apply |
+| 3-way | no (`diff3` is per file) | no | some do, mostly per file | whole trees: v1 only, v2 only, agreed, merged, conflict, plus a merge overlay to apply, with conflicts settled in bulk by folder, pattern or kind |
 | Port a change to a third tree | `patch`, hunk by hunk | `git apply` | manual | `apply`: 3-way merge per hunk, dry run first |
 | A share that stops answering | the run fails | the run fails | the run fails or stalls | it pauses and carries on; what it read is cached |
 | Checking itself | — | — | — | `selftest` on your own trees; `verify` against CodeSpawner's ground truth |

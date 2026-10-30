@@ -8,7 +8,7 @@ namespace CodeDiffer.Core.ThreeWay;
 /// <summary>What <see cref="OverlayApplier.Run"/> did (or, on a dry run, would do).</summary>
 public sealed record OverlayApplyResult(string Overlay, string Target, string? MadeForV1, bool Written, bool Cancelled,
     int Deleted, int AlreadyGone, int Copied, int AlreadyThere, int RemovedDirectories, int NotReached, long Bytes,
-    IReadOnlyList<string> Deletes, IReadOnlyList<(string Path, string Why)> Failed);
+    IReadOnlyList<string> Deletes, IReadOnlyList<(string Path, string Why)> Failed, int? Undecided = null);
 
 /// <summary>
 /// Applies a merge overlay (<see cref="MergeOverlay"/>) to a tree — v1, or better a copy of it — the documented way:
@@ -40,6 +40,8 @@ public static class OverlayApplier
             throw new ArgumentException($"{overlay} is not a merge overlay (no OVERLAY.txt, deletes.txt and files\\)");
         if (File.Exists(Path.Combine(overlay, "INCOMPLETE.txt")))
             throw new ArgumentException($"{overlay} was not finished (INCOMPLETE.txt): write the overlay again, don't apply this one");
+        if (File.Exists(Path.Combine(overlay, OverlayConflicts.ResolvingName)))
+            throw new ArgumentException($"a resolve of {overlay} was stopped part way ({OverlayConflicts.ResolvingName}): run codediffer resolve with --write to finish it first");
         // Written from a compare that couldn't list a directory (CodeDiffer 1.0.36 and before still wrote one): its
         // deletes may be listing failures.
         if (File.ReadAllText(Path.Combine(overlay, "OVERLAY.txt")).Contains("INCOMPLETE COMPARE", StringComparison.Ordinal))
@@ -194,8 +196,12 @@ public static class OverlayApplier
                 $"applied {DateTime.Now:yyyy-MM-dd HH:mm:ss} to\n{target}\n  {deleted:N0} deleted · {copied:N0} written\n");
             File.Delete(applying);
         }
+        int? undecided = null;
+        if (File.Exists(Path.Combine(overlay, OverlayConflicts.FileName)))
+            try { undecided = OverlayConflicts.Load(overlay).Undecided.Count(); }
+            catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or ArgumentException) { }
         return new OverlayApplyResult(overlay, target, madeFor, write, cancelled, deleted, gone, copied, there, removedDirs, notReached, bytes,
-            hits, fails);
+            hits, fails, undecided);
     }
 
     /// <summary>The v1 the overlay was written for (its OVERLAY.txt "v1" line), or null.</summary>
@@ -232,8 +238,12 @@ public static class OverlayApplier
             foreach (var d in r.Deletes.Take(maxList)) o.Append($"  {d}\n");
             if (r.Deletes.Count > maxList) o.Append($"  ... {r.Deletes.Count - maxList:N0} more (deletes.txt)\n");
         }
-        o.Append(r.Written ? "conflicts not merged keep the target's version: see conflicts.txt in the overlay\n"
-                           : "nothing was changed — run again with --write to apply it\n");
+        if (r.Undecided is > 0)
+            o.Append($"{r.Undecided:N0} conflict(s) not decided: {(r.Written ? "they keep" : "they would keep")} the target's version, or their " +
+                     "markers (codediffer conflicts lists them; codediffer resolve settles them in bulk)\n");
+        else if (r.Undecided is null && r.Written)
+            o.Append("conflicts not merged keep the target's version: see conflicts.txt in the overlay\n");
+        if (!r.Written) o.Append("nothing was changed — run again with --write to apply it\n");
         return o.ToString();
     }
 

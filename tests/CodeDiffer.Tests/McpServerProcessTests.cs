@@ -5,7 +5,7 @@ using System.Text.Json;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// CodeDiffer.Mcp.exe end to end over stdio, as an agent host starts it: the initialize handshake, tools/list (the 13
+/// CodeDiffer.Mcp.exe end to end over stdio, as an agent host starts it: the initialize handshake, tools/list (the 15
 /// tools, no CancellationToken leaking into a schema) and a real tools/call of a compare.
 /// </summary>
 [Collection("ServerProcesses")]
@@ -18,7 +18,7 @@ public sealed class McpServerProcessTests : IDisposable
     private static readonly string[] ToolNames =
     [
         "start_compare", "start_compare3", "get_summary", "list_files", "get_file_diff", "get_stats", "export_changeset",
-        "apply_changeset", "list_compares", "get_run_telemetry", "cancel_compare", "write_merge", "write_report",
+        "apply_changeset", "list_compares", "get_run_telemetry", "cancel_compare", "write_merge", "write_report", "list_conflicts", "resolve_conflicts",
     ];
 
     [Fact]

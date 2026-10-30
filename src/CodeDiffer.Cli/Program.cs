@@ -59,6 +59,10 @@ static int Dispatch(string[] args)
             return Apply(args);
         case "apply-overlay":
             return ApplyOverlay(args);
+        case "conflicts":
+            return Conflicts(args);
+        case "resolve":
+            return Resolve(args);
         case "compare3":
             return Compare3(args);
         case "verify":
@@ -990,6 +994,93 @@ static int ApplyOverlay(string[] args)
     return r.Cancelled ? 130 : r.Failed.Count > 0 ? 1 : 0;
 }
 
+/// <summary>conflicts: an overlay's conflicts, grouped (undecided ones by kind, folder and file type), or listed.</summary>
+static int Conflicts(string[] args)
+{
+    const string usage = "usage: codediffer conflicts <overlay-dir> [<pattern>...] [--kind K[,K]] [--depth N] [--list [--max N]]";
+    if (!RuleArgs(args, usage, ["--list"], ["--kind", "--depth", "--max"], out var positional, out var kinds)) return 64;
+    if (positional.Count < 1) { Console.Error.WriteLine(usage); return 64; }
+    int depth = 1, max = 50;
+    if (FlagValue(args, "--depth", from: 1) is { } d && (!int.TryParse(d, out depth) || depth < 1)
+        || FlagValue(args, "--max", from: 1) is { } m && (!int.TryParse(m, out max) || max < 1))
+    {
+        Console.Error.WriteLine("error: --depth and --max need a positive integer");
+        return 64;
+    }
+    try
+    {
+        Console.Write(OverlayConflicts.Load(positional[0]).Text(positional.Skip(1).ToList(), kinds, depth, args.Contains("--list"), max));
+        return 0;
+    }
+    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 2;
+    }
+}
+
+/// <summary>resolve: settle the conflicts a rule picks (v1, v2, regenerate, or undo a choice). Dry run unless --write.</summary>
+static int Resolve(string[] args)
+{
+    const string usage = "usage: codediffer resolve <overlay-dir> v1|v2|regenerate|undo <pattern>... [--kind K[,K]] [--all] [--write]";
+    if (!RuleArgs(args, usage, ["--all", "--write"], ["--kind"], out var positional, out var kinds)) return 64;
+    if (positional.Count < 2 || !ConflictResolver.Choices.Contains(positional[1])) { Console.Error.WriteLine(usage); return 64; }
+    var patterns = positional.Skip(2).ToList();
+    if (patterns.Count == 0 && kinds.Count == 0 && !args.Contains("--all"))
+    {
+        Console.Error.WriteLine("error: give the pattern(s) or --kind of the conflicts to settle, or --all for every one");
+        return 64;
+    }
+    if (args.Contains("--all") && (patterns.Count > 0 || kinds.Count > 0))
+    {
+        Console.Error.WriteLine("error: --all can't go with patterns or --kind");
+        return 64;
+    }
+    try
+    {
+        var r = ConflictResolver.Run(positional[0], positional[1], patterns, kinds, args.Contains("--write"));
+        Console.Write(ConflictResolver.Text(r));
+        return r.Refused.Count > 0 ? 1 : 0;
+    }
+    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 2;
+    }
+}
+
+/// <summary>The arguments of conflicts and resolve: any number of positionals (the overlay, a choice, patterns) among
+/// the switches and valued flags; --kind's values comma-separated, and it may be given more than once.</summary>
+static bool RuleArgs(string[] args, string usage, string[] switches, string[] valued, out List<string> positional, out List<string> kinds)
+{
+    positional = [];
+    kinds = [];
+    for (int i = 1; i < args.Length; i++)
+    {
+        if (switches.Contains(args[i])) continue;
+        if (valued.Contains(args[i]))
+        {
+            if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine($"error: {args[i]} needs a value");
+                Console.Error.WriteLine(usage);
+                return false;
+            }
+            if (args[i] == "--kind") kinds.AddRange(args[i + 1].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
+            i++;
+            continue;
+        }
+        if (args[i].StartsWith("--", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine($"error: unknown argument '{args[i]}'");
+            Console.Error.WriteLine(usage);
+            return false;
+        }
+        positional.Add(args[i]);
+    }
+    return true;
+}
+
 /// <summary>--share-wait MIN: how long a compare waits, paused, for trees that stopped answering (default 30). False
 /// (usage said) for anything but a whole number of minutes, 0 or more.</summary>
 static bool ShareWait(string[] args, int from, out TimeSpan wait)
@@ -1215,7 +1306,7 @@ static void PrintUsage()
 {
     Console.WriteLine(
         """
-        codediffer — large-tree 2-/3-way diff (scaffold)
+        codediffer — large-tree 2-/3-way diff
 
         usage:
           codediffer version                   print version
@@ -1300,6 +1391,18 @@ static void PrintUsage()
                                        failure). Refuses a second finished apply to the same
                                        target unless --again (it would overwrite conflicts
                                        resolved since).
+          codediffer conflicts <overlay-dir> [<pattern>...] [--kind K[,K]] [--depth N]
+                                       [--list [--max N]]
+                                       an overlay's conflicts, the undecided ones grouped by
+                                       kind, folder and file type; --list lists them
+          codediffer resolve <overlay-dir> v1|v2|regenerate|undo <pattern>... [--kind K[,K]]
+                                       [--all] [--write]
+                                       settle the conflicts a rule picks before applying:
+                                       take v1's file, take v2's, or keep v1's to regenerate;
+                                       undo takes a choice back. Patterns: *.h, generated
+                                       (a name at any depth), src/gen/** (from the top).
+                                       Recorded in the overlay (files\, deletes.txt), so
+                                       apply-overlay applies it. Dry run unless --write.
           codediffer blockdiff <a> <b>         content-defined block diff of two large files
                                                (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]

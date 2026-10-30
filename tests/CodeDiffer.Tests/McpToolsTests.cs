@@ -14,7 +14,7 @@ namespace CodeDiffer.Tests;
 public sealed class McpToolsCollection;
 
 /// <summary>
-/// The 13 MCP tools (CodeDifferTools), called in-process as the server calls them: background compares by id, the
+/// The 15 MCP tools (CodeDifferTools), called in-process as the server calls them: background compares by id, the
 /// constant-size summary, paged and filtered listings, capped per-file diffs with the overflow in a file, stats, export,
 /// apply, the merge overlay, the HTML report, saved compares reopened by id, and cancel. A bad input is an answer
 /// ("error: ..."), never an exception. The store saves under the per-run temp results root (ResultsIsolation).
@@ -118,11 +118,11 @@ public sealed class McpToolsTests : IDisposable
     private static readonly string[] ToolNames =
     [
         "start_compare", "start_compare3", "get_summary", "list_files", "get_file_diff", "get_stats", "export_changeset",
-        "apply_changeset", "list_compares", "get_run_telemetry", "cancel_compare", "write_merge", "write_report",
+        "apply_changeset", "list_compares", "get_run_telemetry", "cancel_compare", "write_merge", "write_report", "list_conflicts", "resolve_conflicts",
     ];
 
     [Fact]
-    public void Tools_AreTheThirteen_EachDescribed_EveryParameterToo()
+    public void Tools_AreTheFifteen_EachDescribed_EveryParameterToo()
     {
         Assert.NotNull(typeof(CodeDifferTools).GetCustomAttribute<McpServerToolTypeAttribute>());
         var tools = typeof(CodeDifferTools).GetMethods(BindingFlags.Public | BindingFlags.Static)

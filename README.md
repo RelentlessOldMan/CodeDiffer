@@ -99,7 +99,9 @@ From source: `./build-plugin.ps1` builds `plugin\bin`, then point at `<repo>\plu
 - **`CodeDiffer.Cli.exe`** — `compare <left> <right>` (status + reason per file; `--patch` for a
   `git apply`-able patch), `compare3 <base> <v1> <v2>` (3-way: v1 only · v2 only · agreed · merged ·
   conflict; `--merge-out DIR` writes the merge as an overlay on v1), `apply-overlay <dir> <target> [--write]`
-  (apply that overlay), `apply <left> <right> <target> [--write]` (port a change set onto a third tree), `diff <a> <b>`,
+  (apply that overlay), `conflicts <dir>` / `resolve <dir> v1|v2|regenerate|undo <pattern>... [--write]` (the overlay's
+  conflicts grouped by kind, folder and file type, then settled a group at a time before applying),
+  `apply <left> <right> <target> [--write]` (port a change set onto a third tree), `diff <a> <b>`,
   `blockdiff`, `verify`, `report <id>` (HTML report of a saved compare; or `--html` on `compare`/`compare3`),
   `results` (saved compares; `--prune` deletes all but the newest N, a dry run unless `--yes`), `selftest <left> <right> [<v2>]`
   (every feature run on trees you name, each result checked against the files or another way of getting it, and an
@@ -111,6 +113,8 @@ From source: `./build-plugin.ps1` builds `plugin\bin`, then point at `<repo>\plu
   file), `get_stats`, `export_changeset` (whole patch to a file), `apply_changeset` (port the changes onto a
   third tree by 3-way merge; dry run unless `write=true`), `write_report` (the HTML report, for a human), `write_merge` (a compare3's merge as an overlay on v1:
   the changed files, text conflicts with diff3 markers, a deletes list; CLI `compare3 --merge-out DIR`),
+  `list_conflicts` / `resolve_conflicts` (an overlay's conflicts grouped, then settled in bulk: take v1, take v2,
+  regenerate, undo; dry run unless `write=true`),
   `list_compares` (saved compares; any id reopens without re-comparing), `get_run_telemetry` (how recent
   compares ran, numbers only: how each ended, memory, time per phase, network vs work), `cancel_compare` (stop a running
   compare; the hashes it read are kept, so starting it again only reads the rest; Ctrl+C in the CLI).
