@@ -12,7 +12,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 10, tier 1: prune never deletes through a link; the results, overlay and report gates see a tree by
+/// Code review pass 10, tier 1: prune never deletes through a link; the results, overlay and report gates see a tree by
 /// any of its names; a saved path that could reach outside its tree is a corrupt result; verify checks shas and sizes
 /// against the trees, each 3-way region against the trees, and that compare3's merged files are in the manifest; a
 /// UTF-8 BOM excuses no NUL; a path UTF-8 can't spell is left out of a patch.

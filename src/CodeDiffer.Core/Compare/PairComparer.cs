@@ -173,7 +173,7 @@ public static class PairComparer
             long off = 0;
             int n;
             long tRead = IoMeter.Now();
-            // Never asked past the end, as a pair's read isn't: a work share refused an overlapped read of a 167-byte
+            // Never asked past the end, as a pair's read isn't: an SMB share refused an overlapped read of a 167-byte
             // file asked for 1 MB with Windows error 87, on every try. A file that grew is caught by the after-stat.
             while (off < len && (n = await RandomAccess.ReadAsync(h, buf.AsMemory(0, (int)Math.Min(ChunkBytes, len - off)), off, ct).ConfigureAwait(false)) > 0)
             {
@@ -355,7 +355,7 @@ public static class PairComparer
     /// <summary>Open for overlapped reads; a server that refuses that for a file (Windows error 87, seen on a share for
     /// files a plain open reads fine) gets a plain open instead, which reads the same bytes, one call at a time.
     /// <paramref name="plain"/>: a plain open from the start, for a file whose overlapped READ was refused with 87 (seen
-    /// on a work share: the open worked, every read of it failed).</summary>
+    /// on an SMB share: the open worked, every read of it failed).</summary>
     private static SafeFileHandle Open(string path, bool plain = false)
     {
         if (plain) return File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);

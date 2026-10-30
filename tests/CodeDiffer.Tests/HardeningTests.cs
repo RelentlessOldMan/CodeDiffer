@@ -11,7 +11,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 8, tier 2: a whitespace reason only for whitespace, a pure rename paired by the best match rather than
+/// Code review pass 8, tier 2: a whitespace reason only for whitespace, a pure rename paired by the best match rather than
 /// list order, a verify gate that checks compare3 itself, and bad input (a malformed manifest, a corrupt saved result)
 /// that is an error, never a crash.
 /// </summary>

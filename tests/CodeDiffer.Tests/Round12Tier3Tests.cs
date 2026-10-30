@@ -9,7 +9,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 12, tier 3: a conflict manifest with a side other than v1/v2 or a section missing is refused; an
+/// Code review pass 12, tier 3: a conflict manifest with a side other than v1/v2 or a section missing is refused; an
 /// overlay directory someone else took is told apart from other refusals (write_merge's default moves on); a directory
 /// that lists exactly what one above it lists is a loop.
 /// </summary>
@@ -32,7 +32,7 @@ public sealed class Round12Tier3Tests : IDisposable
         File.WriteAllBytes(P(rel), new UTF8Encoding(false).GetBytes(text));
     }
 
-    // ---- B6: the conflict manifest's side and sections ----
+    // ---- the conflict manifest's side and sections ----
 
     private static string Manifest(string side, bool withConflicts = true, bool withClean = true)
         => "{ \"_meta\": { \"manifestVersion\": 1, \"deltaKind\": \"conflict-3way\" }" +
@@ -55,7 +55,7 @@ public sealed class Round12Tier3Tests : IDisposable
         Assert.Contains("'mergedClean' must be an array", Assert.Throws<FormatException>(() => ConflictManifestParser.Parse(Manifest("v1", withClean: false))).Message);
     }
 
-    // ---- C4: an overlay directory already taken ----
+    // ---- an overlay directory already taken ----
 
     [Fact]
     public void AnOverlayDirectoryAlreadyTaken_IsItsOwnRefusal()
@@ -70,7 +70,7 @@ public sealed class Round12Tier3Tests : IDisposable
         Assert.Equal(1, MergeOverlay.Write(r, P("B"), P("V1"), P("V2"), P("merge-2")).FromV2);
     }
 
-    // ---- A6: a loop a server followed ----
+    // ---- a loop a server followed ----
 
     private static DirRow Row(string name, long id, bool dir = false) => new(name, dir, false, 1, 0, 0, id);
 

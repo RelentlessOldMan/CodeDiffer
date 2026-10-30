@@ -12,7 +12,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 9, tier 1: a whole patch never deletes or writes through a link, nor carries an incomplete compare,
+/// Code review pass 9, tier 1: a whole patch never deletes or writes through a link, nor carries an incomplete compare,
 /// and leaves case-only path changes to do by hand; device names are skipped; a BOM alone is empty text; verify reads
 /// a rename with edits from its old path and checks a side with no hunks; the port carries the change's re-encoding;
 /// compare3 flags a file where the other side has a directory.

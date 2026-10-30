@@ -12,7 +12,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 11, tier 1: verify refuses a 3-way manifest whose clean merge drops a side's edit, a clean edit of each
+/// Code review pass 11, tier 1: verify refuses a 3-way manifest whose clean merge drops a side's edit, a clean edit of each
 /// side passed off as one conflict, and abutting edits called clean; a replace spanning an unchanged line is not
 /// canonical; identical files moved by the thousand pair in linear time; an output gate sees a tree through a share; a
 /// path is looked up as given before it is trimmed; a file symlink in a target is never acted through.

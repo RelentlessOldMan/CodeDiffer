@@ -12,7 +12,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 10, tier 2: a space between two operator characters is not whitespace; line endings are counted in the
+/// Code review pass 10, tier 2: a space between two operator characters is not whitespace; line endings are counted in the
 /// file's own encoding and an encoding change alongside is said; verify wants canonical hunks, checks whitespace and
 /// run-rule hunks and a rename's reason; a one-sided conflict renders; context is clamped; the port normalizes over a
 /// mixed base and carries the change's conversion to one line-ending style; equally edited renames pair by name.

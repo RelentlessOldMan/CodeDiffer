@@ -10,7 +10,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 8, tier 1: what must never lose data or give a wrong answer — an incomplete compare is never ported or
+/// Code review pass 8, tier 1: what must never lose data or give a wrong answer — an incomplete compare is never ported or
 /// written as an overlay; nothing is written through a link; a path behind a link is unknown, not removed; names that
 /// differ only in case never overwrite each other; an edited rename is never treated as byte-identical; odd names and
 /// timestamps don't end the compare; a ledger that can't be saved doesn't lose the result.

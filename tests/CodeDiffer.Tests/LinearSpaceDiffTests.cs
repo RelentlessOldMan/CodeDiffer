@@ -55,7 +55,7 @@ public class LinearSpaceDiffTests
     [Fact]
     public void LargeRealisticEdit_StaysMinimal_AndNotCoarse()
     {
-        // ~65k lines with ~3% scattered edits ⇒ far past the 3000 exact budget (the death a23_5.c shape).
+        // ~65k lines with ~3% scattered edits ⇒ far past the 3000 exact budget (a large generated C file's shape).
         var rng = new Random(7);
         var a = Enumerable.Range(0, 65_000).Select(i => $"int f{i}(void) {{ return {i % 97}; }}").ToArray();
         var b = a.ToArray();

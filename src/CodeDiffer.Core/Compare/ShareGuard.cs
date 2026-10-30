@@ -292,7 +292,7 @@ internal sealed class ShareGuard
     internal static int WindowsCode(Exception ex) => (ex.HResult & 0xFFFF0000) == 0x80070000 ? ex.HResult & 0xFFFF : 0;
 
     /// <summary>A failure that is the same however often it's tried: an invalid parameter (87), name (123) or path
-    /// (161), or a name too long (206). Seen on a work share: two files failing with 87 on every try cost a compare
+    /// (161), or a name too long (206). Seen on an SMB share: two files failing with 87 on every try cost a compare
     /// ~15 s of waits before retries that never worked.</summary>
     internal static bool Permanent(Exception ex) => WindowsCode(ex) is 87 or 123 or 161 or 206;
 }

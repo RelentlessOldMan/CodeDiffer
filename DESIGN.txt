@@ -22,12 +22,11 @@ in memory, emits one unusable report) or floods the consumer with far more than 
 agent diffing such a tree has a second failure mode: a monolithic result blows its entire context
 window on content it never needed.
 
-The informing artifact is a review of a throwaway prototype (a TS MCP server wrapping Python stdlib
-diff). Its verdict: the SHAPE is right - an agent-callable comparison that emits both machine-readable
-JSON and a shareable HTML report, aimed at porting changes between trees - but the engine is basic,
-has confirmed correctness bugs, doesn't run as built, and won't scale past small trees. CodeDiffer
-keeps the shape and rebuilds everything underneath. The review's confirmed bugs become our first
-regression tests (see "Regression suite").
+CodeDiffer started from a review of a small throwaway prototype (an MCP server wrapping Python's stdlib
+diff). The SHAPE was right - an agent-callable comparison that emits both machine-readable JSON and a
+shareable HTML report, aimed at porting changes between trees - but the engine had correctness bugs and
+wouldn't scale past small trees. CodeDiffer keeps the shape and rebuilds everything underneath; the
+prototype's bugs became the first regression tests (see "Regression suite").
 
 
 Goals
@@ -63,14 +62,14 @@ Non-goals (v1)
 Locked decisions
 ----------------
 
-- Stack: .NET / C#. Reasons mirror the family - first-party MCP SDK, self-contained native Windows
+- Stack: .NET / C#, like the sister tools - first-party MCP SDK, self-contained native Windows
   binaries ("grab it and go"), excellent memory-mapped-file / span / parallel-IO story, and it is the
-  stack the author maintains. Libraries target net8.0 (fleet floor); CLI + MCP target net10.0. Shipped
+  stack the author maintains. Libraries target net8.0 (the oldest SDK still supported); CLI + MCP target net10.0. Shipped
   like CodeCompass: a Claude Code / Codex plugin folder whose bin\ holds both exes on one shared
   self-contained runtime (so both must be net10.0, which the MCP SDK needs).
 - The output is a SESSION, not a document. A compare writes one on-disk RESULT STORE (outside the
   compared trees, timestamped); the agent pages queries against it and the HTML lazily loads from it.
-  Nothing materializes the full diff up front. (Review recommendation (b), made load-bearing.)
+  Nothing materializes the full diff up front.
 - Cost-ordered funnel. Classify every path before reading content; descend only on demand:
     Tier 0  walk + stat (size/mtime off the enumeration - CodeCompass's SMB trick, no per-file stat
             round-trips; walk directories concurrently, bounded) -> per-path status candidate.
@@ -116,7 +115,7 @@ Change porting (the first-class workflow)
 diff A->B yields a CHANGESET (a set of reason-tagged, patch-applicable hunks + rename ops). Applying it
 to C is a dry-run that reports, per hunk: applied | fuzzy (applied at an offset) | conflict (context
 doesn't match). Clean application emits a patch; conflicts surface for a human or a 3-way merge. This is
-the review's strongest direction and the bridge to n-way: a 3-way merge is "apply (B relative to base)
+the bridge to n-way: a 3-way merge is "apply (B relative to base)
 onto C=another variant, report conflicts" under diff3 line-range-overlap semantics.
 
 
@@ -130,7 +129,7 @@ equals it, and independently reproduces `diffTruthSha`. The contract (hunk schem
 rename similarity, 3-way conflict model, run-rule for giant files, the digest) is locked - see
 docs/diff-delta-contract.md.
 
-Regression suite (seeded from the prototype review's confirmed bugs - each is a named test):
+Regression suite (seeded from the prototype's bugs - each is a named test):
 - EOL-only change (LF<->CRLF) must report reason=eol, NOT "modified" with an empty diff.
 - Encoding-only change (UTF-8<->UTF-16 / BOM) must report reason=encoding, decoded text equal.
 - Whitespace-only change collapses under the ignore-whitespace option.
@@ -140,8 +139,11 @@ Regression suite (seeded from the prototype review's confirmed bugs - each is a 
 - Filenames with HTML metacharacters are escaped in the report (no injection).
 - A rename is detected (not reported as delete+add) at/above the similarity threshold; decoys are not.
 
-Big corpora are never committed (.corpus/ is gitignored); the big tier generates/regenerates them via
-the vendored CodeSpawner on demand.
+Later, independent code-review passes each found a set of bugs, ranked in tiers (tier 1 the most severe);
+each is fixed with a test. The RoundN / RoundNTierM test files (and Safety / Hardening / Bounds, pass 8)
+hold them, and each file's summary says what it covers.
+
+Big corpora are never committed (.corpus/ is gitignored); CodeSpawner generates them on demand.
 
 
 CodeCompass interop (standalone-first; optional accelerator; v2 structural)
@@ -167,8 +169,8 @@ structural diff gets a lot.
 Open questions / risks
 ----------------------
 
-- Real throughput of the walk+hash funnel on a genuine ~100 GB tree over SMB is unmeasured - measure
-  early against the death corpus (local and the share), as CodeCompass did in its phase 1.
+- Throughput of the walk+hash funnel on a ~100 GB tree over SMB: measured on CodeSpawner's ~90 GB
+  `death` corpus, local and on a share (docs/OUTPUT.md section 9).
 - Rename detection at scale is O(added x deleted) if naive; bound it with size bucketing + line-hash
   MinHash/Jaccard, and lead with exact-hash renames (free from the Tier 1 hashes).
 - The per-file diff size cap default (and giant-file always-by-reference) trades completeness for

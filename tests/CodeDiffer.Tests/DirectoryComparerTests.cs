@@ -7,7 +7,7 @@ namespace CodeDiffer.Tests;
 
 /// <summary>
 /// End-to-end 2-way compare tests on real temp-dir fixtures. The reason cases double as the regression
-/// suite for the prototype-review bugs: an EOL-only or encoding-only change must NOT read as a content
+/// suite for an early prototype's bugs (see DESIGN.txt): an EOL-only or encoding-only change must NOT read as a content
 /// change (the "modified with an empty diff" bug), and a one-sided binary flip must be caught as binary.
 /// </summary>
 public sealed class DirectoryComparerTests : IDisposable

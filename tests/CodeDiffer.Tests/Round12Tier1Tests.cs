@@ -12,7 +12,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 12, tier 1: a file identity tells volumes apart; a quote after an escaped backslash ends its string; a
+/// Code review pass 12, tier 1: a file identity tells volumes apart; a quote after an escaped backslash ends its string; a
 /// 3-way manifest's widened, split or loose regions fail and a top-of-file insert passes; a hunkless reason carrying
 /// hunks fails, and so does a replace keeping a line it replaces; an overlay deletes the file named, not a lookalike; a
 /// corrupt CodeCompass manifest is no cache.
@@ -43,7 +43,7 @@ public sealed class Round12Tier1Tests : IDisposable
     private ConflictCrossCheckResult Check(IReadOnlyList<Conflict> conflicts, IReadOnlyList<CleanMerge> clean)
         => ConflictTreeCrossCheck.Run(P("B"), P("V1"), P("V2"), new ConflictManifest(1, "V1", "V2", conflicts, clean, ConflictTruthSha: null));
 
-    // ---- C1: file identity ----
+    // ---- file identity ----
 
     [Fact]
     public void TheFileInformationStruct_IsTheNativeSize()
@@ -60,7 +60,7 @@ public sealed class Round12Tier1Tests : IDisposable
         Assert.True(RealPath.InsideByIdentity(P("x"), _dir));
     }
 
-    // ---- A1: a quote after an escaped backslash ----
+    // ---- a quote after an escaped backslash ----
 
     [Theory]
     [InlineData("var s = dir + \"\\\\\" + name + \", \" + ext;", "var s = dir + \"\\\\\" + name + \",\" + ext;", ChangeReason.Content)]
@@ -75,7 +75,7 @@ public sealed class Round12Tier1Tests : IDisposable
         Assert.Equal(want, new ReasonClassifier(maxClassifyBytes: 1).Classify(P("w/l.c"), ll, P("w/r.c"), rl));
     }
 
-    // ---- B1 / B4 / B5: the 3-way fallback ----
+    // ---- the 3-way fallback ----
 
     private void Trees(string b, string v1, string v2)
     {
@@ -127,7 +127,7 @@ public sealed class Round12Tier1Tests : IDisposable
         Assert.True(r.Ok, string.Join("; ", r.UnsoundRegions));
     }
 
-    // ---- B2 / B3: 2-way canonical hunks ----
+    // ---- 2-way canonical hunks ----
 
     [Fact]
     public void AnEolRecordCarryingHunks_Fails()
@@ -164,7 +164,7 @@ public sealed class Round12Tier1Tests : IDisposable
         }
     }
 
-    // ---- C2: an overlay delete of a name UTF-8 can't hold ----
+    // ---- an overlay delete of a name UTF-8 can't hold ----
 
     [Fact]
     public void AnOverlayDeletesTheFileNamed_NotOneThatShowsAlike()
@@ -189,7 +189,7 @@ public sealed class Round12Tier1Tests : IDisposable
         Assert.True(File.Exists(P("T/" + lookalike)));
     }
 
-    // ---- A2: a corrupt CodeCompass manifest ----
+    // ---- a corrupt CodeCompass manifest ----
 
     [Fact]
     public void AZeroFilledCodeCompassManifest_IsNoCache()

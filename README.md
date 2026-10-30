@@ -68,9 +68,9 @@ carries on when the share answers again, without listing anything as unreadable 
 longer than `--share-wait` minutes (default 30), it stops, and what it read is cached for the next run. Details: §4 of
 [`docs/OUTPUT.md`](docs/OUTPUT.md).
 
-## Family
+## Sister tools
 
-CodeDiffer is one of a family of local, large-repo tools (shared author, stack, and patterns):
+CodeDiffer is one of a set of local, large-repo tools by the same author:
 
 - **CodeCompass** — fast local code search / nav over huge repos. CodeDiffer borrows its memory-mapped /
   streaming / SMB-aware / block-sidecar patterns, and (v2) its symbol index for structural-diff
@@ -149,9 +149,8 @@ dotnet build CodeDiffer.slnx -c Release
 dotnet test  CodeDiffer.slnx -c Release
 ```
 
-Libraries target **net8.0** (fleet floor); the CLI, the MCP server and the tests (which cover all three)
-target **net10.0** (requires the .NET 10 SDK to build). See [`DESIGN.txt`](DESIGN.txt) for architecture and the regression suite seeded from a
-prototype-diff-tool review.
+Libraries target **net8.0**; the CLI, the MCP server and the tests (which cover all three) target **net10.0**
+(requires the .NET 10 SDK to build). See [`DESIGN.txt`](DESIGN.txt) for the architecture and the regression suite.
 
 ## Contributing
 

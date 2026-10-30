@@ -69,7 +69,7 @@ public sealed class NoInternetTests
     }
 
     /// <summary>Every package that ships, the ones those pull in too: a new one anywhere is looked at before it ships
-    /// (Carver's internet lookups came from a library, not its own code).</summary>
+    /// (a dependency can bring network code in when ours has none).</summary>
     [Fact]
     public void EveryLibraryPulledIn_IsAKnownOne()
     {

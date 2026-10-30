@@ -8,7 +8,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 14, tier 3: a whitespace-only last line without a line ending, added or taken away, is a line (content),
+/// Code review pass 14, tier 3: a whitespace-only last line without a line ending, added or taken away, is a line (content),
 /// whole and streamed, and a whitespace record's hunks keep every line where it is; a 3-way merge of large files can be
 /// stopped; two runs naming a result directory alike never share it.
 /// </summary>
@@ -35,7 +35,7 @@ public sealed class Round14Tier3Tests : IDisposable
         return c.Classify(l, new FileInfo(l).Length, r, new FileInfo(r).Length).ToString().ToLowerInvariant();
     }
 
-    // ---- A7: a blank last line without a line ending ----
+    // ---- a blank last line without a line ending ----
 
     [Theory]
     [InlineData("b.\n", "b.\n ", "content")]          // a line added
@@ -59,7 +59,7 @@ public sealed class Round14Tier3Tests : IDisposable
         Assert.Null(HunkApplier.Problem(["  x"], ["x"], [new Hunk(HunkOp.Replace, 1, 1, 1, 1)], whitespaceOnly: true));
     }
 
-    // ---- A4: a 3-way merge stopped ----
+    // ---- a 3-way merge stopped ----
 
     [Fact]
     public void AThreeWayMerge_CanBeStopped()

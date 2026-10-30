@@ -6,7 +6,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// The code-differ correctness review (2026-10-16): reason labels that under-claimed a change — a cp1252 file's
+/// From a correctness review: reason labels that under-claimed a change — a cp1252 file's
 /// C1 bytes read as Latin-1, quote parity, line continuations, a macro's parameter list — whole and streamed alike.
 /// </summary>
 public sealed class DifferReviewTests : IDisposable
@@ -33,7 +33,7 @@ public sealed class DifferReviewTests : IDisposable
     private string Classify(string left, string right, string ext, bool streamed)
         => Classify(Encoding.UTF8.GetBytes(left), Encoding.UTF8.GetBytes(right), ext, streamed);
 
-    // ---- K1: quote parity, kept past a comment, a raw string's inner quotes and a triple-quoted string's ----
+    // ---- quote parity, kept past a comment, a raw string's inner quotes and a triple-quoted string's ----
 
     [Theory]
     [InlineData(".c", "int w = 3; /* 3\" wide */ printf(\"%d , %d\", a, b);\n", "int w = 3; /* 3\" wide */ printf(\"%d, %d\", a, b);\n", "content")]
@@ -58,7 +58,7 @@ public sealed class DifferReviewTests : IDisposable
             Assert.Equal(expected, Classify(a, b, ext, streamed));
     }
 
-    // ---- K2: a backslash-newline splices two lines into one ----
+    // ---- a backslash-newline splices two lines into one ----
 
     [Theory]
     [InlineData("#define A foo\\\n    bar\n", "#define A foo\\\nbar\n", "content")]       // foo bar → foobar
@@ -107,7 +107,7 @@ public sealed class DifferReviewTests : IDisposable
         }
     }
 
-    // ---- K6: a number ending in an exponent letter takes a following sign into it ----
+    // ---- a number ending in an exponent letter takes a following sign into it ----
 
     [Theory]
     [InlineData("int x = 0xe + 1;\n", "int x = 0xe+1;\n", "content")]       // C: 0xe+1 is one (bad) number
@@ -127,7 +127,7 @@ public sealed class DifferReviewTests : IDisposable
         Assert.Equal(want == "whitespace", TextInspector.SameButWhitespace(left, right));
     }
 
-    // ---- K3: a macro's parameter list, an include's file name ----
+    // ---- a macro's parameter list, an include's file name ----
 
     [Theory]
     [InlineData("#define F(x) x\n", "#define F (x) x\n", "content")]        // function-like turned object-like
@@ -144,7 +144,7 @@ public sealed class DifferReviewTests : IDisposable
             Assert.Equal(expected, Classify(a, b, ".h", streamed));
     }
 
-    // ---- P1: a coarse line diff (past the work cap: one wide replace) says so wherever it is shown ----
+    // ---- a coarse line diff (past the work cap: one wide replace) says so wherever it is shown ----
 
     /// <summary>Two text files of the same 1,000 lines in two random orders: few in common order, so past the line diff's
     /// work cap, one replace over the lot. (Lines only one file has are no work: the diff sets them aside.)</summary>
@@ -174,7 +174,7 @@ public sealed class DifferReviewTests : IDisposable
         Assert.True(files.Single().TryGetProperty("co", out _));
     }
 
-    // ---- P2: apply, where a file and a directory trade places ----
+    // ---- apply, where a file and a directory trade places ----
 
     public static TheoryData<string, string[], string[]> FileAndDirectorySwaps()
     {
@@ -217,7 +217,7 @@ public sealed class DifferReviewTests : IDisposable
             .Where(d => Directory.GetFileSystemEntries(d).Length == 0)); // no emptied directory left behind
     }
 
-    // ---- O3: a saved compare that finished incomplete is listed as incomplete, not as a plain "done" ----
+    // ---- a saved compare that finished incomplete is listed as incomplete, not as a plain "done" ----
 
     [Fact]
     public void AnIncompleteCompare_IsListedIncomplete()
@@ -248,7 +248,7 @@ public sealed class DifferReviewTests : IDisposable
         Assert.Equal(("done", false, "done"), (clean.State, clean.Incomplete, clean.Shown));
     }
 
-    // ---- O4: the modified line's reasons add up to the modified count ----
+    // ---- the modified line's reasons add up to the modified count ----
 
     [Fact]
     public void TheReasonsOnTheModifiedLine_SumToTheModifiedCount()
@@ -277,7 +277,7 @@ public sealed class DifferReviewTests : IDisposable
         }
     }
 
-    // ---- O5: a page past the last is empty and says so ----
+    // ---- a page past the last is empty and says so ----
 
     [Fact]
     public void APagePastTheLast_IsEmptyAndSaysSo_NotTheLastPageAgain()
@@ -304,7 +304,7 @@ public sealed class DifferReviewTests : IDisposable
         Assert.Contains("f2.c", CodeDiffer.Core.Sessions.AgentViews.ListFiles(s, page: 2, pageSize: 2));
     }
 
-    // ---- K4: a legacy file's bytes 0x80–0x9F are cp1252 punctuation, not Latin-1 controls ----
+    // ---- a legacy file's bytes 0x80–0x9F are cp1252 punctuation, not Latin-1 controls ----
 
     [Theory]
     [InlineData(false)]

@@ -78,7 +78,7 @@ internal sealed record TrustTiming(long FirstLookTicks, long SettleTicks)
 /// <c>%LOCALAPPDATA%\CodeDiffer\&lt;rootKey&gt;\</c> (we are its only writer); (2) a CodeCompass ledger for this
 /// root or an ANCESTOR, read-only — but only a v2 one: v1 entries lack ChangeTime and are never trusted.
 ///
-/// Trust is decided when an entry is RECORDED (the same rule as CodeCompass, 2026-10-06); the reader only checks
+/// Trust is decided when an entry is RECORDED (the same rule as CodeCompass); the reader only checks
 /// identity. Timestamps only advance on a ~1–16 ms timer, so a same-size rewrite just after our read can land on
 /// the very same mtime AND ChangeTime — "a sub-second stamp can't be racy" is false. So:
 /// <list type="number">

@@ -177,7 +177,7 @@ public class ProgressTests : IDisposable
         Assert.Null(warm.Remaining(TimeSpan.FromSeconds(2))); // too early
 
         // The tail of a cold run: bytes 99% done, but most FILES (the small ones) still to go — the recent
-        // files-per-second rate decides, not the bytes (death: 58k files, 0.1 GB, 3.5 min).
+        // files-per-second rate decides, not the bytes (e.g. 58k small files, 0.1 GB, 3.5 min).
         var tail = new CompareProgress();
         tail.Paired(1000, 1000, 1000);
         tail.SetPhase(ComparePhase.Contents);

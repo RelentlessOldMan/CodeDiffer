@@ -11,7 +11,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 13, tier 2: a backslash that escapes nothing (a C# verbatim string, PowerShell, batch) never turns a change
+/// Code review pass 13, tier 2: a backslash that escapes nothing (a C# verbatim string, PowerShell, batch) never turns a change
 /// inside a string into whitespace; a capped diff paged by several answers at once, and reports written at once, never
 /// collide; files a case-sensitive tree tells apart by case get their own saved diffs and an ambiguous name is answered.
 /// </summary>
@@ -48,7 +48,7 @@ public sealed class Round13Tier2Tests : IDisposable
         return line[(line.IndexOf(label, StringComparison.Ordinal) + label.Length)..];
     }
 
-    // ---- A2: a backslash that escapes nothing ----
+    // ---- a backslash that escapes nothing ----
 
     [Theory]
     [InlineData("var p = @\"C:\\temp\\\"; Log(\"a, b\");\n", "var p = @\"C:\\temp\\\"; Log(\"a,b\");\n", "content")]   // C# verbatim
@@ -73,7 +73,7 @@ public sealed class Round13Tier2Tests : IDisposable
         Assert.NotNull(HunkApplier.Problem(a, b, [new Hunk(HunkOp.Replace, 1, 1, 1, 1)], whitespaceOnly: true));
     }
 
-    // ---- C1: written at once ----
+    // ---- written at once ----
 
     [Fact]
     public void ACappedDiffPagedByManyAnswersAtOnce_NeverCollides()
@@ -113,7 +113,7 @@ public sealed class Round13Tier2Tests : IDisposable
         Assert.All(results, r => Assert.True(File.Exists(r.IndexPath)));
     }
 
-    // ---- C2: names a case-sensitive tree tells apart ----
+    // ---- names a case-sensitive tree tells apart ----
 
     /// <summary>Makes a directory case-sensitive (Windows 10+, no admin), or false where it can't be.</summary>
     private static bool CaseSensitive(string dir)

@@ -13,7 +13,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 12, tier 2: a slow line diff is cut short sooner and can be cancelled; edited renames among thousands
+/// Code review pass 12, tier 2: a slow line diff is cut short sooner and can be cancelled; edited renames among thousands
 /// of alike files keep only each file's best candidates and still pair as before; a run rule claiming 2³¹ lines is
 /// checked as it streams; a merge-out that can't be made is refused before the compare; a result pruned by another
 /// process is saved again before anything is written into it.
@@ -38,7 +38,7 @@ public sealed class Round12Tier2Tests : IDisposable
         File.WriteAllBytes(P(rel), new UTF8Encoding(false).GetBytes(text));
     }
 
-    // ---- A3: the line diff's work cap and cancellation ----
+    // ---- the line diff's work cap and cancellation ----
 
     [Fact]
     public void ALineDiff_StopsWhenCancelled()
@@ -54,7 +54,7 @@ public sealed class Round12Tier2Tests : IDisposable
         Assert.True(LineDiffer.DefaultMaxWork <= 200_000_000);
     }
 
-    // ---- A4: edited renames keep each file's best candidates ----
+    // ---- edited renames keep each file's best candidates ----
 
     [Fact]
     public void EditedRenames_PairTheSame_WithOneCandidateKeptAsWithAll()
@@ -83,7 +83,7 @@ public sealed class Round12Tier2Tests : IDisposable
         }
     }
 
-    // ---- B7: a run rule is checked as it streams ----
+    // ---- a run rule is checked as it streams ----
 
     [Fact]
     public void ARunRuleClaimingEveryLineToTheIntLimit_FailsWithoutExpanding()
@@ -103,7 +103,7 @@ public sealed class Round12Tier2Tests : IDisposable
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"took {sw.Elapsed}");
     }
 
-    // ---- C3: a merge-out that can't be made ----
+    // ---- a merge-out that can't be made ----
 
     [Fact]
     public void AMergeOutThatCantBeMade_IsRefusedBeforeTheCompare()
@@ -123,7 +123,7 @@ public sealed class Round12Tier2Tests : IDisposable
         MergeOverlay.CheckDir(P("new/merge"), P("B"), P("V1"), P("V2")); // new directories under one that exists: fine
     }
 
-    // ---- C5: a result pruned by another process ----
+    // ---- a result pruned by another process ----
 
     [Fact]
     public void AResultPrunedElsewhere_IsSavedAgainBeforeAnythingGoesIntoIt()

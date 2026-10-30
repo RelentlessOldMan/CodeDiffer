@@ -105,7 +105,7 @@ public static class TreeMerger
         // checked once, and both compares see the same snapshot of it.
         var sharedBase = new SharedTree();
         // v2 is listed while base->v1 runs: nothing of the first compare needs it, and over a share a listing is
-        // mostly waiting on round-trips (a third of a compare at work), which the two can overlap.
+        // mostly waiting on round-trips (a third of a compare on a production share), which the two can overlap.
         using var stopListing = CancellationTokenSource.CreateLinkedTokenSource(ct);
         Action<int>? listed2 = progress2 is null ? null : n => progress2.Listed(false, n);
         var v2Listing = Task.Run(() => new TreeWalker(opt.IgnoredDirectoryNames, opt.Parallelism).WalkAll(v2Dir, listed2, stopListing.Token),

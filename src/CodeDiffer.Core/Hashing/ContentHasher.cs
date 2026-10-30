@@ -6,7 +6,7 @@ namespace CodeDiffer.Core.Hashing;
 /// The one hash discipline for the whole tool: <b>SHA-256 of raw file bytes, lowercase hex</b>.
 /// This is (a) the hash the CodeSpawner delta contract uses, so the verify-adapter asserts directly;
 /// and (b) the loose-coupling point with a CodeCompass index (a shared fact, not a shared binary).
-/// Files are hashed by streaming (bounded memory) so a multi-GB header hashes on a 16 GB box.
+/// Files are hashed by streaming (bounded memory) so a multi-GB header hashes on a 16 GB machine.
 /// </summary>
 public static class ContentHasher
 {

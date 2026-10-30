@@ -22,7 +22,7 @@ public readonly record struct LedgerEntry(
 public sealed record LedgerSnapshot(IReadOnlyDictionary<string, LedgerEntry> Entries, int Version);
 
 /// <summary>
-/// The shared hash-ledger on-disk format (agreed with CodeCompass 2026-10-05; CodeCompass owns the spec,
+/// The shared hash-ledger on-disk format (shared with CodeCompass; CodeCompass owns the spec,
 /// docs/hash-ledger-format.md in its repo). A ledger directory holds:
 /// <list type="bullet">
 /// <item><c>snapshot.manifest</c> — text: line 1 = current base file name, line 2 = next base number.</item>

@@ -1361,7 +1361,7 @@ static void PrintUsage()
                                          listing with its open handle (reads 4 KB a file; numbers only).
                                          Opening a file refreshes its listing: a second run reads fewer.
           codediffer runs [--max N]      how recent compares ran: how each ended, peak memory, time per phase,
-                                         network vs work (numbers only, safe to share)
+                                         network wait vs compute (numbers only, safe to share)
           codediffer selftest <left> <right> [<v2>] [--name NAME] [--out DIR] [--sample N] [--threads N] [--cold]
                                          every feature run on trees you name (2-way, or base v1 v2 for 3-way;
                                          the trees are only read), each result checked against the files or

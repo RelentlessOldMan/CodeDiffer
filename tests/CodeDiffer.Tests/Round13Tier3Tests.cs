@@ -11,7 +11,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 13, tier 3: a write into a result directory leaves it saved; a report or overlay directory that holds
+/// Code review pass 13, tier 3: a write into a result directory leaves it saved; a report or overlay directory that holds
 /// the results directory, or can't be made, is refused before the compare; a block diff past its work cap says it is
 /// coarse and can be cancelled; a directory past MAX_PATH has an identity and a real path; elapsed times keep their days.
 /// </summary>
@@ -35,7 +35,7 @@ public sealed class Round13Tier3Tests : IDisposable
         File.WriteAllBytes(P(rel), new UTF8Encoding(false).GetBytes(text));
     }
 
-    // ---- C3: a write leaves the result saved ----
+    // ---- a write leaves the result saved ----
 
     [Fact]
     public void AResultPrunedWhileADiffIsWritten_IsListedAfterIt()
@@ -53,7 +53,7 @@ public sealed class Round13Tier3Tests : IDisposable
         Assert.True(File.Exists(Path.Combine(s.ResultDir!, ResultStore.MetaName)));
     }
 
-    // ---- C5: refused before the compare ----
+    // ---- refused before the compare ----
 
     [Fact]
     public void AnOutputDirectoryHoldingTheResults_OrThatCantBeMade_IsRefusedFirst()
@@ -76,7 +76,7 @@ public sealed class Round13Tier3Tests : IDisposable
         Assert.Null(HtmlReport.OutDirProblem(P("new/report"), [P("B")]));
     }
 
-    // ---- A5: a coarse block diff ----
+    // ---- a coarse block diff ----
 
     private static List<Chunk> Blocks(IEnumerable<string> shas)
         => shas.Select((s, i) => new Chunk((long)i * 65536, 65536, s)).ToList();
@@ -96,7 +96,7 @@ public sealed class Round13Tier3Tests : IDisposable
         Assert.ThrowsAny<OperationCanceledException>(() => GiantFileDiffer.Diff(old, scattered, stop.Token));
     }
 
-    // ---- A6 / C8: long paths and identities ----
+    // ---- long paths and identities ----
 
     [Fact]
     public void ADirectoryPastMaxPath_HasAnIdentity_AndIsInsideItself()
@@ -112,7 +112,7 @@ public sealed class Round13Tier3Tests : IDisposable
         Assert.Equal(@"C:\short", RealPath.Long(@"C:\short"));
     }
 
-    // ---- C7: days kept ----
+    // ---- days kept ----
 
     [Fact]
     public void AnElapsedTimeOfDays_KeepsThem()

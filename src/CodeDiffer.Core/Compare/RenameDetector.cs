@@ -170,7 +170,7 @@ public sealed class RenameDetector
                             q.Enqueue(a);
                         }
                     // Two removed files or two added files at the same level is a tie: they pair as before, but every pair
-                    // of that level is held — which is the rename can't be told (M3).
+                    // of that level is held — which is the rename can't be told.
                     var groupA = free.ToDictionary(kv => kv.Key, kv => kv.Value.ToList(), StringComparer.Ordinal);
                     var rest = new Dictionary<string, List<int>>(StringComparer.Ordinal);
                     foreach (var r in rs)
@@ -361,7 +361,7 @@ public sealed class RenameDetector
             headsOn[p.ai].Remove(ri);
             if (!usedA[p.ai])
             {
-                // A tie (M3): another free added file this one is as alike to and as near by name and directory, or
+                // A tie: another free added file this one is as alike to and as near by name and directory, or
                 // another removed file whose best is this added file as well. Taken as before (best first, then by
                 // path), but held — and so is the other file of the tie, when it pairs.
                 int rank = Rank(rName[ri], rDir[ri], aName[p.ai], aDir[p.ai]);

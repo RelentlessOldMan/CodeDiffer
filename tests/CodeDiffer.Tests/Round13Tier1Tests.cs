@@ -8,7 +8,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 13, tier 1: an edit in place among identical lines is an edit of the run's line, and a merge merged again
+/// Code review pass 13, tier 1: an edit in place among identical lines is an edit of the run's line, and a merge merged again
 /// changes nothing (see also <see cref="InPlaceRunTests"/>); verify fails a manifest that writes such an edit as an
 /// insert and a cut apart; a line diff's work cap grows with the files; a manifest's counts near 2^31 fail, not crash.
 /// </summary>
@@ -34,7 +34,7 @@ public sealed class Round13Tier1Tests : IDisposable
     private ConflictCrossCheckResult Check(IReadOnlyList<Conflict> conflicts, IReadOnlyList<CleanMerge> clean)
         => ConflictTreeCrossCheck.Run(P("B"), P("V1"), P("V2"), new ConflictManifest(1, "V1", "V2", conflicts, clean, ConflictTruthSha: null));
 
-    // ---- B1 / B2: which lines pair ----
+    // ---- which lines pair ----
 
     [Theory]
     [InlineData("}", "};", true)]
@@ -47,7 +47,7 @@ public sealed class Round13Tier1Tests : IDisposable
     public void ALineResemblesARunLine_OnlyAsAnEditOfIt(string run, string line, bool want)
         => Assert.Equal(want, ThreeWayMerger.Resembles(run, line));
 
-    // ---- B3: verify and an edit in place written apart ----
+    // ---- verify and an edit in place written apart ----
 
     [Fact]
     public void BothSidesEditsOfOneRunLine_MergedSideBySide_Fail()
@@ -70,7 +70,7 @@ public sealed class Round13Tier1Tests : IDisposable
         Assert.True(truth.Ok, string.Join("; ", truth.UnsoundRegions));
     }
 
-    // ---- A1: the work cap grows with the files ----
+    // ---- the work cap grows with the files ----
 
     [Fact]
     public void ALongFileWithEveryFourthLineEdited_DiffsExactly_AndMergesClean()
@@ -87,7 +87,7 @@ public sealed class Round13Tier1Tests : IDisposable
         Assert.Equal(LineDiffer.MaxWorkCeiling, LineDiffer.WorkCap(int.MaxValue, int.MaxValue));
     }
 
-    // ---- A3: counts near 2^31 ----
+    // ---- counts near 2^31 ----
 
     [Fact]
     public void AManifestCountNear2To31_FailsTheCheck_NotCrashes()

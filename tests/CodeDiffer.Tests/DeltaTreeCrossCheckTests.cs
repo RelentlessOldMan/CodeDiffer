@@ -140,7 +140,7 @@ public sealed class DeltaTreeCrossCheckTests : IDisposable
         Assert.False(wrong.Ok); // ...and checked, whatever the reason
     }
 
-    // ---- Round 14, tier 1: the trees' files read as the engine reads them ----
+    // ---- the trees' files read as the engine reads them ----
 
     private TreeCrossCheckResult CheckOne(byte[] b, byte[] v, IReadOnlyList<Hunk> hunks, IReadOnlyList<RunHunk>? runs = null)
     {

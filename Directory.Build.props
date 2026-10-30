@@ -8,7 +8,7 @@
 
     AssemblyVersion stays 1.0.0.0 (stable, so assembly binding doesn't churn per commit).
     FileVersion / InformationalVersion carry the real number for the .exe properties and the logs.
-    Mirrors the CodeCompass/CodeSpawner scheme so the family stamps versions identically.
+    The same scheme as CodeCompass and CodeSpawner.
   -->
   <PropertyGroup>
     <Company>RelentlessOldMan</Company>

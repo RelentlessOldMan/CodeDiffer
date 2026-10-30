@@ -11,7 +11,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 14, tier 2: strings are read as the file's language reads them (a reformat of C beside an escaped quote
+/// Code review pass 14, tier 2: strings are read as the file's language reads them (a reformat of C beside an escaped quote
 /// is whitespace, a change in a C# verbatim string or a PowerShell string is content), the same whole and streamed;
 /// names written beside a file never pass 255 characters; exports at once never collide; an overlay a prune took files
 /// out of is known to be so.
@@ -46,7 +46,7 @@ public sealed class Round14Tier2Tests : IDisposable
         return c.Classify(l, new FileInfo(l).Length, r, new FileInfo(r).Length).ToString().ToLowerInvariant();
     }
 
-    // ---- A2: the file's own reading of a backslash ----
+    // ---- the file's own reading of a backslash ----
 
     [Theory]
     [InlineData(".c", "if (c == '\\'' || c == '\"') {\n", "if (c=='\\''||c=='\"') {\n", "whitespace")]          // C: escapes
@@ -130,7 +130,7 @@ public sealed class Round14Tier2Tests : IDisposable
 
     private static string Show(string s) => s.Replace("\n", "\\n");
 
-    // ---- C1: names beside a file ----
+    // ---- names beside a file ----
 
     [Fact]
     public void ANameBesideALongName_IsStillAName()
@@ -150,7 +150,7 @@ public sealed class Round14Tier2Tests : IDisposable
         Assert.False(char.IsHighSurrogate(fit[^1]));
     }
 
-    // ---- C2: exports at once ----
+    // ---- exports at once ----
 
     [Fact]
     public void ExportsAtOnce_EachWriteTheWholePatch()
@@ -171,7 +171,7 @@ public sealed class Round14Tier2Tests : IDisposable
         Assert.Equal(["all.patch"], Directory.GetFiles(P("out")).Select(Path.GetFileName).ToArray()); // no temp left
     }
 
-    // ---- C3: an overlay a prune raced ----
+    // ---- an overlay a prune raced ----
 
     [Fact]
     public void AnOverlayMissingFiles_IsNotIntact()

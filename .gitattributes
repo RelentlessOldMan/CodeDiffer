@@ -10,6 +10,3 @@
 # Binary / index artifacts (belt-and-suspenders; these are gitignored anyway).
 *.idx binary
 *.bin binary
-
-# A vendored CodeSpawner generator (native-AOT exe) must never be text/EOL-normalized.
-tools/codespawner/*.exe binary

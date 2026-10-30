@@ -2,7 +2,7 @@ namespace CodeDiffer.Core.Compare;
 
 /// <summary>
 /// Strict-in guards for a compare. Honors the honesty contract: a missing / mistyped root is a hard
-/// error naming the offending path — NEVER silently treated as an empty tree (the prototype's "silent
+/// error naming the offending path — NEVER silently treated as an empty tree (the early prototype's "silent
 /// success on a missing path, everything reported added/deleted" bug).
 /// </summary>
 public static class InputValidation

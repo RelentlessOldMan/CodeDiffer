@@ -14,7 +14,7 @@ public sealed class RunRecordTests
         var (before, from) = RunRecord.Cpu(me);
         var wall = Stopwatch.StartNew();
         double after;
-        do Thread.SpinWait(100_000); // a test on one shared core: spin until the work shows, not for a set time
+        do Thread.SpinWait(100_000); // on a loaded machine: spin until the work shows, not for a set time
         while ((after = RunRecord.Cpu(me).Seconds) - before < 0.3 && wall.Elapsed.TotalSeconds < 30);
 
         Assert.Equal(OperatingSystem.IsWindows() ? "cycles" : "sampled", from);

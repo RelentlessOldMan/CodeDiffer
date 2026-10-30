@@ -8,7 +8,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// M2/M3 (code-differ review): a rename the listing shows is not always one compare3 and apply should act on. Two files
+/// A rename the listing shows is not always one compare3 and apply should act on. Two files
 /// that share only a licence header, two tiny tests, two one-line headers, or a removed file with two equally good
 /// matches are listed as renames as before (the contract's metric), but held: merged and ported as a delete and an
 /// add, so the other side's edit is a conflict, never written into an unrelated file.
@@ -149,7 +149,7 @@ public sealed class RenameFollowTests : IDisposable
         Assert.Equal(2, r.Changes.Count(c => c.Status == ChangeStatus.Renamed));
     }
 
-    // ---- M3: a tie is said, and held ----
+    // ---- a tie is said, and held ----
 
     [Fact]
     public void ATiedRename_SaysWhichFileItTiedWith_AndIsHeld()

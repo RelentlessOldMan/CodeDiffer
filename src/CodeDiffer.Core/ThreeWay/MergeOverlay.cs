@@ -14,8 +14,8 @@ public sealed class OverlayDirTakenException(string dir)
     : ArgumentException($"{dir} is not empty; the overlay needs a new or empty directory");
 
 /// <summary>
-/// Writes a compare3 merge as an OVERLAY on v1: only what turns v1 into the merged tree, never the whole tree (death
-/// is 94 GB; its merge touches a few thousand files). The directory holds
+/// Writes a compare3 merge as an OVERLAY on v1: only what turns v1 into the merged tree, never the whole tree (a 94 GB
+/// tree's merge may touch only a few thousand files). The directory holds
 /// <list type="bullet">
 /// <item><c>files\</c> — each file the merge changes in v1, at its merged path: v2's one-sided changes, clean merges,
 ///   and text conflicts written with diff3 markers (<c>&lt;&lt;&lt;&lt;&lt;&lt;&lt; v1</c> … <c>&gt;&gt;&gt;&gt;&gt;&gt;&gt; v2</c>).</item>

@@ -5,8 +5,8 @@ base→variant `<corpus>-delta.json`; CodeDiffer composes `truth = base ⊕ delt
 output equals it. The stable coupling point is this schema + the `diffTruthSha` digest — **not** the
 corpus bytes. Hard-assert `_meta.manifestVersion` (1, or 2 with bookkeeping: see below) before trusting any manifest.
 
-(Locked in the claudes-chatroom design session; CodeSpawner keeps the authoritative generator-side copy
-in its own `docs/`. This is CodeDiffer's consumer-side record.)
+(CodeSpawner keeps the authoritative generator-side copy in its own `docs/`. This is CodeDiffer's
+consumer-side record.)
 
 ## Granularity
 
@@ -140,5 +140,4 @@ CodeSpawner ships each with a labeled fixture + golden vector before the next:
 3. rename + decoys
 4. joint 3-way + `--overlap-fraction`
 
-CodeDiffer stands up its verify-adapter against (1) first and reproduces the vector. Ping arrives on the
-`code-differ` / claudes-chatroom channel when (1)'s bytes are on disk.
+CodeDiffer stood up its verify-adapter against (1) first and reproduced the vector.

@@ -11,7 +11,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 15: an apostrophe that isn't a quote, or a raw string, never puts a change in a real string out of it;
+/// Code review pass 15: an apostrophe that isn't a quote, or a raw string, never puts a change in a real string out of it;
 /// a rename's verdict is the same both ways; apply stopped in a file's merge says what it did; verify pairs a last line
 /// without a newline as the engine does; a temp name fits a Samba share's 255 bytes; one report directory spelled two
 /// ways is one lock.

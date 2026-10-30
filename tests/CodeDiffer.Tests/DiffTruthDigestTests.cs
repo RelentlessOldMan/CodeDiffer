@@ -6,8 +6,8 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Guards the diffTruthSha canonicalization mechanics until CodeSpawner ships its digest-selftest
-/// golden vector (at which point a byte-for-byte reproduction test joins these). Covers the properties
+/// The diffTruthSha canonicalization mechanics, beside the byte-for-byte reproduction of CodeSpawner's
+/// digest-selftest golden vector. Covers the properties
 /// the locked form promises: deterministic, order-independent, reason/sha-sensitive, and the all-empty
 /// vector (three GS bytes, no special-casing).
 /// </summary>

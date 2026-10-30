@@ -10,7 +10,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 11, tier 3: a patch's eol/encoding note is of the whole file, an edited rename whose only edit is its
+/// Code review pass 11, tier 3: a patch's eol/encoding note is of the whole file, an edited rename whose only edit is its
 /// encoding says so, a NUL a patch would see makes the compare say binary too, report and overlay directories are
 /// checked before the compare, files that show alike are told apart, a compare id is an id before it is a folder,
 /// a bad export path is an answer, and a reopened compare's export says it is of today's trees.
@@ -49,7 +49,7 @@ public sealed class Round11Tier3Tests : IDisposable
     /// <summary>About 70 KB of ASCII lines: more than the 64 KB a note used to look at.</summary>
     private static string Ascii(string eol = "\n") => string.Concat(Enumerable.Range(1, 7000).Select(i => $"line {i:D4}" + eol));
 
-    // ---- A4: notes judged on the whole file ----
+    // ---- notes judged on the whole file ----
 
     [Fact]
     public void AnEolNote_SeesLineEndingsPastTheFirst64KB()
@@ -73,7 +73,7 @@ public sealed class Round11Tier3Tests : IDisposable
         Assert.Contains("(UTF-8/ASCII, no BOM)", diff);
     }
 
-    // ---- A5: an edited rename whose only edit is its encoding ----
+    // ---- an edited rename whose only edit is its encoding ----
 
     [Fact]
     public void ARenameThatOnlyGainedABom_SaysTheEncodingChanged()
@@ -86,7 +86,7 @@ public sealed class Round11Tier3Tests : IDisposable
         Assert.Contains("Encoding differs too: a/a/r.txt (UTF-8/ASCII, no BOM) b/b/r.txt (UTF-8 BOM)", AgentViews.FileDiff(s, "b/r.txt"));
     }
 
-    // ---- A6: a NUL a patch would see ----
+    // ---- a NUL a patch would see ----
 
     [Fact]
     public void ANulPastTheHead_OfAFileAPatchReadsWhole_IsBinary()
@@ -111,7 +111,7 @@ public sealed class Round11Tier3Tests : IDisposable
         Assert.NotEqual(ChangeReason.Binary, new ReasonClassifier(maxClassifyBytes: 64).Classify(P("L/w.txt"), l.Length, P("R/w.txt"), r.Length));
     }
 
-    // ---- C6: output directories checked before the compare ----
+    // ---- output directories checked before the compare ----
 
     [Fact]
     public void AReportOutDir_ThatIsAFileOrNotAReport_IsAProblemUpFront()
@@ -135,7 +135,7 @@ public sealed class Round11Tier3Tests : IDisposable
         MergeOverlay.CheckDir(P("merge"), P("B"), P("V1"), P("V2"), P("report"));
     }
 
-    // ---- C8: names that show alike ----
+    // ---- names that show alike ----
 
     [Fact]
     public void TwoNamesThatShowAlike_AreToldApartByTheirEscapedNames()
@@ -175,7 +175,7 @@ public sealed class Round11Tier3Tests : IDisposable
         Assert.Equal(@"dirAx", ResultStore.Unescaped(@"dirAx")); // only surrogates are escaped
     }
 
-    // ---- C9: an id before a folder ----
+    // ---- an id before a folder ----
 
     [Fact]
     public void ACompareId_IsAnIdBeforeAFolderOfThatName()
@@ -198,7 +198,7 @@ public sealed class Round11Tier3Tests : IDisposable
         }
     }
 
-    // ---- C10, C13: export ----
+    // ---- export ----
 
     [Fact]
     public void ABadExportPath_IsAnAnswer()

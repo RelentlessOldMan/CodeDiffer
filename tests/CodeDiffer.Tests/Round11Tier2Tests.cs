@@ -12,7 +12,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 11, tier 2: a metadata record verifies, a path twice in a delta is refused, a streamed content verdict
+/// Code review pass 11, tier 2: a metadata record verifies, a path twice in a delta is refused, a streamed content verdict
 /// doesn't read both files whole, a corrupt ledger is no cache, saved diffs at another context never collide, a
 /// zero-context patch says what it needs, a report replace that fails part way is replaced next time, a whitespace-only
 /// change is diffed line for line, and a space taken out of a string or a number is content.
@@ -50,7 +50,7 @@ public sealed class Round11Tier2Tests : IDisposable
         return s;
     }
 
-    // ---- B5: metadata ----
+    // ---- metadata ----
 
     [Fact]
     public void AMetadataRecord_ExpectsItsFileUnchanged()
@@ -74,7 +74,7 @@ public sealed class Round11Tier2Tests : IDisposable
         Assert.Contains(bad.Extra, x => x == "modified m.txt");
     }
 
-    // ---- B6: a path twice ----
+    // ---- a path twice ----
 
     private static string Rec(string path, string reason)
         => $$"""{"path":"{{path}}","reason":"{{reason}}","oldSha":"a","newSha":"b","oldSize":1,"newSize":1,"hunks":[]}""";
@@ -92,7 +92,7 @@ public sealed class Round11Tier2Tests : IDisposable
         Assert.Contains("more than once", ex.Message);
     }
 
-    // ---- A2: streamed verdicts ----
+    // ---- streamed verdicts ----
 
     [Fact]
     public void StreamedVerdicts_AreTheWholeReadsOnes_WithOrWithoutUtf8()
@@ -120,7 +120,7 @@ public sealed class Round11Tier2Tests : IDisposable
         }
     }
 
-    // ---- A8: a corrupt ledger ----
+    // ---- a corrupt ledger ----
 
     [Fact]
     public void ALedgerWithAnOffsetPastTheEnd_IsNoCache_AndTheCompareRuns()
@@ -144,7 +144,7 @@ public sealed class Round11Tier2Tests : IDisposable
         Assert.Single(new DirectoryComparer(cache).Compare(P("L"), P("R")).Changes, c => c.Status == ChangeStatus.Modified);
     }
 
-    // ---- C3: saved diffs ----
+    // ---- saved diffs ----
 
     [Fact]
     public void SavedDiffsAtAnotherContext_NeverShareAName()
@@ -168,7 +168,7 @@ public sealed class Round11Tier2Tests : IDisposable
         Assert.Contains("+new x.U5 3\n", File.ReadAllText(named));
     }
 
-    // ---- C4: zero context ----
+    // ---- zero context ----
 
     [Fact]
     public void AZeroContextPatch_SaysItNeedsUnidiffZero()
@@ -185,7 +185,7 @@ public sealed class Round11Tier2Tests : IDisposable
         Assert.DoesNotContain("unidiff-zero", File.ReadAllText(P("out/three.patch")));
     }
 
-    // ---- C5: report replace ----
+    // ---- report replace ----
 
     [Fact]
     public void AReportReplaceThatFailsPartWay_IsReplacedNextTime()
@@ -209,7 +209,7 @@ public sealed class Round11Tier2Tests : IDisposable
         Assert.True(File.Exists(P("report/index.html")));
     }
 
-    // ---- A7: whitespace hunks ----
+    // ---- whitespace hunks ----
 
     [Fact]
     public void AWhitespaceOnlyChangeAmongRepeatedLines_IsDiffedLineForLine()
@@ -226,7 +226,7 @@ public sealed class Round11Tier2Tests : IDisposable
         Assert.Contains("-x\n-  x\n+  x\n+x\n", w.ToString());
     }
 
-    // ---- A3: a space out of a string or a number ----
+    // ---- a space out of a string or a number ----
 
     [Theory]
     [InlineData("s.split(\" \");", "s.split(\"\");", ChangeReason.Content)]

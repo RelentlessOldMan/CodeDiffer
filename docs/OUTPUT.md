@@ -149,7 +149,7 @@ after the walk (flagged: a rename may still pair them up), size-changed files a 
 edits as their contents are checked. `list_files` and `get_file_diff` already work on that partial set
 (in the order found, so pages don't shift); `get_stats`, the export, apply and the report wait for the end.
 A running `compare3` shows each of its two compares and the paths changed on both sides so far. The CLI
-draws the same line on stderr (redrawn in place, or a line every 30 s when stderr is redirected). Death
+draws the same line on stderr (redrawn in place, or a line every 30 s when stderr is redirected). On CodeSpawner's `death` corpus,
 base→v1, warm: all 1,561 differences listed at 0:30 of a 1:40 run; "about 1:20 left" at 0:30 (actual 1:18).
 
 **Cancel (built):** `cancel_compare(id)` stops a running compare or compare3; in the CLI the first Ctrl+C does
@@ -178,38 +178,34 @@ so it can be shared as is): rewritten every 15 s while the compare runs and once
 its last heartbeat, so it says when it died (within 15 s), in which phase, how far it got and what it was using.
 It holds process memory (working set and its peak, private, .NET heap and its peak, full GCs), CPU time, threads,
 handles, the machine's cores and memory load, and per compare: files listed, same-size pairs and bytes checked,
-bytes read (since v1.0.142 with what the classifier read for a verdict it had no record of), cache hits, differences found, wall time per phase, mid-run hash saves, and the content phase's worker
+bytes read (with what the classifier read for a verdict it had no record of), cache hits, differences found, wall time per phase, mid-run hash saves, and the content phase's worker
 time split into opening files, waiting for bytes (the network, over a share) and comparing+hashing.
-Its CPU time (`cpuSeconds`, since v1.0.125) is the process's cycle count over the processor's rated clock
+Its CPU time (`cpuSeconds`) is the process's cycle count over the processor's rated clock
 (`cpuFrom: cycles`). Windows' own CPU time is sampled at the clock tick, and a compare's threads work in short
 bursts between reads that mostly fall between ticks: for a cold local compare3 it showed 5 s where the cycles say
 about 30 s. Off Windows, or without a rated clock, it is that sampled figure (`cpuFrom: sampled`), and so is every
 CPU time recorded before v1.0.125: read those as far too low.
-Since v1.0.132 it also counts what the run did underneath, to find where a run's CPU or memory goes without a
+It also counts what the run did underneath, to find where a run's CPU or memory goes without a
 profiler: every exception thrown during it, caught or not (`exceptions`: by type and Windows error code, never
 the message); which way each live stat of a file went (`liveStats`: answered by name, one query on a handle,
 separate queries, a query the server refused and its status, and files opened plainly after a server refused an
 overlapped open with error 87); and what each phase allocated (`phaseAllocatedMB`, the whole process's).
 All of these are the process's counts since the run started: a run's own when it runs alone (the CLI, or an MCP
 server running one compare at a time); compares an MCP server runs at once each count the others' too.
-Since v1.0.134 a Windows error code is given only for a file error (`IOException 87`); every other exception
+A Windows error code is given only for a file error (`IOException 87`); every other exception
 is its type alone, because an `ArgumentException`'s own code reads as Windows error 87 as well. A compare's
 `starting` and `done` aren't counted either: in a compare3 the second compare is starting while the first runs,
 and the first is done while the second runs and the merge after, so those phases showed the other's bytes (a
 first compare's `done` of many gigabytes, and the second's held the merge and the result's save). The merge's own
-time and bytes are a line of their own (`merge`), and since v1.0.135 so is the result's save (`save`, written
-after the last compare's last phase). Since v1.0.135 a `Win32Exception` is counted with its own code (its HResult is
-a generic failure), CodeDiffer's own stat and listing errors carry their Windows code (they were a bare
-`IOException`), and `runs` says where the CPU time came from (`cycles` or `sampled`).
-Since v1.0.136 the merge allocates about half what it did (death_1.3.1's 1,985 merged files: 1,418 MB → 734 MB, the
-same merge): a line diff's exact pass keeps one bit per diagonal and step where it kept a copy of each step's
-diagonals (D²/2 bits, not D² ints: ~560 KB, not ~36 MB, for a diff of 3,000 changed lines), valid UTF-8 isn't encoded
-again to see it reads back, and pairing runs of identical lines makes no closure per line.
-Since v1.0.137 the `merge` line has two under it: each step's thread time and bytes (`other` · `read` · `decode` ·
+time and bytes are a line of their own (`merge`), and so is the result's save (`save`, written
+after the last compare's last phase). A `Win32Exception` is counted with its own code (its HResult is
+a generic failure), CodeDiffer's own stat and listing errors carry their Windows code, and `runs` says where the
+CPU time came from (`cycles` or `sampled`).
+The `merge` line has three under it: each step's thread time and bytes (`other` · `read` · `decode` ·
 `split` · `diff` · `align` · `stamps`: each step's own, so a diff inside the stamps' merge is the diff's, and the times add
 up to the workers' time, not the wall), and the files merged line by line (their lines, the MB read) with how their line
 diffs were made (one side a prefix, exact, linear-space past the exact pass's budget, coarse past the work cap).
-Since v1.0.139 a third: the files both sides modified that the merge didn't open. A file both modified in place is
+Third, the files both sides modified that the merge didn't open. A file both modified in place is
 merged from the three versions' hashes, which the compares know: agreed when v1 and v2 hold the same, else as the merge
 store (`merges.bin` beside the ledgers) remembers those three versions merging, kept per merger version, classify size
 and stamp resolving. A warm compare3 over unchanged trees then reads no file in its merge. The store is never trusted
@@ -255,7 +251,7 @@ their text, it is skipped and a note says so — those files are listed as added
 
 `start_compare3(base, v1, v2)` (CLI `compare3`): base→v1 then base→v2, sequential, and the second reuses
 the first's base listing and the base hashes it proved (no re-listing, no re-reading, not even a per-file
-stat of the base; both compares judge the same snapshot of it; since v1.0.145 v2 is listed while base→v1
+stat of the base; both compares judge the same snapshot of it; v2 is listed while base→v1
 runs), then every touched path is
 v1 only | v2 only | agreed | merged | conflict, the conflict kinds being content, stamps (a content conflict whose colliding lines
 differ only in version-control keyword stamps, `$Id: … $`: with the stamps bare it merges cleanly; written with
@@ -324,7 +320,7 @@ bytes, comes out "already" — a case-only rename already done, and a file v2 tu
 place, too). The overlay holds `APPLYING.txt` while it runs and `APPLIED.txt` (target, time)
 once done with nothing failed — after a failure it stays unapplied, so the same apply can be run again once the
 cause is fixed; a second finished apply to the same target is refused unless `--again`, since it would
-overwrite conflicts resolved since. On death 1.0.9 the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
+overwrite conflicts resolved since. On the `death` corpus the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
 
 **Conflicts settled in bulk (built):** the overlay also holds `conflicts.json`, the conflicts for a program: each
 one's base path, kind, note, its markers file in `files\` and the delete made for it (a rename), where v1 and v2
@@ -351,44 +347,27 @@ if there is none and held open, so two resolves never write at once: `apply-over
 between. Copies are made in `set-aside\` and moved into `files\`, so one stopped part way is never applied. Exit 1
 when a conflict the rule picked was refused. An overlay from before v1.0.150 has no `conflicts.json`: write it again.
 
-Full-scale check (2026-10-05, CodeSpawner `death` 1.0.9 base / v1 / v2 on a share, 68,661 base
-files, `--threads 4`, warm hash cache): `compare3` in 3:59 (base→v1 124 s, base→v2 109 s, merge 5 s; 0 bytes
-re-hashed), 1,723 touched paths → 369 v1 only · 162 v2 only · 251 merged · 941 conflict, 11,371 conflict
-regions. `verify death_1.0.9-conflict.json --base --v1 --v2` (30 s): the merge's own decomposition
-(11,371 conflict · 32,615 clean) reproduces `conflictTruthSha` exactly. `apply` base→v1 onto v2 (dry run,
-1:57) agrees: 620 files clean, 941 conflict, 21,246 hunks applied, 11,371 conflict, 0 fuzzy.
+Measured at full scale on CodeSpawner's synthetic `death` corpus (base / v1 / v2, ~70–75k files and ~91–94 GB a
+tree, generated with a delta manifest for each variant and a conflict manifest for the three):
 
-Cold and warm compare3 (2026-10-06, 8 threads cold / 4 warm): **cold, nothing cached: 51:03** — base→v1
-32:58 reading 188.8 GB at ~100 MB/s (the link), base→v2 18:00 reading only v2 (94.4 GB, base from the
-first compare), merge 5 s, HTML report 6 s; verdicts identical file for file to the warm run. **Warm:
-2:13** with the base shared between the two compares (base→v2 44 s), against 2:52 before (84 s). On a
-cold run the bytes go first (biggest files first), then a tail of ~58k small files takes ~3.5 min for
-0.1 GB, which is why the time-left estimate follows bytes, then the recent files-per-second rate.
-
-Local baseline on the current corpus (2026-10-16 to 10-19, CodeSpawner `death_1.3.1`: 74,775 files, 91.4 GB a
-tree, base / v1 / v2 on a local SSD): `verify` v1 cold 10:11, 1,989/1,989; v2 6:52, 1,986/1,986; the conflict
-verify 0:15, an exact 16,708 conflict / 47,724 clean split, compare3 conflicting in exactly 1,935 files. `apply`
-dry run: 54 files apply, 1,935 conflict; 31,382 hunks applied, 0 fuzzy, 16,708 conflict. Cold compare3 of the
-`d0` subtree (3 × 58 GB, more than the 32 GB of RAM) with v1.0.110: 116–196 s wall (66–68 s CPU by the tick-sampled count, far below the real cost; see run.json above).
-
-Over the share (2026-10-19, v1.0.110, `death_1.3.1` vs `_v1` on a share, 8 threads, empty CodeDiffer
-and CodeCompass caches): cold `compare` **34:43**, 182.8 GB read at ~95–101 MB/s (the link), walk 7 s, 0 pauses,
-0 unreadable; 1,989 modified, every one tagged comment-only noise (v1's edits append `/*v1:…*/` to lines). Then
-`verify` of the v1 delta on the same trees with that cache: 2:07, digest reproduced, hunks 1,989/1,989 exact,
-shas 0 wrong, the compare's file operations 1,989/1,989.
-The same day, cold `compare3` of base / `_v1` / `_v2` over the share (empty caches, after commit 6195a05):
-**57:54** — base→v1 2,282 s (182.8 GB), base→v2 1,179 s (91.4 GB: v2 alone, 72,785 base files reused),
-classify + merge 14 s; 1,990 touched, 1,935 conflicts, 16,708 conflict regions, 50 merged, 0 pauses,
-0 unreadable. The conflict verify after it took 3:02 (digest reproduced, the exact 16,708 / 47,724 split,
-compare3 conflicting in exactly the manifest's 1,935 files). The `apply` dry run took 1:17 (54 apply, 1,935 conflict;
-31,382 hunks applied, 0 fuzzy, 16,708 conflict). Every number matches the local baseline.
-
-CodeCompass v2 ledger at full scale (2026-10-06, CodeCompass 1.0.243): `codecompass index` of base and v1 on
-the share (66,337 of 68,661 files each; it skips the rest by size), then `compare` base→v1 with an empty
-CodeDiffer cache: 129,552 sides from CodeCompass's ledgers, 17.3 GB read (exactly the files CodeCompass
-skipped, plus both sides of the 1,561 modified files), 4:19. The 68,661 per-file verdicts are identical to
-a run on CodeDiffer's own ledger. Locally, a same-size edit with the mtime put back, a delete + recreate
-with the same size and mtime, and a move over an existing file were all re-read and reported modified.
+- **Against the manifests.** `verify` of each variant matches every file, reason and rename (1,989/1,989 and
+  1,986/1,986) and reproduces the digest; the conflict verify reproduces `conflictTruthSha` with the exact conflict /
+  clean split (16,708 / 47,724 regions), compare3 conflicting in exactly the manifest's 1,935 files. The `apply` dry
+  run of base→v1 onto v2 agrees: 31,382 hunks applied, 0 fuzzy, 16,708 conflict. Local and over a share, the same numbers.
+- **Over a share, cold** (a 1 Gbit link, ~95–101 MB/s, empty caches): `compare` base→v1 34:43 (182.8 GB read, walk 7 s);
+  `compare3` 51–58 min, base→v1 about 33–38 min and base→v2 18–20 min (v2 alone is read: the base comes from the
+  first compare), the merge and classification 5–14 s, the HTML report 6 s. On a cold run the bytes go first (biggest
+  files first), then a tail of ~58k small files takes ~3.5 min for 0.1 GB, which is why the time-left estimate
+  follows bytes, then the recent files-per-second rate.
+- **Over a share, warm:** `compare3` 2:13 (base→v2 44 s), verdicts identical file for file to the cold run;
+  `verify` after it 2:07, the conflict verify 3:02.
+- **Locally, cold** (an SSD): `verify` of v1 10:11, of v2 6:52; compare3 of a 3 × 58 GB subtree, more than the 32 GB of
+  RAM: 116–196 s.
+- **With CodeCompass ledgers** (`codecompass index` of base and v1 on the share first, which skips ~2,300 big files
+  each by size), `compare` base→v1 with an empty CodeDiffer cache: 129,552 sides from CodeCompass's ledgers, 17.3 GB
+  read (exactly the files CodeCompass skipped, plus both sides of the modified files), 4:19, per-file verdicts
+  identical to a run on CodeDiffer's own ledger. A same-size edit with the mtime put back, a delete + recreate with
+  the same size and mtime, and a move over an existing file were all re-read and reported modified.
 
 Why it matters, and the three everyday cases it speeds up (two releases compared again, current code against
 a release, two trees both in progress): see "Compare again in minutes, not hours" in the README.
@@ -398,7 +377,6 @@ listing, and it records one only from a read whose handle stat didn't change acr
 file one id in a directory listing and another on an open handle (one share seen in use did, for a third of its
 files, which held nearly all its bytes): such a file, its size, mtime and ChangeTime agreeing, is cached with no id
 and told by those three alone, and the summary counts it ("cached by size, modified and change time only").
-Before v1.0.89 such files were never cached, so every compare read them again.
 
 When one side of a same-size pair is cached and the other isn't (compare3's base→v2, where base comes from
 base→v1), the uncached file is read beside the cached one on local trees: while their bytes match only XxHash128
@@ -438,7 +416,7 @@ binary, each with its count: a click hides or shows that type); a path filter bo
 and **Everything**. A noise file's row says so: `content (noise: stamps)`. Each file's
 diff is **loaded on expand** from the store (not embedded), so a 90 GB compare is a small page plus data
 loaded on demand. Side-by-side and inline modes; intra-line + syntax highlighting; huge per-file diffs
-virtualize or link to the `.patch`. **Everything is escaped** (the prototype's injection bug). Written
+virtualize or link to the `.patch`. **Everything is escaped** (a filename with HTML in it can't inject). Written
 incrementally to a unique/timestamped dir outside the compared trees.
 
 **Built:** `write_report` / CLI `report <id>` (or `--html` on `compare`/`compare3`) writes `report\` into the
@@ -461,20 +439,20 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 
 - "showing 20 of 52,341 hunks" — a cap is a floor, not a total.
 - "2 files exceed the diff cap — compared by hash only" — a skipped file is disclosed, never dropped.
-- A `modified` **always** carries a reason; never "modified" with an empty diff (the prototype's
-  headline bug: EOL/encoding-only changes reported as modified-with-nothing-to-show).
+- A `modified` **always** carries a reason; never "modified" with an empty diff (an EOL- or
+  encoding-only change is `eol` or `encoding`, not modified-with-nothing-to-show).
 - `identical` = compared-and-equal, distinct from `not compared` (skipped by a cap).
 - A file that can't be read (locked, gone since the walk, access denied) never stops the compare and is never
   called identical: it is listed `[unreadable]` with why (a pair as modified with no reason, an add or remove
-  as itself, left out of rename matching), every summary warns, and the CLI exits 3. Since v1.0.127 the why
+  as itself, left out of rename matching), every summary warns, and the CLI exits 3. The why
   starts with its cause, and a pair's with its side, `[right, in use] …` (causes: denied, in use, missing, path too
-  long, offline (a cloud file's errors only, since v1.0.135), network, disk error, else the Windows error code, or
+  long, offline (a cloud file's errors only), network, disk error, else the Windows error code, or
   the error's type when it has none); an add or remove is its one side's file. The warning ends with them counted, no names:
   `By side and cause: v1 denied 2 · base in use 1` (compare3 names the trees base / v1 / v2). A pair's side is
   the one that fails to open again; `a side` when both open by then. Files are opened so a
   writer can keep writing (a log being appended to is still read), and the hashes read are kept even when a
   compare fails. A file the server won't open for overlapped reads (Windows error 87, seen on a share for a few
-  files a plain open reads fine) is opened plainly instead and read the same (since v1.0.132).
+  files a plain open reads fine) is opened plainly instead and read the same.
 - Trees that stop answering are not 28,000 unreadable files. After any failed read the compare checks that each
   tree's root is still there and that a file it read earlier still opens. If they do, the file alone is at fault:
   it is tried again (after 1 s, then 4 s; a vanished file at once is final) and then listed `[unreadable]` as above.
@@ -672,7 +650,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   (BOM, whitespace and line endings normalized byte by byte by the same rule, stopping at the first real difference), so
   a large LF→CRLF change is still `eol`; past 64 MB, or in UTF-16/32, a difference is `content` unchecked.
 - `verify` checks CodeDiffer, not only the manifest: with the trees it runs CodeDiffer's own compare and
-  requires exactly the manifest's files, reasons and rename similarities (death_1.3.1: 1,989/1,989 and
+  requires exactly the manifest's files, reasons and rename similarities (on the `death` corpus: 1,989/1,989 and
   1,986/1,986); the 3-way gate needs the exact decomposition, or reconstruction AND a merge conflicting in
   exactly the manifest's files AND every region being what it says against the trees (a conflict both sides
   changed, differently, that some minimal alignment of each side leaves without a base line both sides keep — diff3
@@ -681,7 +659,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
   (one side's change is one hunk of a minimal diff), neither overlapping nor abutting another change, the other
   side's or its own side's; an edit both sides made alike only where they really did), AND compare3 itself
   — over the whole trees, lines with their endings — conflicting in exactly the manifest's files and merging
-  none it leaves out (death_1.3.1: 1,935 of 1,935). Every modified record's `oldSha`/`newSha`/`oldSize`/`newSize`
+  none it leaves out (on `death`: 1,935 of 1,935). Every modified record's `oldSha`/`newSha`/`oldSize`/`newSize`
   is checked against the trees' files, whatever its reason: the digest only proves the manifest agrees with itself.
 - `verify` reads a sharded delta (CodeSpawner 1.1.x `--shard-size`) from its index, `<corpus>-delta.index.json`;
   a page alone is refused. Each page in the index's catalog must be beside it with the catalog's sha256, index,
@@ -721,32 +699,33 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 
 ## 9. Measured costs (for sizing a run)
 
-Measured on death 1.0.9 (68,661 files, ~94 GB a tree), the share on a 1 Gbit link that tops out ~95–110 MB/s:
+Measured on CodeSpawner's synthetic `death` corpus (~70–75k files, ~91–94 GB a tree), over a share on a 1 Gbit link
+that tops out ~95–110 MB/s:
 
 | Operation | Cost |
 |---|---|
 | Cold `compare` / `compare3` / `apply` over the share (no or partial hash cache) | reads at link speed for 10–60 min (189 GB in 33 min); one SHA-256 pass per pair at link speed, an estimated fifth of a core (the ~1–2 % once listed here was the tick-sampled count), ~160 MB RAM |
 | Compare reading CodeCompass ledgers (only uncached big + changed files read, e.g. 17 GB) | several minutes at link speed |
 | Cold compare of large local trees | reads the trees end to end, at disk speed; hashing keeps up |
-| CPU of a cold local compare (counted by cycles, files in the OS cache, a 6-core desktop CPU) | ~5–6 CPU-s per GB of tree: one SHA-256 pass per identical pair, ~0.25 GB/s a core without SHA instructions; compare3's v2 adds ~1 CPU-s per GB (read beside base: XxHash128 only). death_1.3.1 slice, 5.5 GB × 3: `compare` 6 s wall / ~25–34 CPU-s, `compare3` 10.5 s / ~29–39 CPU-s |
-| compare3's merge (the files both sides changed, read and merged line by line) | about 7 times their three versions' bytes allocated (death_1.3.1: 1,985 files, 102 MB read, 734 MB allocated, 3–4 s on one core); only the files' own text and lines, not held after |
+| CPU of a cold local compare (counted by cycles, files in the OS cache, a 6-core desktop CPU) | ~5–6 CPU-s per GB of tree: one SHA-256 pass per identical pair, ~0.25 GB/s a core without SHA instructions; compare3's v2 adds ~1 CPU-s per GB (read beside base: XxHash128 only). A 5.5 GB × 3 slice of it: `compare` 6 s wall / ~25–34 CPU-s, `compare3` 10.5 s / ~29–39 CPU-s |
+| compare3's merge (the files both sides changed, read and merged line by line) | about 7 times their three versions' bytes allocated (on `death`: 1,985 files, 102 MB read, 734 MB allocated, 3–4 s on one core); only the files' own text and lines, not held after |
 | Warm `compare` / `compare3` (cache hits) | ~0 bytes read, a stat per file: 1–4 min, a few % CPU |
 | `verify` against the delta / conflict manifests | a warm compare of the two trees plus the changed files: 30 s–2 min |
 | `apply` dry run or `--write` after a warm compare | reads the changed files of three trees: ~1–2 min |
 | HTML report (`--html`, `report <id>`, `write_report`) | seconds, a ~20 MB write |
 | `report --large` / `blockdiff` | trivial, unless many giant files mean tens of GB to read |
-| `selftest` (5 compares, 3 dry-run applies, on 3 trees 5 resolves and 2 more apply-overlay dry runs on a copy of the merge, the MCP server's run of each tool, 3 reports) | warm, about 2 warm compares' worth of each per tree: death_1.3.1 base / v1 / v2, 3:00 on one core (1:40 on 8); a `--cold` first compare adds one full read |
+| `selftest` (5 compares, 3 dry-run applies, on 3 trees 5 resolves and 2 more apply-overlay dry runs on a copy of the merge, the MCP server's run of each tool, 3 reports) | warm, about 2 warm compares' worth of each per tree: `death` base / v1 / v2, 3:00 on one core (1:40 on 8); a `--cold` first compare adds one full read |
 
 Memory stays small throughout: compares stream and hold only the verdicts (peak working set about 160–380 MB).
 
-Threads (since v1.0.127): `compare`, `compare3`, `apply` and `apply-overlay`, and the MCP server's `start_compare` /
-`start_compare3`, run 64 threads (32 before v1.0.141) when any tree is on a share (a UNC path, a mapped or network drive) and
+Threads: `compare`, `compare3`, `apply` and `apply-overlay`, and the MCP server's `start_compare` /
+`start_compare3`, run 64 threads when any tree is on a share (a UNC path, a mapped or network drive) and
 min(cores, 8) otherwise (a drive Windows can't identify counts as a share); `--threads N` (MCP `threads`, up to
 64) sets it for a run. Over a share a file is mostly a
-wait on the server, so more threads overlap more waits: a warm compare of ~30k files over a work share took 2:08
-at 8 threads and 0:32 at 32, the same verdicts. On a local disk more threads only queue. Since v1.0.140 a run
+wait on the server, so more threads overlap more waits: a warm compare of ~30k files over a production share took 2:08
+at 8 threads and 0:32 at 32, the same verdicts. On a local disk more threads only queue. A run
 starts all its threads at once: each blocks on the server, and the runtime otherwise adds one only about every
-half second past its starting count, so a 20-second phase never reached them (at work, 64 and 128 threads both
+half second past its starting count, so a 20-second phase never reached them (on that share, 64 and 128 threads both
 ran about 68 and timed the same).
 
 Net: the agent pays for a summary plus what it opens; the human gets a shareable shell that lazily

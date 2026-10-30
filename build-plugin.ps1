@@ -9,7 +9,7 @@ $root = $PSScriptRoot
 $binDir = Join-Path $root "plugin/bin"
 
 # A server or CLI started from plugin/bin (claude --plugin-dir on the checkout) locks its binaries. Unlike
-# CodeCompass's build-plugin this never stops it: it may be another session's server. Say which, and stop.
+# CodeCompass's build-plugin this never stops it: it may be another Claude Code session's server. Say which, and stop.
 $binFull = [System.IO.Path]::GetFullPath($binDir)
 function Get-Locking {
     @(Get-Process -Name "CodeDiffer.Mcp", "CodeDiffer.Cli" -ErrorAction SilentlyContinue | Where-Object {

@@ -10,7 +10,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 8, tier 3: edited-rename scoring is bounded (and says so when it stops short), a cancel reaches the
+/// Code review pass 8, tier 3: edited-rename scoring is bounded (and says so when it stops short), a cancel reaches the
 /// streamed reason check and the giant-file block diff, and a rename taken as done by likeness says so.
 /// </summary>
 public sealed class BoundsTests : IDisposable

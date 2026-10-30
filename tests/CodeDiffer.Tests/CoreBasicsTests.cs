@@ -49,7 +49,7 @@ public class InputValidationTests
     {
         var missing = Path.Combine(Path.GetTempPath(), $"codediffer-nope-{Guid.NewGuid():N}");
         var real = Path.GetTempPath();
-        // Regression: the prototype reported success (all-added/all-deleted) on a missing path.
+        // Regression: an early prototype reported success (all-added/all-deleted) on a missing path.
         Assert.Throws<DirectoryNotFoundException>(() => InputValidation.ValidateTrees(missing, real));
         Assert.Throws<DirectoryNotFoundException>(() => InputValidation.ValidateTrees(real, missing));
     }

@@ -180,7 +180,7 @@ public sealed class CompareProgress
         // over the first few giants would project hours of them onto 60k small files. When everything comes
         // from the cache, bytes "finish" at once and time follows the per-file cost (a stat each).
         // The exception is the tail: once the bytes are nearly all done, tens of thousands of small files can
-        // remain (death: 58k files, 0.1 GB, 3.5 min), so there it is the recent files-per-second rate that counts.
+        // remain (e.g. 58k small files, 0.1 GB, 3.5 min), so there it is the recent files-per-second rate that counts.
         if (BytesRead > 0)
         {
             if (bytes == 0 || SameSizeBytes == 0) return null;

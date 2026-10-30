@@ -8,7 +8,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 14, tier 1: verify passes my own 3-way decomposition wherever it is right (the merge's lines among
+/// Code review pass 14, tier 1: verify passes my own 3-way decomposition wherever it is right (the merge's lines among
 /// identical lines read as the merge reads them, and an insert both sides made told from one side's), and reads the
 /// trees as the engine does (see also <see cref="DeltaTreeCrossCheckTests"/> and <see cref="InPlaceRunTests"/>).
 /// </summary>

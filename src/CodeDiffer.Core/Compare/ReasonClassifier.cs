@@ -6,7 +6,7 @@ namespace CodeDiffer.Core.Compare;
 /// <summary>
 /// Classifies WHY two files (already known to differ in bytes) are modified — the honesty-contract
 /// reason. Precedence (first match wins):
-///   1. <b>binary</b> — a NUL (no BOM) on EITHER side. Fixes the prototype's one-sided binary bug.
+///   1. <b>binary</b> — a NUL (no BOM) on EITHER side. Catches a one-sided binary flip.
 ///   2. <b>encoding</b> — decoded text identical, bytes differ (UTF-8↔UTF-16 / BOM).
 ///   3. <b>eol</b> — equal after EOL normalization (LF↔CRLF). Never reported as "content with no diff".
 ///   4. <b>whitespace</b> — the same lines but for indentation, trailing whitespace and the width of inner runs of it

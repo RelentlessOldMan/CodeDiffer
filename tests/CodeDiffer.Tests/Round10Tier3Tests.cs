@@ -8,7 +8,7 @@ using Xunit;
 namespace CodeDiffer.Tests;
 
 /// <summary>
-/// Review round 10, tier 3 (and round 9's leftovers): a legacy file re-saved as UTF-8 is `encoding` at any size; a path
+/// Code review pass 10, tier 3 and pass 9's leftovers: a legacy file re-saved as UTF-8 is `encoding` at any size; a path
 /// shown with U+FFFD finds its file; a listing's hunk count is the default context's; a saved diff never collides with a
 /// directory; reason=unreadable lists the unreadable; export's out_path stays out of the trees.
 /// </summary>
