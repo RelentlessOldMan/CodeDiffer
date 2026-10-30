@@ -13,10 +13,11 @@ namespace CodeDiffer.Core.ThreeWay;
 /// the v1 path deleted for that file (a rename); null for a conflict not written. <see cref="V1At"/>/<see cref="V2At"/>:
 /// where each side has the file (null: that side deleted it, or doesn't have it); <see cref="V2Size"/>/<see cref="V2Ticks"/>:
 /// v2's file when the overlay was written (size -1: it couldn't be read). <see cref="Failed"/>: a file the overlay failed
-/// to write — not a choice to make here; write the overlay again.
+/// to write — not a choice to make here; write the overlay again. <see cref="MarkersSize"/>/<see cref="MarkersTicks"/>:
+/// the markers file as the overlay wrote it (size -1: not recorded), so one edited by hand since is never set aside.
 /// </summary>
 public sealed record OverlayConflict(string Path, string Kind, string? Note, string? Markers, string? AlsoDelete,
-    string? V1At, string? V2At, long V2Size, long V2Ticks, bool Failed);
+    string? V1At, string? V2At, long V2Size, long V2Ticks, bool Failed, long MarkersSize = -1, long MarkersTicks = 0);
 
 /// <summary>A choice recorded for one conflict, and what it did to the overlay (so it can be undone): the markers file
 /// moved to <c>set-aside\</c>, v2's file copied into <c>files\</c>, and the lines it added to and removed from
@@ -65,6 +66,11 @@ public sealed class OverlayConflicts
             w.WriteNumber("v2Size", c.V2Size);
             w.WriteNumber("v2Ticks", c.V2Ticks);
             if (c.Failed) w.WriteBoolean("failed", true);
+            if (c.Markers is not null && c.MarkersSize >= 0)
+            {
+                w.WriteNumber("markersSize", c.MarkersSize);
+                w.WriteNumber("markersTicks", c.MarkersTicks);
+            }
             w.WriteEndObject();
         }
         w.WriteEndArray();
@@ -93,9 +99,10 @@ public sealed class OverlayConflicts
         var root = doc.RootElement;
         var all = new List<OverlayConflict>();
         foreach (var c in root.GetProperty("conflicts").EnumerateArray())
-            all.Add(new OverlayConflict(P(c, "path")!, c.GetProperty("kind").GetString()!, c.GetProperty("note").GetString(),
-                P(c, "markers"), P(c, "alsoDelete"), P(c, "v1"), P(c, "v2"), c.GetProperty("v2Size").GetInt64(),
-                c.GetProperty("v2Ticks").GetInt64(), c.TryGetProperty("failed", out var f) && f.GetBoolean()));
+            all.Add(new OverlayConflict(Rel(c, "path")!, c.GetProperty("kind").GetString()!, P(c, "note"),
+                Rel(c, "markers"), Rel(c, "alsoDelete"), Rel(c, "v1"), Rel(c, "v2"), c.GetProperty("v2Size").GetInt64(),
+                c.GetProperty("v2Ticks").GetInt64(), c.TryGetProperty("failed", out var f) && f.GetBoolean(),
+                c.TryGetProperty("markersSize", out var ms) ? ms.GetInt64() : -1, c.TryGetProperty("markersTicks", out var mt) ? mt.GetInt64() : 0));
         return new OverlayConflicts
         {
             Dir = overlay,
@@ -110,6 +117,17 @@ public sealed class OverlayConflicts
     private static string? P(JsonElement c, string name)
         => c.GetProperty(name).GetString() is { } s ? ResultStore.Unescaped(s) : null;
 
+    /// <summary>A path inside a tree, as the overlay's own files hold it; anything else (rooted, "..", empty parts) is
+    /// refused, so an edited conflicts.json, decisions.json or journal can never reach outside the overlay and the trees.</summary>
+    internal static string? Rel(JsonElement c, string name) => P(c, name) is { } p ? Plain(p) : null;
+
+    internal static string Plain(string p)
+    {
+        if (p.Length == 0 || System.IO.Path.IsPathRooted(p) || (OperatingSystem.IsWindows() && p.Contains(':')) || p.Split('/', '\\').Any(x => x is "" or "." or ".."))
+            throw new ArgumentException($"not a plain path inside a tree: \"{ResultStore.Escaped(p)}\" — this overlay's records were edited; write the overlay again");
+        return p;
+    }
+
     internal static Dictionary<string, ConflictDecision> ReadDecisions(string file)
     {
         var d = new Dictionary<string, ConflictDecision>(StringComparer.Ordinal);
@@ -120,10 +138,10 @@ public sealed class OverlayConflicts
     }
 
     internal static ConflictDecision Decision(JsonElement e)
-        => new(P(e, "path")!, e.GetProperty("choice").GetString()!, e.GetProperty("rule").GetString()!,
-            e.GetProperty("at").GetDateTime(), P(e, "setAside"), P(e, "copied"),
-            [.. e.GetProperty("addedDeletes").EnumerateArray().Select(x => ResultStore.Unescaped(x.GetString()!))],
-            [.. e.GetProperty("removedDeletes").EnumerateArray().Select(x => ResultStore.Unescaped(x.GetString()!))]);
+        => new(Rel(e, "path")!, e.GetProperty("choice").GetString()!, e.GetProperty("rule").GetString()!,
+            e.GetProperty("at").GetDateTime(), Rel(e, "setAside"), Rel(e, "copied"),
+            [.. e.GetProperty("addedDeletes").EnumerateArray().Select(x => Plain(ResultStore.Unescaped(x.GetString()!)))],
+            [.. e.GetProperty("removedDeletes").EnumerateArray().Select(x => Plain(ResultStore.Unescaped(x.GetString()!)))]);
 
     internal static void WriteDecision(Utf8JsonWriter w, ConflictDecision d)
     {
@@ -204,8 +222,9 @@ public sealed class OverlayConflicts
 
 /// <summary>Which conflicts a rule picks: any of its path patterns (none: every path) and any of its kinds (none: every
 /// kind). A pattern is '/'-separated, with <c>*</c> (within a name), <c>?</c> and <c>**</c> (any folders). Without a '/'
-/// it matches a file or folder name at any depth (<c>*.h</c>, <c>generated</c>); with one it is anchored at the tree's
-/// top and matches that path or anything under it (<c>src/gen</c>, <c>src/**/regs_*.h</c>). A conflict matches by any
+/// it matches a file or folder name at any depth (<c>*.h</c>, <c>generated</c>); with one (a leading one too:
+/// <c>/generated</c>) it is anchored at the tree's top and matches that path or anything under it (<c>src/gen</c>,
+/// <c>src/**/regs_*.h</c>). A leading <c>./</c> is dropped; an empty pattern is refused (it would pick everything). A conflict matches by any
 /// path it has: its base path, or where v1 or v2 has it. Case is ignored where the file system ignores it.</summary>
 public sealed class ConflictMatcher
 {
@@ -218,9 +237,13 @@ public sealed class ConflictMatcher
         _kinds = kinds;
         foreach (var raw in patterns)
         {
-            var p = raw.Replace('\\', '/').Trim('/');
-            if (p.Length == 0) continue;
-            bool name = !p.Contains('/');
+            var p = raw.Trim().Replace('\\', '/');
+            while (p.StartsWith("./", StringComparison.Ordinal)) p = p[2..]; // what a shell's completion gives: .\src\gen
+            bool anchored = p.StartsWith('/');
+            p = p.Trim('/');
+            // An empty pattern would pick every conflict: --all says that out loud instead.
+            if (p.Length == 0 || p == ".") throw new ArgumentException($"an empty pattern (\"{raw}\") picks nothing: name a path or a name, or use --all for every conflict");
+            bool name = !anchored && !p.Contains('/');
             var re = new StringBuilder("^");
             for (int i = 0; i < p.Length; i++)
             {
@@ -270,145 +293,233 @@ public sealed record ResolveResult(string Overlay, string Choice, string Rule, b
 /// <item>v2: the same, then v2's file is copied into <c>files\</c> at v2's path (only if it is still the file the
 ///   overlay saw: its size and time), and v1's copy at another path, or one v2 deleted, goes into <c>deletes.txt</c>.</item>
 /// </list>
-/// Dry run unless <c>write</c>. A conflict already decided is left alone (undo it first). A path collision or a
-/// file/directory clash can't be taken from v2 here (another change lands on the same path): decide it by hand. While it
-/// writes, the overlay holds <c>RESOLVING.json</c> (what it is doing), and apply-overlay refuses it; a resolve that was
-/// stopped is finished by the next one. An overlay already applied (or being applied) is refused: a choice made now
+/// Dry run unless <c>write</c>. A conflict already decided is left alone (undo it first), and so is one whose markers
+/// file was edited since the overlay was written (merged by hand). v2 is never taken where its file would land on
+/// another file: one v1 has of its own, another conflict's, or another write in <c>files\</c>; nor for a kind whose
+/// sides aren't known well enough (<see cref="NotFromV2"/>): decide those by hand. While it writes, the overlay holds
+/// <c>RESOLVING.json</c> (what it is doing; created only if absent, so two resolves never write at once), and
+/// apply-overlay refuses it; a resolve that was stopped is finished by the next one, which drops (and reports) a choice
+/// of v2 whose file changed in between. An overlay already applied (or being applied) is refused: a choice made now
 /// would not reach that tree.
 /// </summary>
 public static class ConflictResolver
 {
     public static readonly string[] Choices = ["v1", "v2", "regenerate", "undo"];
 
+    /// <summary>Kinds v2 is never taken for: v2's path is where another change lands or a directory, or a side is a link
+    /// not followed, a directory not listed, a name Windows can't open, or a file that couldn't be read.</summary>
+    public static readonly IReadOnlySet<string> NotFromV2 = new HashSet<string>(StringComparer.Ordinal)
+        { "path collision", "file/directory clash", "unreadable", "behind a link", "unlisted directory", "unopenable name" };
+
     public static ResolveResult Run(string overlay, string choice, IReadOnlyList<string> patterns, IReadOnlyList<string> kinds, bool write)
     {
         if (!Choices.Contains(choice)) throw new ArgumentException($"the choice is v1, v2, regenerate or undo, not \"{choice}\"");
+        var matcher = new ConflictMatcher(patterns, kinds);
         var s = OverlayConflicts.Load(overlay);
-        foreach (var f in new[] { OverlayApplier.AppliedName, OverlayApplier.ApplyingName })
-            if (File.Exists(Path.Combine(s.Dir, f)))
-                throw new ArgumentException($"this overlay has been applied (see {f}): a choice made now would not reach that tree — " +
-                                            "write the overlay again and decide before applying");
+        RefuseApplied(s.Dir);
         var journal = Path.Combine(s.Dir, OverlayConflicts.ResolvingName);
         bool finished = false;
+        var refused = new List<(string, string)>();
         if (File.Exists(journal))
         {
             if (!write) throw new ArgumentException($"a resolve was stopped part way ({OverlayConflicts.ResolvingName}): run a resolve with --write to finish it first");
-            Finish(s, journal);
+            using (var held = Hold(journal)) refused.AddRange(Finish(s, journal, held));
             finished = true;
             s = OverlayConflicts.Load(s.Dir);
         }
+        var stamp = Stamp(s.Dir);
 
-        var matcher = new ConflictMatcher(patterns, kinds);
         string rule = matcher.ToString() is { Length: > 0 } r ? r : "--all";
         var deletes = ReadDeletes(s.Dir);
         var files = Path.Combine(s.Dir, "files");
+        var aside = Path.Combine(s.Dir, OverlayConflicts.SetAsideDir);
         var done = new List<ConflictDecision>();
-        var refused = new List<(string, string)>();
         int already = 0, notDecided = 0;
         var now = DateTime.UtcNow;
         var claimed = new HashSet<string>(TreeMerger.PathComparer); // files\ paths this run copies into
+        // How many conflicts have each path (on a side, or as their markers): v2's file never lands on another's.
+        var holders = new Dictionary<string, int>(TreeMerger.PathComparer);
+        foreach (var c in s.All)
+            foreach (var p in new[] { c.V1At, c.V2At, c.Markers }.OfType<string>().Distinct(TreeMerger.PathComparer))
+                holders[p] = holders.GetValueOrDefault(p) + 1;
         foreach (var c in s.All.Where(matcher.Matches))
         {
             bool isDecided = s.Decisions.TryGetValue(c.Path, out var was);
             if (choice == "undo")
             {
-                if (isDecided) done.Add(was!);
-                else notDecided++;
+                if (!isDecided) { notDecided++; continue; }
+                // Its markers file goes back where it was, unless another file is there now.
+                bool same = was!.SetAside is not null && was.Copied is not null && TreeMerger.PathComparer.Equals(was.SetAside, was.Copied);
+                if (was.SetAside is { } m && !same && File.Exists(Path.Combine(aside, Native(m))) && File.Exists(Path.Combine(files, Native(m))))
+                {
+                    refused.Add((c.Path, $"files\\{m} holds another file now — undo the choice that put it there first"));
+                    continue;
+                }
+                done.Add(was);
                 continue;
             }
             if (isDecided) { already++; continue; }
             if (c.Failed) { refused.Add((c.Path, "the overlay failed to write it: write the overlay again")); continue; }
+            if (MarkersEdited(files, c) is { } edited) { refused.Add((c.Path, edited)); continue; }
             if (choice != "v2")
             {
                 var removed = c.AlsoDelete is { } ad && deletes.Contains(ad) ? new[] { ad } : [];
                 done.Add(new ConflictDecision(c.Path, choice, rule, now, c.Markers, null, [], removed));
                 continue;
             }
-            if (c.Kind is "path collision" or "file/directory clash")
+            if (NotFromV2.Contains(c.Kind))
             {
-                refused.Add((c.Path, $"{c.Kind}: another change lands on the same path — decide it by hand"));
+                refused.Add((c.Path, $"{c.Kind}: v2's side can't be taken in bulk — decide it by hand"));
                 continue;
             }
-            if (c.V2At is not null)
+            if (c.V2At is { } v2At)
             {
-                if (c.V2Size < 0) { refused.Add((c.Path, "v2's file couldn't be read when the overlay was written")); continue; }
+                if (c.V2Size < 0) { refused.Add((c.Path, "v2's file couldn't be read (or wasn't the file compared) when the overlay was written")); continue; }
                 if (V2Changed(s, c) is { } why) { refused.Add((c.Path, why)); continue; }
-                var dest = Path.Combine(files, Native(c.V2At));
-                bool own = c.Markers is not null && TreeMerger.PathComparer.Equals(c.Markers, c.V2At);
-                if (!own && (File.Exists(dest) || Directory.Exists(dest)) || !claimed.Add(c.V2At))
-                {
-                    refused.Add((c.Path, $"another change also writes {c.V2At} in files\\ — decide it by hand"));
-                    continue;
-                }
+                var dest = Path.Combine(files, Native(v2At));
+                bool own = c.Markers is not null && TreeMerger.PathComparer.Equals(c.Markers, v2At);
+                bool v1Own = c.V1At is not null && TreeMerger.PathComparer.Equals(c.V1At, v2At);
+                string? clash =
+                    !own && (File.Exists(dest) || Directory.Exists(dest)) || claimed.Contains(v2At) ? $"another change also writes {v2At} in files\\"
+                    : holders.GetValueOrDefault(v2At) > 1 ? $"another conflict has {v2At} too"
+                    : !v1Own && (File.Exists(Path.Combine(s.V1, Native(v2At))) || Directory.Exists(Path.Combine(s.V1, Native(v2At))))
+                        ? $"v1 has its own {v2At}: v2's would overwrite it"
+                    : FileInTheWay(files, v2At) is { } f ? $"files\\{f} is a file where {v2At} needs a folder"
+                    : null;
+                if (clash is not null) { refused.Add((c.Path, clash + " — decide it by hand")); continue; }
+                claimed.Add(v2At);
             }
             var added = new List<string>();
             if (c.V1At is { } at && (c.V2At is null || !string.Equals(at, c.V2At, StringComparison.Ordinal)) && !deletes.Contains(at)) added.Add(at);
-            var removedDeletes = c.V2At is { } v2At && deletes.Contains(v2At) ? new[] { v2At } : [];
+            var removedDeletes = c.V2At is { } v2d && deletes.Contains(v2d) ? new[] { v2d } : [];
             done.Add(new ConflictDecision(c.Path, choice, rule, now, c.Markers, c.V2At, added, removedDeletes));
         }
 
-        int undecided = s.All.Count - s.Decisions.Count + (choice == "undo" ? done.Count : -done.Count);
         if (write && done.Count > 0)
         {
-            WriteJournal(journal, choice == "undo", done);
-            Finish(s, journal);
+            using var held = Claim(journal, choice == "undo", done);
+            try
+            {
+                // Taken: now nothing else changes it. Check nothing did between reading it and taking it.
+                RefuseApplied(s.Dir);
+                if (Stamp(s.Dir) != stamp) throw new ArgumentException("another resolve changed this overlay meanwhile: run it again");
+            }
+            catch { held.Dispose(); File.Delete(journal); throw; }
+            var dropped = Finish(s, journal, held);
+            refused.AddRange(dropped);
+            done.RemoveAll(d => dropped.Any(x => x.Path == d.Path));
         }
+        int undecided = s.All.Count - s.Decisions.Count + (choice == "undo" ? done.Count : -done.Count);
         return new ResolveResult(s.Dir, choice, rule, write, done, refused, already, notDecided, undecided, finished);
     }
 
+    private static void RefuseApplied(string dir)
+    {
+        foreach (var f in new[] { OverlayApplier.AppliedName, OverlayApplier.ApplyingName })
+            if (File.Exists(Path.Combine(dir, f)))
+                throw new ArgumentException($"this overlay has been applied (see {f}): a choice made now would not reach that tree — " +
+                                            "write the overlay again and decide before applying");
+    }
+
+    /// <summary>deletes.txt and decisions.json as they are (length and time): what a resolve changes.</summary>
+    private static string Stamp(string dir)
+        => string.Join("|", new[] { "deletes.txt", OverlayConflicts.DecisionsName }.Select(n => new FileInfo(Path.Combine(dir, n)))
+            .Select(f => f.Exists ? $"{f.Length}:{f.LastWriteTimeUtc.Ticks}" : "-"));
+
+    /// <summary>Why a markers file mustn't be set aside: it was edited since the overlay wrote it (merged by hand).</summary>
+    private static string? MarkersEdited(string files, OverlayConflict c)
+    {
+        if (c.Markers is null || c.MarkersSize < 0) return null;
+        var fi = new FileInfo(Path.Combine(files, Native(c.Markers)));
+        if (!fi.Exists || fi.Length == c.MarkersSize && fi.LastWriteTimeUtc.Ticks == c.MarkersTicks) return null;
+        return $"files\\{c.Markers} was edited since the overlay was written (merged by hand?): it stays — delete it first to choose a side anyway";
+    }
+
+    /// <summary>The first folder of <paramref name="rel"/> that <c>files\</c> holds as a file.</summary>
+    private static string? FileInTheWay(string files, string rel)
+    {
+        var parts = rel.Split('/');
+        for (int i = 1; i < parts.Length; i++)
+        {
+            var p = string.Join('/', parts.Take(i));
+            if (File.Exists(Path.Combine(files, Native(p)))) return p;
+        }
+        return null;
+    }
+
     /// <summary>Carry out a journal: its file moves and copies (each safe to do twice), then deletes.txt and
-    /// decisions.json written whole, then the journal deleted.</summary>
-    private static void Finish(OverlayConflicts s, string journal)
+    /// decisions.json written whole, then the journal deleted. A choice of v2 whose file changed since it was made (a
+    /// stopped resolve finished later) is dropped, its markers put back, and returned with why.</summary>
+    private static List<(string Path, string Why)> Finish(OverlayConflicts s, string journal, FileStream held)
     {
         bool undo;
         List<ConflictDecision> ds;
-        using (var doc = JsonDocument.Parse(File.ReadAllBytes(journal)))
+        var bytes = new byte[held.Length];
+        held.ReadExactly(bytes);
+        using (var doc = JsonDocument.Parse(bytes))
         {
             undo = doc.RootElement.GetProperty("undo").GetBoolean();
             ds = [.. doc.RootElement.GetProperty("decisions").EnumerateArray().Select(OverlayConflicts.Decision)];
         }
         var files = Path.Combine(s.Dir, "files");
         var aside = Path.Combine(s.Dir, OverlayConflicts.SetAsideDir);
+        // Copies are made here, outside files\, so one stopped part way is never applied.
+        var temp = Path.Combine(aside, ".copying");
+        if (Directory.Exists(temp)) Directory.Delete(temp, recursive: true);
         var byPath = s.All.ToDictionary(c => c.Path, StringComparer.Ordinal);
+        var dropped = new List<(string, string)>();
+        var kept = new List<ConflictDecision>();
         foreach (var d in ds)
         {
             if (!undo)
             {
-                if (d.SetAside is { } m) SetAside(Path.Combine(files, Native(m)), Path.Combine(aside, Native(m)));
                 if (d.Copied is { } at)
                 {
                     var c = byPath[d.Path];
                     var src = Path.Combine(s.V2, Native(at));
                     var dest = Path.Combine(files, Native(at));
-                    if (File.Exists(dest) && TextInspector.SameBytes(dest, src)) continue;
-                    if (V2Changed(s, c) is { } why) throw new IOException($"{d.Path}: {why}");
-                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                    var tmp = Walk.TempNames.Claim(dest, ChangePorter.TempSuffix);
-                    try
+                    if (!(File.Exists(dest) && TextInspector.SameBytes(dest, src)))
                     {
+                        if (V2Changed(s, c) is { } why)
+                        {
+                            if (d.SetAside is { } m0 && File.Exists(Path.Combine(aside, Native(m0))) && !File.Exists(Path.Combine(files, Native(m0))))
+                                MoveBack(aside, files, m0);
+                            dropped.Add((d.Path, why + " (not taken)"));
+                            continue;
+                        }
+                        if (d.SetAside is { } m1) SetAside(files, aside, m1);
+                        Directory.CreateDirectory(temp);
+                        var tmp = Path.Combine(temp, Guid.NewGuid().ToString("N"));
                         File.Copy(src, tmp, overwrite: true);
+                        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
                         File.Move(tmp, dest, overwrite: true);
                     }
-                    catch { try { File.Delete(tmp); } catch (Exception x) when (x is IOException or UnauthorizedAccessException) { } throw; }
+                    else if (d.SetAside is { } m2 && !TreeMerger.PathComparer.Equals(m2, at)) SetAside(files, aside, m2);
                 }
+                else if (d.SetAside is { } m) SetAside(files, aside, m);
             }
             else
             {
-                var setAside = d.SetAside is { } m ? Path.Combine(aside, Native(m)) : null;
                 bool same = d.SetAside is not null && d.Copied is not null && TreeMerger.PathComparer.Equals(d.SetAside, d.Copied);
                 // v2's copy goes, unless it is where the markers file comes back (a run already put it back if none is aside).
-                if (d.Copied is { } at && !same) File.Delete(Path.Combine(files, Native(at)));
-                if (setAside is not null && File.Exists(setAside))
+                if (d.Copied is { } at && !same)
                 {
-                    var back = Path.Combine(files, Native(d.SetAside!));
-                    Directory.CreateDirectory(Path.GetDirectoryName(back)!);
-                    File.Move(setAside, back, overwrite: same);
+                    File.Delete(Path.Combine(files, Native(at)));
+                    Prune(Path.GetDirectoryName(Path.Combine(files, Native(at)))!, files);
+                }
+                if (d.SetAside is { } m && File.Exists(Path.Combine(aside, Native(m))))
+                {
+                    if (!same && File.Exists(Path.Combine(files, Native(m))))
+                        throw new IOException($"files\\{m} holds another file now — undo the choice that put it there, then run a resolve with --write again");
+                    MoveBack(aside, files, m, overwrite: same);
                 }
             }
+            kept.Add(d);
         }
+        if (Directory.Exists(temp)) Directory.Delete(temp, recursive: true);
 
         var deletes = ReadDeletes(s.Dir);
-        foreach (var d in ds)
+        foreach (var d in kept)
         {
             foreach (var x in d.AddedDeletes) { if (undo) deletes.Remove(x); else deletes.Add(x); }
             foreach (var x in d.RemovedDeletes) { if (undo) deletes.Add(x); else deletes.Remove(x); }
@@ -416,7 +527,7 @@ public static class ConflictResolver
         Replace(Path.Combine(s.Dir, "deletes.txt"), Encoding.UTF8.GetBytes(string.Concat(deletes.Select(d => ResultStore.Escaped(d) + "\n"))));
 
         var decisions = OverlayConflicts.ReadDecisions(Path.Combine(s.Dir, OverlayConflicts.DecisionsName));
-        foreach (var d in ds) { if (undo) decisions.Remove(d.Path); else decisions[d.Path] = d; }
+        foreach (var d in kept) { if (undo) decisions.Remove(d.Path); else decisions[d.Path] = d; }
         using (var ms = new MemoryStream())
         {
             using (var w = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
@@ -430,15 +541,36 @@ public static class ConflictResolver
             Replace(Path.Combine(s.Dir, OverlayConflicts.DecisionsName), ms.ToArray());
         }
         File.Delete(journal);
+        return dropped;
     }
 
     /// <summary>Move the markers file aside, once: a second run finds it aside already (and whatever is in files\ now is
-    /// v2's copy, not the markers).</summary>
-    private static void SetAside(string from, string to)
+    /// v2's copy, not the markers). The folder it leaves empty goes.</summary>
+    private static void SetAside(string files, string aside, string rel)
     {
+        string from = Path.Combine(files, Native(rel)), to = Path.Combine(aside, Native(rel));
         if (File.Exists(to) || !File.Exists(from)) return;
         Directory.CreateDirectory(Path.GetDirectoryName(to)!);
         File.Move(from, to);
+        Prune(Path.GetDirectoryName(from)!, files);
+    }
+
+    private static void MoveBack(string aside, string files, string rel, bool overwrite = false)
+    {
+        string from = Path.Combine(aside, Native(rel)), to = Path.Combine(files, Native(rel));
+        Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+        File.Move(from, to, overwrite);
+        Prune(Path.GetDirectoryName(from)!, aside);
+    }
+
+    /// <summary>Remove <paramref name="dir"/> and its parents while they're empty, up to (not including) <paramref name="stop"/>.</summary>
+    private static void Prune(string dir, string stop)
+    {
+        for (; dir.Length > stop.Length && ResultStore.IsUnder(dir, stop); dir = Path.GetDirectoryName(dir)!)
+        {
+            if (!Directory.Exists(dir) || Directory.EnumerateFileSystemEntries(dir).Any()) return;
+            try { Directory.Delete(dir); } catch (IOException) { return; }
+        }
     }
 
     private static string? V2Changed(OverlayConflicts s, OverlayConflict c)
@@ -454,7 +586,9 @@ public static class ConflictResolver
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return $"v2's file {c.V2At} can't be read: {ex.Message}"; }
     }
 
-    private static void WriteJournal(string journal, bool undo, IReadOnlyList<ConflictDecision> ds)
+    /// <summary>Write the journal, only if there is none, and hold it: it is also the lock, so two resolves never write
+    /// at once.</summary>
+    private static FileStream Claim(string journal, bool undo, IReadOnlyList<ConflictDecision> ds)
     {
         using var ms = new MemoryStream();
         using (var w = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
@@ -467,7 +601,26 @@ public static class ConflictResolver
             w.WriteEndArray();
             w.WriteEndObject();
         }
-        Replace(journal, ms.ToArray());
+        var tmp = journal + "." + Guid.NewGuid().ToString("N") + ".codediffer-tmp";
+        File.WriteAllBytes(tmp, ms.ToArray());
+        try { File.Move(tmp, journal, overwrite: false); }
+        catch (IOException) when (File.Exists(journal))
+        {
+            File.Delete(tmp);
+            throw new ArgumentException("another resolve is writing this overlay: wait for it, then run this one again");
+        }
+        return Hold(journal);
+    }
+
+    /// <summary>Open the journal so that no other resolve can while this one carries it out: a journal no one holds is
+    /// one a resolve was stopped part way through.</summary>
+    private static FileStream Hold(string journal)
+    {
+        try { return new FileStream(journal, FileMode.Open, FileAccess.Read, FileShare.Delete); }
+        catch (IOException)
+        {
+            throw new ArgumentException("another resolve is writing this overlay: wait for it, then run this one again");
+        }
     }
 
     private static SortedSet<string> ReadDeletes(string dir)

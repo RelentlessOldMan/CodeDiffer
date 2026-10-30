@@ -42,6 +42,8 @@ public static class OverlayApplier
             throw new ArgumentException($"{overlay} was not finished (INCOMPLETE.txt): write the overlay again, don't apply this one");
         if (File.Exists(Path.Combine(overlay, OverlayConflicts.ResolvingName)))
             throw new ArgumentException($"a resolve of {overlay} was stopped part way ({OverlayConflicts.ResolvingName}): run codediffer resolve with --write to finish it first");
+        var decisionsFile = new FileInfo(Path.Combine(overlay, OverlayConflicts.DecisionsName));
+        var decided = decisionsFile.Exists ? decisionsFile.LastWriteTimeUtc.Ticks : 0;
         // Written from a compare that couldn't list a directory (CodeDiffer 1.0.36 and before still wrote one): its
         // deletes may be listing failures.
         if (File.ReadAllText(Path.Combine(overlay, "OVERLAY.txt")).Contains("INCOMPLETE COMPARE", StringComparison.Ordinal))
@@ -72,7 +74,18 @@ public static class OverlayApplier
         if (progress is not null) progress.Total = deletes.Count + copies.Count;
 
         var applying = Path.Combine(overlay, ApplyingName);
-        if (write) File.WriteAllText(applying, $"being applied to\n{target}\n(if this stays, the apply was stopped or something failed: run it again to finish)\n");
+        if (write)
+        {
+            File.WriteAllText(applying, $"being applied to\n{target}\n(if this stays, the apply was stopped or something failed: run it again to finish)\n");
+            // A resolve takes RESOLVING.json, then looks for APPLYING.txt; this writes APPLYING.txt, then looks for a
+            // resolve that started, or finished, since this read the overlay. One of the two always sees the other.
+            decisionsFile.Refresh();
+            if (File.Exists(Path.Combine(overlay, OverlayConflicts.ResolvingName)) || (decisionsFile.Exists ? decisionsFile.LastWriteTimeUtc.Ticks : 0) != decided)
+            {
+                File.Delete(applying);
+                throw new ArgumentException($"a resolve is changing {overlay}: wait for it, then apply again");
+            }
+        }
 
         var failed = new System.Collections.Concurrent.ConcurrentBag<(string, string)>();
         int deleted = 0, gone = 0, copied = 0, there = 0, notReached = 0;

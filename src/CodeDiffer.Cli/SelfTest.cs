@@ -532,6 +532,7 @@ internal static class SelfTest
             const string A = "3-way";
             _facts["3-way trees"] = $"base {b}  ·  v1 {v1}  ·  v2 {v2}";
             var merge = Path.Combine(_work, "merge");
+            string? conflictsHead = null;
             var c = Run("compare3", cli, ["compare3", b, v1, v2, "--merge-out", merge, .. ThreadArgs]);
             var id = IdOf(c.Out);
             if (c.Exit is not (0 or 1 or 3) || id is null) { Add(A, "compare3 finishes", Verdict.Fail, $"exit {c.Exit}: {Brief(c.Err, 3)}"); return; }
@@ -565,6 +566,7 @@ internal static class SelfTest
                     (wrong.Count + unlisted.Count > 0 ? "; wrong: " + Few(wrong.Concat(unlisted)) : ""));
                 var ao = Run("apply-overlay (dry run)", cli, ["apply-overlay", merge, v1, .. ThreadArgs]);
                 Expect(A, "apply-overlay onto v1 (dry run)", ao.Exit == 0, $"exit {ao.Exit} · {Brief(ao.Out, 2).Replace('\n', ' ')}");
+                conflictsHead = Resolve(A, merge, v1, v2, conflicts);
             }
 
             var port = Run("apply base→v2 onto v1 (dry run)", cli, ["apply", b, v2, v1, .. ThreadArgs]);
@@ -610,9 +612,80 @@ internal static class SelfTest
                 var diff = DirDiff(merge, mm);
                 Expect(M, "write_merge is the CLI's overlay", diff.Count == 0, diff.Count == 0 ? $"{Directory.EnumerateFiles(mm, "*", SearchOption.AllDirectories).Count()} file(s) byte-equal" : "differ: " + Few(diff));
             }
+            if (conflictsHead is not null)
+            {
+                var lcf = _mcp.Call("list_conflicts", Args(("overlay_dir", merge)));
+                Expect(M, "list_conflicts counts as the CLI does", !lcf.Error && Brief(lcf.Text, 1) == conflictsHead, Brief(lcf.Text, 1));
+            }
+            else Add(M, "list_conflicts counts as the CLI does", Verdict.Skip, "no overlay to read");
             var wr = _mcp.Call("write_report", Args(("compare_id", mid)));
             var rx = Regex.Match(wr.Text, @"report: (.+index\.html)");
             Expect(M, "write_report writes the HTML report", rx.Success && File.Exists(rx.Groups[1].Value.Trim()), Brief(wr.Text, 1));
+        }
+
+        /// <summary>The bulk conflict choices, on a copy of the overlay (the original stays as written, for the
+        /// write_merge check): conflicts lists every conflict; a dry run changes nothing; taking v2 for all copies v2's
+        /// bytes in, apply-overlay still takes it, and undo puts the overlay back byte for byte; the same for v1.
+        /// Returns conflicts' first line, for list_conflicts to match.</summary>
+        private string? Resolve(string area, string merge, string v1, string v2, List<Merge3Entry> conflicts)
+        {
+            var cf = Run("conflicts", cli, "conflicts", merge);
+            OverlayConflicts? oc = null;
+            try { oc = OverlayConflicts.Load(merge); } catch (Exception ex) when (ex is ArgumentException or IOException or JsonException) { }
+            var missing = oc is null ? [] : conflicts.Where(e => !oc.All.Any(x => x.Path == e.Path)).Select(e => e.Path).ToList();
+            Expect(area, "conflicts lists every conflict", cf.Exit == 0 && oc is not null && missing.Count == 0,
+                oc is null ? $"exit {cf.Exit}: {Brief(cf.Err, 2)}" : $"{oc.All.Count} in conflicts.json · {conflicts.Count} from compare3" + (missing.Count > 0 ? "; missing: " + Few(missing) : ""));
+            if (oc is null || oc.All.Count == 0)
+            {
+                Add(area, "resolve v2, then undo", Verdict.Skip, oc is null ? "no conflicts.json" : "no conflicts");
+                return oc is null ? null : Brief(cf.Out, 1);
+            }
+
+            var copy = Path.Combine(_work, "merge-resolve");
+            CopyDir(merge, copy);
+            static (int Decided, int Refused) Counts(string text) =>
+                (Regex.Match(text, @"([\d,]+) conflict\(s\) (would be )?decided") is { Success: true } d ? Num(d.Groups[1].Value) : -1,
+                 Regex.Match(text, @"· ([\d,]+) refused") is { Success: true } r ? Num(r.Groups[1].Value) : 0);
+            List<string> Changed() => DirDiff(merge, copy).Where(k => !k.Equals(OverlayConflicts.DecisionsName, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            var dry = Run("resolve v2 --all (dry run)", cli, "resolve", copy, "v2", "--all");
+            var (dd, dr) = Counts(dry.Out);
+            var touched = Changed();
+            Expect(area, "resolve v2 --all (dry run) changes nothing", dry.Exit is 0 or 1 && dd + dr == oc.All.Count && touched.Count == 0,
+                $"exit {dry.Exit} · {dd} would be decided · {dr} refused, of {oc.All.Count}" + (touched.Count > 0 ? "; changed: " + Few(touched) : ""));
+
+            foreach (var choice in new[] { "v2", "v1" })
+            {
+                var w = Run($"resolve {choice} --all --write", cli, "resolve", copy, choice, "--all", "--write");
+                var (wd, wrf) = Counts(w.Out);
+                var after = OverlayConflicts.Load(copy);
+                var wrong = new List<string>();
+                if (choice == "v2")
+                    foreach (var d in Pick(after.Decisions.Values.Where(d => d.Copied is not null).ToList(), sample))
+                        if (SameBytes(Path.Combine(copy, "files", d.Copied!.Replace('/', Path.DirectorySeparatorChar)),
+                                      Path.Combine(v2, d.Copied.Replace('/', Path.DirectorySeparatorChar))) == false) wrong.Add(d.Path);
+                var ao = Run($"apply-overlay after resolve {choice} (dry run)", cli, ["apply-overlay", copy, v1, .. ThreadArgs]);
+                Expect(area, $"resolve {choice} --all, then apply-overlay (dry run)",
+                    w.Exit is 0 or 1 && wd == after.Decisions.Count && wd + wrf == oc.All.Count && wrong.Count == 0 && ao.Exit == 0,
+                    $"exit {w.Exit} · {wd} decided · {wrf} refused, of {oc.All.Count}" + (choice == "v2" ? " · v2's bytes copied in" : "") +
+                    $" · apply-overlay exit {ao.Exit}" + (wrong.Count > 0 ? "; not v2's bytes: " + Few(wrong) : ""));
+                var u = Run($"resolve undo --all --write (after {choice})", cli, "resolve", copy, "undo", "--all", "--write");
+                var back = Changed();
+                int left = OverlayConflicts.Load(copy).Decisions.Count;
+                Expect(area, $"undo puts the overlay back as written (after {choice})", u.Exit == 0 && back.Count == 0 && left == 0,
+                    $"exit {u.Exit} · {left} decision(s) left" + (back.Count > 0 ? " · differ: " + Few(back) : " · byte-equal to the overlay as written"));
+            }
+            return Brief(cf.Out, 1);
+        }
+
+        private static void CopyDir(string from, string to)
+        {
+            foreach (var f in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+            {
+                var dest = Path.Combine(to, Path.GetRelativePath(from, f));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.Copy(f, dest, true);
+            }
         }
 
         /// <summary>Relative paths that differ between two directories (missing on a side, or other bytes); OVERLAY.txt
@@ -624,8 +697,12 @@ internal static class SelfTest
             var x = Files(a);
             var y = Files(b);
             return x.Keys.Union(y.Keys, StringComparer.OrdinalIgnoreCase).Where(k => !k.Equals("OVERLAY.txt", StringComparison.OrdinalIgnoreCase))
-                .Where(k => !x.ContainsKey(k) || !y.ContainsKey(k) || SameBytes(x[k], y[k]) == false).Order(StringComparer.Ordinal).ToList();
+                .Where(k => !x.ContainsKey(k) || !y.ContainsKey(k) || (k.Equals("conflicts.json", StringComparison.OrdinalIgnoreCase)
+                    ? Untimed(x[k]) != Untimed(y[k]) : SameBytes(x[k], y[k]) == false)).Order(StringComparer.Ordinal).ToList();
         }
+
+        /// <summary>conflicts.json without the markers files' write times, which differ between two writes of one overlay.</summary>
+        private static string Untimed(string f) => Regex.Replace(File.ReadAllText(f), @"""markersTicks"": \d+", "");
 
         // ---- the other commands ----
 

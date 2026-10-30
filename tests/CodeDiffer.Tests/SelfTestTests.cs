@@ -85,7 +85,11 @@ public sealed class SelfTestTests : IDisposable
         Assert.True(checks.Count >= 30, $"{checks.Count} checks");
         Assert.DoesNotContain(checks, c => c.GetProperty("verdict").GetString() == "fail");
         foreach (var must in new[] { "warm compare gives the same verdicts", "export_changeset turns left into right", "write_merge is the CLI's overlay",
-                                     "apply onto right: everything already there", "overlay holds what the merge says" })
+                                     "apply onto right: everything already there", "overlay holds what the merge says",
+                                     "conflicts lists every conflict", "resolve v2 --all (dry run) changes nothing",
+                                     "resolve v2 --all, then apply-overlay (dry run)", "undo puts the overlay back as written (after v2)",
+                                     "resolve v1 --all, then apply-overlay (dry run)", "undo puts the overlay back as written (after v1)",
+                                     "list_conflicts counts as the CLI does" })
             Assert.Contains(checks, c => c.GetProperty("Name").GetString() == must && c.GetProperty("verdict").GetString() == "pass");
         Assert.True(json.RootElement.GetProperty("metrics").GetArrayLength() >= 4);
         Assert.Single(File.ReadAllLines(Path.Combine(outDir, "demo_app", "history.jsonl")));

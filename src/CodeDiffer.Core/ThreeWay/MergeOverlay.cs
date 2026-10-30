@@ -196,8 +196,8 @@ public static class MergeOverlay
         File.WriteAllText(Path.Combine(dir, "conflicts.txt"), c.ToString(), new UTF8Encoding(false));
         var failedSet = failed.Select(f => f.E).ToHashSet(ReferenceEqualityComparer.Instance);
         OverlayConflicts.Write(dir, baseDir, v1, v2,
-            markers.Select(w => Recorded(w.E, v1, v2, w.Dest, w.AlsoDelete, false))
-                .Concat(unresolved.Select(u => Recorded(u.E, v1, v2, null, null, failedSet.Contains(u.E)))));
+            markers.Select(w => Recorded(w.E, v1, v2, w.Dest, w.AlsoDelete, false, files))
+                .Concat(unresolved.Select(u => Recorded(u.E, v1, v2, null, null, failedSet.Contains(u.E), files))));
 
         var result = new OverlayResult(dir, done.Count(w => w.Kind == Kind.FromV2), done.Count(w => w.Kind == Kind.Merged),
             markers.Count, done.Count(w => w.Kind == Kind.Moved), deletes.Count, unresolved.Count, bytes, failed.Count, r.DroppedDirectories);
@@ -218,6 +218,8 @@ public static class MergeOverlay
             To settle conflicts in bulk first (take v1, take v2 or regenerate, by folder, pattern or kind):
               codediffer conflicts "{dir}"
               codediffer resolve "{dir}" v1|v2|regenerate <pattern>... [--kind K] --write
+            (decisions.json records the choices; while RESOLVING.json is here a resolve is writing, or was stopped:
+            don't apply until a resolve --write has finished it)
 
               files\       {result.FromV2:N0} from v2 (only v2 changed them) · {result.Merged:N0} merged cleanly · {result.Markers:N0} with conflict markers · {result.Moved:N0} moved by v2's rename ({Bytes(bytes)})
               deletes.txt  {result.Deletes:N0} path(s)
@@ -254,23 +256,31 @@ public static class MergeOverlay
     }
 
     /// <summary>A conflict as conflicts.json records it: where each side has the file, and v2's size and time, so a later
-    /// "take v2" copies only the file the compare saw.</summary>
-    private static OverlayConflict Recorded(Merge3Entry e, string v1, string v2, string? markers, string? alsoDelete, bool failed)
+    /// "take v2" copies only the file the compare saw (a v2 file whose size isn't the compared one is never taken), and
+    /// the markers file as written, so one merged by hand is never set aside.</summary>
+    private static OverlayConflict Recorded(Merge3Entry e, string v1, string v2, string? markers, string? alsoDelete, bool failed, string files)
     {
         string? inV1 = e.V1 is null ? e.Path : e.V1.Status == ChangeStatus.Removed ? null : e.V1.RelativePath;
         string? inV2 = e.V2 is null ? e.Path : e.V2.Status == ChangeStatus.Removed ? null : e.V2.RelativePath;
-        long size = -1, ticks = 0;
+        long size = -1, ticks = 0, mSize = -1, mTicks = 0;
         if (inV2 is not null)
             try
             {
                 var fi = new FileInfo(Full(v2, inV2));
                 if (!fi.Exists) inV2 = null; // untouched by v2, and not in it (another change's path)
-                else (size, ticks) = (fi.Length, fi.LastWriteTimeUtc.Ticks);
+                else if (e.V2 is null || fi.Length == e.V2.RightSize) (size, ticks) = (fi.Length, fi.LastWriteTimeUtc.Ticks);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } // size -1: never taken
         if (inV1 is not null && e.V1 is null && !File.Exists(Full(v1, inV1))) inV1 = null;
+        if (markers is not null)
+            try
+            {
+                var fi = new FileInfo(Full(files, markers));
+                if (fi.Exists) (mSize, mTicks) = (fi.Length, fi.LastWriteTimeUtc.Ticks);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return new OverlayConflict(e.Path, failed ? "not written" : e.ConflictKind ?? "conflict", e.Note, markers, alsoDelete,
-            inV1, inV2, size, ticks, failed);
+            inV1, inV2, size, ticks, failed, mSize, mTicks);
     }
 
     private static string Bytes(long b) => AgentViews.Bytes(b);

@@ -328,7 +328,7 @@ overwrite conflicts resolved since. On death 1.0.9 the dry run onto v1 takes 1.5
 
 **Conflicts settled in bulk (built):** the overlay also holds `conflicts.json`, the conflicts for a program: each
 one's base path, kind, note, its markers file in `files\` and the delete made for it (a rename), where v1 and v2
-have the file, and v2's file's size and time. `codediffer conflicts <overlay-dir> [<pattern>...] [--kind K]
+have the file, v2's file's size and time, and the markers file's as written. `codediffer conflicts <overlay-dir> [<pattern>...] [--kind K]
 [--depth N] [--list]` (MCP `list_conflicts`) counts the undecided and decided ones and groups the undecided by kind,
 folder and file type. `codediffer resolve <overlay-dir> v1|v2|regenerate|undo <pattern>... [--kind K] [--all]
 [--write]` (MCP `resolve_conflicts`) settles every conflict a rule picks, in the overlay itself, so `apply-overlay`
@@ -336,13 +336,20 @@ applies it unchanged: `v1` and `regenerate` move a markers file to `set-aside\` 
 file stays; `v2` does the same, then copies v2's file into `files\` at v2's path (refused if its size or time changed
 since the overlay was written) and lists v1's copy at another path, or one v2 deleted, in `deletes.txt`; `undo` takes
 choices back, exactly. `decisions.json` records each choice, the rule and what it changed. Dry run unless
-`--write`. A pattern is `/`-separated with `*`, `?` and `**`; without a `/` it is a name at any depth, with one it
-is anchored at the top and takes what is under it; a conflict matches by its base path or either side's. A
-conflict already decided is left alone until undone, one the overlay failed to write is refused (write it again),
-and a path collision or file/directory clash can't be taken from v2 (another change lands on its path). An
-overlay that is applied or being applied is refused. While a resolve writes, the overlay holds `RESOLVING.json`
-(what it is doing): `apply-overlay` refuses it, and the next `resolve --write` finishes it first. Exit 1 when a
-conflict the rule picked was refused. An overlay from before v1.0.150 has no `conflicts.json`: write it again.
+`--write`. A pattern is `/`-separated with `*`, `?` and `**`; without a `/` it is a name at any depth, with one (or
+a leading `/`) it is anchored at the top and takes what is under it; a leading `./` is dropped, and a pattern that
+picks nothing (empty, `/`, `.`) is refused; a conflict matches by its base path or either side's. A conflict already
+decided is left alone until undone, one the overlay failed to write is refused (write it again), and so is one
+whose markers file was edited since the overlay was written (merged by hand: delete it from `files\` to choose a
+side anyway). `v2` is refused where v2's file would land on another: one v1 has of its own at that path, another
+conflict's, or another write in `files\`; and for the kinds whose sides aren't known well enough (path collision,
+file/directory clash, unreadable, behind a link, unlisted directory, unopenable name). An overlay that is applied
+or being applied is refused, and a path in its records that isn't a plain path inside the tree is refused (the
+records were edited). While a resolve writes, the overlay holds `RESOLVING.json` (what it is doing), created only
+if there is none and held open, so two resolves never write at once: `apply-overlay` refuses it, and the next
+`resolve --write` finishes one that was stopped, dropping (and reporting) a choice of v2 whose file changed in
+between. Copies are made in `set-aside\` and moved into `files\`, so one stopped part way is never applied. Exit 1
+when a conflict the rule picked was refused. An overlay from before v1.0.150 has no `conflicts.json`: write it again.
 
 Full-scale check (2026-10-05, CodeSpawner `death` 1.0.9 base / v1 / v2 on a share, 68,661 base
 files, `--threads 4`, warm hash cache): `compare3` in 3:59 (base→v1 124 s, base→v2 109 s, merge 5 s; 0 bytes
@@ -728,7 +735,7 @@ Measured on death 1.0.9 (68,661 files, ~94 GB a tree), the share on a 1 Gbit lin
 | `apply` dry run or `--write` after a warm compare | reads the changed files of three trees: ~1–2 min |
 | HTML report (`--html`, `report <id>`, `write_report`) | seconds, a ~20 MB write |
 | `report --large` / `blockdiff` | trivial, unless many giant files mean tens of GB to read |
-| `selftest` (5 compares, 3 dry-run applies, the MCP server's run of each tool, 3 reports) | warm, about 2 warm compares' worth of each per tree: death_1.3.1 base / v1 / v2, 3:00 on one core (1:40 on 8); a `--cold` first compare adds one full read |
+| `selftest` (5 compares, 3 dry-run applies, on 3 trees 5 resolves and 2 more apply-overlay dry runs on a copy of the merge, the MCP server's run of each tool, 3 reports) | warm, about 2 warm compares' worth of each per tree: death_1.3.1 base / v1 / v2, 3:00 on one core (1:40 on 8); a `--cold` first compare adds one full read |
 
 Memory stays small throughout: compares stream and hold only the verdicts (peak working set about 160–380 MB).
 

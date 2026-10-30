@@ -300,4 +300,112 @@ public sealed class ConflictResolverTests : IDisposable
         Assert.False(new ConflictMatcher(["b"], ["binary"]).Matches(bin));
         Assert.True(new ConflictMatcher(["a", "b"], ["binary", "content"]).Matches(bin));
     }
+
+    [Theory]
+    [InlineData("./gen", "a/gen/regs.h", true)]
+    [InlineData("/gen", "gen/regs.h", true)]
+    [InlineData("/gen", "a/gen/regs.h", false)]
+    [InlineData("/src/clash.c", "src/clash.c", true)]
+    public void Patterns_ALeadingDotSlashIsDropped_ALeadingSlashAnchors(string pattern, string path, bool matches)
+    {
+        var c = new OverlayConflict(path, "content", null, null, null, path, path, 1, 1, false);
+        Assert.Equal(matches, new ConflictMatcher([pattern], []).Matches(c));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("/")]
+    [InlineData(".")]
+    [InlineData("./")]
+    public void Patterns_ThatPickNothing_AreRefused(string pattern)
+        => Assert.Contains("picks nothing", Assert.Throws<ArgumentException>(() => new ConflictMatcher([pattern], [])).Message);
+
+    [Fact]
+    public void TakeV2_RefusesWhereV1HasItsOwnFileAtV2sPath()
+    {
+        Put("V1/new/r.c", "v1's own\n");
+        var o = Overlay();
+        var r = Resolve(o, "v2", []);
+        Assert.Contains(r.Refused, x => x.Path == "old/r.c");
+        Assert.DoesNotContain(r.Done, d => d.Path == "old/r.c");
+        Assert.Equal("v1's own\n", Read(Apply(o), "new/r.c"));
+    }
+
+    [Fact]
+    public void TakeV2_RefusesAKindWhoseSidesArentKnown()
+    {
+        var o = Overlay();
+        var json = Path.Combine(o, OverlayConflicts.FileName);
+        File.WriteAllText(json, File.ReadAllText(json).Replace("\"kind\": \"binary\"", "\"kind\": \"unreadable\""));
+        var r = Resolve(o, "v2", ["blob.bin"]);
+        Assert.Empty(r.Done);
+        Assert.Contains("decide it by hand", Assert.Single(r.Refused).Why);
+        Assert.Single(Resolve(o, "v1", ["blob.bin"]).Done);             // v1 is still fine
+    }
+
+    [Fact]
+    public void APathOutsideTheTree_InTheRecords_IsRefused()
+    {
+        var o = Overlay();
+        var json = Path.Combine(o, OverlayConflicts.FileName);
+        File.WriteAllText(json, File.ReadAllText(json).Replace("new/r.c", "../escape.c"));
+        Assert.Contains("not a plain path", Assert.Throws<ArgumentException>(() => OverlayConflicts.Load(o)).Message);
+    }
+
+    [Fact]
+    public void AMarkersFileMergedByHand_IsNeverSetAside()
+    {
+        var o = Overlay();
+        var markers = Path.Combine(o, "files", "src", "clash.c");
+        File.WriteAllText(markers, "merged by hand\n");
+        var r = Resolve(o, "v2", ["src"]);
+        Assert.Empty(r.Done);
+        Assert.Contains("edited since the overlay was written", Assert.Single(r.Refused).Why);
+        Assert.Equal("merged by hand\n", File.ReadAllText(markers));
+    }
+
+    [Fact]
+    public void AResolveStillRunning_IsNotFinishedByAnother()
+    {
+        var o = Overlay();
+        var plan = Resolve(o, "v2", ["src"], write: false);
+        var journal = Path.Combine(o, OverlayConflicts.ResolvingName);
+        File.WriteAllText(journal, Journal(plan.Done));
+        using (new FileStream(journal, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+            Assert.Contains("another resolve is writing", Assert.Throws<ArgumentException>(() => Resolve(o, "v1", ["gen"])).Message);
+        Assert.True(Resolve(o, "v1", ["gen"]).FinishedStopped);          // once let go, it was a stopped one
+    }
+
+    [Fact]
+    public void AStoppedResolve_WhoseV2FileChanged_DropsThatChoice()
+    {
+        var o = Overlay();
+        var plan = Resolve(o, "v2", ["blob.bin", "src"], write: false);
+        File.WriteAllText(Path.Combine(o, OverlayConflicts.ResolvingName), Journal(plan.Done));
+        Directory.CreateDirectory(Path.Combine(o, OverlayConflicts.SetAsideDir, ".copying"));
+        File.WriteAllText(Path.Combine(o, OverlayConflicts.SetAsideDir, ".copying", "stale"), "a copy stopped part way");
+        Put("V2/blob.bin", "\0\u0001changed after the compare");
+
+        var next = Resolve(o, "v1", ["gen"]);
+        Assert.True(next.FinishedStopped);
+        Assert.Contains(next.Refused, x => x.Path == "blob.bin" && x.Why.Contains("not taken"));
+        var s = OverlayConflicts.Load(o);
+        Assert.False(s.Decisions.ContainsKey("blob.bin"));
+        Assert.Equal("v2", s.Decisions["src/clash.c"].Choice);
+        Assert.False(Directory.Exists(Path.Combine(o, OverlayConflicts.SetAsideDir, ".copying")));
+        var m = Apply(o);
+        Assert.Equal("\0\u0001v1!", Read(m, "blob.bin"));
+        Assert.Equal(Read(_v2, "src/clash.c"), Read(m, "src/clash.c"));
+    }
+
+    [Fact]
+    public void Undo_RemovesTheFoldersItEmptied()
+    {
+        var o = Overlay();
+        Resolve(o, "v1", ["gen"]);
+        Resolve(o, "undo", ["gen"]);
+        Assert.False(Directory.Exists(Path.Combine(o, OverlayConflicts.SetAsideDir, "gen")));
+        Assert.True(File.Exists(Path.Combine(o, "files", "gen", "regs.h")));
+    }
 }

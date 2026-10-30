@@ -174,12 +174,16 @@ apply-overlay now applies these choices (codediffer conflicts lists what is left
   and list it as one to regenerate, for machine-generated files where the right merge is neither side), and `undo`.
 - Pick conflicts by pattern, by kind (`--kind`), or both; `--all` picks every one. A pattern without a `/` is a name
   at any depth (`*.h`, `generated`); one with a `/` starts at the top and takes everything under it (`src/gen`,
-  `src/**/regs_*.h`).
+  `src/**/regs_*.h`), and so does one that starts with `/` (`/generated`: only the top-level one).
 - The choice is written into the overlay itself: a markers file moves to `set-aside\`, v2's file is copied into
   `files\`, and `deletes.txt` gains or loses the paths that go with it. `apply-overlay` then applies it as usual, and
   `decisions.json` records each choice and the rule that made it.
 - `v2` copies v2's file only if it's still the one the overlay saw (same size and time); a changed one is refused.
-  A path collision can't be taken from v2 this way, since another change lands on the same path.
+  It is also refused where v2's file would land on another file (one v1 has of its own at that path, or another
+  conflict's), and for a path collision, a file/directory clash, a link or a file that couldn't be read: decide those
+  by hand.
+- A markers file you've already edited (merged by hand) is never set aside: that conflict is refused, and your merge
+  stays.
 - A conflict already decided is left alone until you `undo` it. `undo` puts the overlay back the way it was written.
 - An overlay that has been applied is refused: a choice made after that wouldn't reach the tree.
 
@@ -243,7 +247,9 @@ It runs every feature on your trees (it only reads them) and checks each result 
 - the MCP server answers as the CLI does;
 - sampled files really differ the way they're said to;
 - the patch turns left into right;
-- the apply dry runs agree with the compare.
+- the apply dry runs agree with the compare;
+- on 3 trees, settling every conflict from v2, then from v1, on a copy of the merge, still applies, and undo puts the
+  merge back byte for byte.
 
 It prints `report: <path>\index.html`, a page listing the checks and what each compare cost (time, data read, peak memory), with
 the history of earlier runs on that repo. Exit code 0 means every check passed; 1 means one failed. `--cold` reads every byte

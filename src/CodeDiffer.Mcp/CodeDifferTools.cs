@@ -323,9 +323,10 @@ public static class CodeDifferTools
     public static string ListConflicts(
         [Description("The overlay directory write_merge (or compare3 --merge-out) wrote.")] string overlay_dir,
         [Description("Only conflicts matching any of these path patterns ('/'-separated; *, ?, **; one without '/' is a file " +
-                     "or folder name at any depth, like *.h or generated; one with '/' is from the top, like src/gen).")] string[]? patterns = null,
+                     "or folder name at any depth, like *.h or generated; one with '/', or a leading '/', is from the top, like src/gen).")] string[]? patterns = null,
         [Description("Only these conflict kinds (content, add/add, stamps, binary, large, delete/modify, modify/delete, " +
-                     "rename/rename, encoding, line endings, path collision, file/directory clash).")] string[]? kinds = null,
+                     "rename/rename, encoding, line endings, path collision, file/directory clash, add/add (binary), unreadable, " +
+                     "behind a link, unlisted directory, unopenable name, not written).")] string[]? kinds = null,
         [Description("Folder depth to group by (default 1).")] int depth = 1,
         [Description("Also list the matching conflicts, one per line.")] bool list = false,
         [Description("Most to list of each, undecided and decided (default 50).")] int max = 50)
@@ -339,9 +340,10 @@ public static class CodeDifferTools
 
     [McpServerTool(Name = "resolve_conflicts")]
     [Description("Settle a merge overlay's conflicts in bulk before it is applied: every conflict the patterns and kinds pick " +
-                 "is taken from v1, taken from v2 (only if v2's file is still what the overlay saw), or kept as v1's to " +
+                 "is taken from v1, taken from v2 (only if v2's file is still what the overlay saw and lands on no other file), or kept as v1's to " +
                  "regenerate; undo takes choices back. Recorded in the overlay itself (files\\, deletes.txt, decisions.json), " +
-                 "so applying the overlay applies the choices. A conflict already decided is left alone until undone. Dry run " +
+                 "so applying the overlay applies the choices. A conflict already decided is left alone until undone, and a markers " +
+                 "file edited by hand is never set aside. Dry run " +
                  "unless write=true. Pick with patterns and/or kinds, or all=true for every conflict.")]
     public static string ResolveConflicts(
         [Description("The overlay directory write_merge (or compare3 --merge-out) wrote.")] string overlay_dir,

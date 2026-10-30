@@ -259,12 +259,12 @@ public sealed class CompareProgress
     /// <param name="size">The pair's size not already counted by <see cref="Streamed"/>.</param>
     internal void PairChecked(long size, long read, int cacheSides)
     {
-        Interlocked.Increment(ref _pairsDone);
+        long n = Interlocked.Increment(ref _pairsDone);
         Sample(_contentClock.Elapsed.TotalSeconds);
         Interlocked.Add(ref _bytesDone, size);
         if (read > 0) Interlocked.Add(ref _bytesRead, read);
         if (cacheSides > 0) Interlocked.Add(ref _cacheSides, cacheSides);
-        AfterPairChecked?.Invoke(PairsDone);
+        AfterPairChecked?.Invoke(n); // this pair's number: pairs checked at once each get their own
     }
 
     /// <summary>Tests: called after each pair is checked, with the number done (e.g. to cancel at a known point).</summary>
