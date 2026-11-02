@@ -331,7 +331,8 @@ folder and file type. `codediffer resolve <overlay-dir> v1|v2|regenerate|undo <p
 applies it unchanged: `v1` and `regenerate` move a markers file to `set-aside\` and drop a rename's delete, so v1's
 file stays; `v2` does the same, then copies v2's file into `files\` at v2's path (refused if its size or time changed
 since the overlay was written) and lists v1's copy at another path, or one v2 deleted, in `deletes.txt`; `undo` takes
-choices back, exactly. `decisions.json` records each choice, the rule and what it changed. Dry run unless
+choices back, exactly. A file copied into the overlay never keeps its tree's read-only flag (a tree checked out
+read-only has it on every file), so it can be replaced, set aside and undone. `decisions.json` records each choice, the rule and what it changed. Dry run unless
 `--write`. A pattern is `/`-separated with `*`, `?` and `**`; without a `/` it is a name at any depth, with one (or
 a leading `/`) it is anchored at the top and takes what is under it; a leading `./` is dropped, and a pattern that
 picks nothing (empty, `/`, `.`) is refused; a conflict matches by its base path or either side's. A conflict already

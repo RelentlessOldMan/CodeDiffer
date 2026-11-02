@@ -465,7 +465,11 @@ public static class ConflictResolver
         var aside = Path.Combine(s.Dir, OverlayConflicts.SetAsideDir);
         // Copies are made here, outside files\, so one stopped part way is never applied.
         var temp = Path.Combine(aside, ".copying");
-        if (Directory.Exists(temp)) Directory.Delete(temp, recursive: true);
+        if (Directory.Exists(temp)) // a copy a stopped run left may still be read-only
+        {
+            ResultStore.DeleteContents(new DirectoryInfo(temp), keep: null);
+            Directory.Delete(temp);
+        }
         var byPath = s.All.ToDictionary(c => c.Path, StringComparer.Ordinal);
         var dropped = new List<(string, string)>();
         var kept = new List<ConflictDecision>();
@@ -491,7 +495,9 @@ public static class ConflictResolver
                         Directory.CreateDirectory(temp);
                         var tmp = Path.Combine(temp, Guid.NewGuid().ToString("N"));
                         File.Copy(src, tmp, overwrite: true);
+                        MergeOverlay.Writable(tmp);
                         Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                        Writable(dest);
                         File.Move(tmp, dest, overwrite: true);
                     }
                     else if (d.SetAside is { } m2 && !TreeMerger.PathComparer.Equals(m2, at)) SetAside(files, aside, m2);
@@ -504,6 +510,7 @@ public static class ConflictResolver
                 // v2's copy goes, unless it is where the markers file comes back (a run already put it back if none is aside).
                 if (d.Copied is { } at && !same)
                 {
+                    Writable(Path.Combine(files, Native(at)));
                     File.Delete(Path.Combine(files, Native(at)));
                     Prune(Path.GetDirectoryName(Path.Combine(files, Native(at)))!, files);
                 }
@@ -559,8 +566,16 @@ public static class ConflictResolver
     {
         string from = Path.Combine(aside, Native(rel)), to = Path.Combine(files, Native(rel));
         Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+        if (overwrite) Writable(to);
         File.Move(from, to, overwrite);
         Prune(Path.GetDirectoryName(from)!, aside);
+    }
+
+    /// <summary>Clear the read-only flag of a file in the overlay, if it is there: an overlay written before copies were
+    /// cleared holds v2's files read-only when v2's tree is.</summary>
+    private static void Writable(string path)
+    {
+        if (File.Exists(path)) MergeOverlay.Writable(path);
     }
 
     /// <summary>Remove <paramref name="dir"/> and its parents while they're empty, up to (not including) <paramref name="stop"/>.</summary>

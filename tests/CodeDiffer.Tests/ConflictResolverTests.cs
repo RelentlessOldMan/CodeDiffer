@@ -408,4 +408,29 @@ public sealed class ConflictResolverTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(o, OverlayConflicts.SetAsideDir, "gen")));
         Assert.True(File.Exists(Path.Combine(o, "files", "gen", "regs.h")));
     }
+
+    [Fact]
+    public void ReadOnlyTrees_GiveAnOverlayThatCanBeResolvedAndUndone()
+    {
+        var all = Directory.EnumerateFiles(_dir, "*", SearchOption.AllDirectories).ToList();
+        try
+        {
+            foreach (var f in all) File.SetAttributes(f, FileAttributes.ReadOnly); // a tree checked out read-only
+            var o = Overlay();
+            Assert.Equal(6, Resolve(o, "v2", []).Done.Count);
+            Assert.All(Directory.EnumerateFiles(o, "*", SearchOption.AllDirectories),
+                f => Assert.False(File.GetAttributes(f).HasFlag(FileAttributes.ReadOnly), f));
+            // An overlay written before copies were cleared: v2's files in it are read-only.
+            foreach (var f in Directory.EnumerateFiles(Path.Combine(o, "files"), "*", SearchOption.AllDirectories))
+                File.SetAttributes(f, FileAttributes.ReadOnly);
+            Assert.Equal(6, Resolve(o, "undo", []).Done.Count);
+            Assert.Empty(OverlayConflicts.Load(o).Decisions);
+            Assert.Equal(6, Resolve(o, "v2", []).Done.Count);
+            Assert.Equal(Read(_v2, "src/clash.c"), Read(Apply(o), "src/clash.c"));
+        }
+        finally
+        {
+            foreach (var f in Directory.EnumerateFiles(_dir, "*", SearchOption.AllDirectories)) File.SetAttributes(f, FileAttributes.Normal);
+        }
+    }
 }

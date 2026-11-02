@@ -142,9 +142,11 @@ public static class MergeOverlay
                 {
                     case Kind.FromV2: // where v2 has it (a v2 change taken whole lands at v1's new name)
                         File.Copy(Full(v2, w.E.V2?.Status == ChangeStatus.Modified ? w.E.V2.RelativePath : w.Dest), temp, overwrite: true);
+                        Writable(temp);
                         break;
                     case Kind.Moved:
                         File.Copy(Full(v1, w.E.V1?.RelativePath ?? w.E.Path), temp, overwrite: true);
+                        Writable(temp);
                         break;
                     default:
                         // Re-merged from the trees as they are now: it must still be what the compare found.
@@ -281,6 +283,14 @@ public static class MergeOverlay
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return new OverlayConflict(e.Path, failed ? "not written" : e.ConflictKind ?? "conflict", e.Note, markers, alsoDelete,
             inV1, inV2, size, ticks, failed, mSize, mTicks);
+    }
+
+    /// <summary>Clear a file's read-only flag. A copy keeps its source's, and a tree checked out read-only has it on every
+    /// file, so a file copied into an overlay is cleared at once: a resolve must be able to replace, set aside and undo it.</summary>
+    internal static void Writable(string path)
+    {
+        var a = File.GetAttributes(path);
+        if ((a & FileAttributes.ReadOnly) != 0) File.SetAttributes(path, a & ~FileAttributes.ReadOnly);
     }
 
     private static string Bytes(long b) => AgentViews.Bytes(b);
