@@ -226,8 +226,9 @@ public static class OverlayApplier
             hits, fails, undecided, markersLeft);
     }
 
-    /// <summary>The undecided text conflicts whose file in files\ still holds conflict markers, and how many blocks.
-    /// None for an overlay from before conflicts.json.</summary>
+    /// <summary>The text conflicts whose file in files\ still holds conflict markers, and how many blocks: undecided ones,
+    /// and decided ones whose markers file was put back by hand (not v2's file copied to that path). None for an overlay
+    /// from before conflicts.json.</summary>
     private static List<(string Path, int Blocks)> MarkersLeft(string overlay, string files)
     {
         var left = new List<(string, int)>();
@@ -235,8 +236,10 @@ public static class OverlayApplier
         OverlayConflicts cs;
         try { cs = OverlayConflicts.Load(overlay); }
         catch (System.Text.Json.JsonException) { return left; }
-        foreach (var c in cs.Undecided)
-            if (c.Markers is { } m && Full(files, m) is var f && File.Exists(f)
+        foreach (var c in cs.All)
+            if (c.Markers is { } m && !cs.HandMerged(c)
+                && !(cs.Decisions.TryGetValue(c.Path, out var d) && d.Copied is { } at && TreeMerger.PathComparer.Equals(at, m))
+                && Full(files, m) is var f && File.Exists(f)
                 && (cs.Edited.TryGetValue(c.Path, out var n) ? n : OverlayConflicts.MarkerBlocks(f)) is var blocks and > 0)
                 left.Add((m, blocks));
         return left;

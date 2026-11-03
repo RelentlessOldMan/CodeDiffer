@@ -116,7 +116,10 @@ public sealed class OverlayConflicts
             {
                 var full = System.IO.Path.Combine(files, m.Replace('/', System.IO.Path.DirectorySeparatorChar));
                 var fi = new FileInfo(full);
-                if (fi.Exists && (fi.Length != c.MarkersSize || fi.LastWriteTimeUtc.Ticks != c.MarkersTicks)) edited[c.Path] = MarkerBlocks(full);
+                // Saved with the same bytes (an editor's save, a copy onto coarser file times) is not an edit.
+                if (fi.Exists && (fi.Length != c.MarkersSize || fi.LastWriteTimeUtc.Ticks != c.MarkersTicks)
+                    && !(fi.Length == c.MarkersSize && SameBytes(full, System.IO.Path.Combine(overlay, OriginalsDir, m.Replace('/', System.IO.Path.DirectorySeparatorChar)))))
+                    edited[c.Path] = MarkerBlocks(full);
             }
         return new OverlayConflicts
         {
@@ -128,6 +131,20 @@ public sealed class OverlayConflicts
             Decisions = decisions,
             Edited = edited,
         };
+    }
+
+    /// <summary>Whether two files hold the same bytes; false when <paramref name="b"/> isn't there.</summary>
+    private static bool SameBytes(string a, string b)
+    {
+        if (!File.Exists(b)) return false;
+        using var x = new FileStream(a, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
+        using var y = new FileStream(b, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
+        if (x.Length != y.Length) return false;
+        var p = new byte[1 << 16];
+        var q = new byte[1 << 16];
+        for (int n; (n = x.ReadAtLeast(p, p.Length, throwOnEndOfStream: false)) > 0;)
+            if (y.ReadAtLeast(q, n, throwOnEndOfStream: false) != n || !p.AsSpan(0, n).SequenceEqual(q.AsSpan(0, n))) return false;
+        return true;
     }
 
     /// <summary>How many conflict blocks a markers file holds: the most of any one of the marker lines the merger writes
@@ -229,7 +246,7 @@ public sealed class OverlayConflicts
             if (decided.Count > 0) o.Append("decided:\n");
             foreach (var c in decided.Take(max))
                 o.Append(Decisions.TryGetValue(c.Path, out var d) ? $"  {d.Choice,-10} {ResultStore.Escaped(c.Path)}  (rule: {d.Rule})\n"
-                    : $"  {"merged",-10} {ResultStore.Escaped(c.Path)}  (by hand: files\\{ResultStore.Escaped(c.Markers!)})\n");
+                    : $"  {"merged",-10} {ResultStore.Escaped(c.Path)}  (by hand: files\\{ResultStore.Escaped(c.Markers!).Replace('/', '\\')})\n");
             if (decided.Count > max) o.Append($"  ... {decided.Count - max:N0} more (--max N)\n");
         }
         if (open.Any(c => c.Failed))
@@ -477,6 +494,7 @@ public static class ConflictResolver
             var dropped = Finish(s, journal, held);
             refused.AddRange(dropped);
             done.RemoveAll(d => dropped.Any(x => x.Path == d.Path));
+            restores.RemoveAll(h => dropped.Any(x => x.Path == h.Path));
         }
         int undecided = s.Undecided.Count() + (choice == "undo" ? done.Count + restores.Count(h => h.WasMerged) : -done.Count);
         return new ResolveResult(s.Dir, choice, rule, write, done, refused, already, notDecided, undecided, finished, restores);
@@ -586,14 +604,26 @@ public static class ConflictResolver
             }
             kept.Add(d);
         }
-        // Hand merges undone: the edited file set aside, then the markers file as written put back with its size and
-        // time, so it reads as untouched again. Each step is skipped once done.
+        // Hand merges undone: the markers file as written copied out first, then the edited file set aside and the copy
+        // put in its place with its size and time, so it reads as untouched again; a copy that fails leaves the edit
+        // where it is. Each step is skipped once done.
         foreach (var (path, m, keep) in restores)
         {
             var c = byPath[path];
             var dest = Path.Combine(files, Native(m));
             var fi = new FileInfo(dest);
             if (fi.Exists && fi.Length == c.MarkersSize && fi.LastWriteTimeUtc.Ticks == c.MarkersTicks) continue;
+            var original = Path.Combine(s.Dir, OverlayConflicts.OriginalsDir, Native(m));
+            if (!File.Exists(original))
+            {
+                dropped.Add((path, $"not undone: originals\\{Native(m)} is gone, so files\\{Native(m)} was left as it is"));
+                continue;
+            }
+            Directory.CreateDirectory(temp);
+            var tmp = Path.Combine(temp, Guid.NewGuid().ToString("N"));
+            File.Copy(original, tmp, overwrite: true);
+            MergeOverlay.Writable(tmp);
+            File.SetLastWriteTimeUtc(tmp, new DateTime(c.MarkersTicks, DateTimeKind.Utc));
             if (fi.Exists)
             {
                 var to = Path.Combine(aside, Native(keep));
@@ -601,11 +631,6 @@ public static class ConflictResolver
                 Directory.CreateDirectory(Path.GetDirectoryName(to)!);
                 File.Move(dest, to);
             }
-            Directory.CreateDirectory(temp);
-            var tmp = Path.Combine(temp, Guid.NewGuid().ToString("N"));
-            File.Copy(Path.Combine(s.Dir, OverlayConflicts.OriginalsDir, Native(m)), tmp, overwrite: true);
-            MergeOverlay.Writable(tmp);
-            File.SetLastWriteTimeUtc(tmp, new DateTime(c.MarkersTicks, DateTimeKind.Utc));
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.Move(tmp, dest);
         }
@@ -767,6 +792,7 @@ public static class ConflictResolver
               + (r.Refused.Count > 0 ? $" · {r.Refused.Count:N0} refused" : "") + "\n"
             : $"{r.Done.Count:N0} conflict(s) {w}decided" + (r.AlreadyDecided > 0 ? $" · {r.AlreadyDecided:N0} already decided (left alone; undo them first)" : "")
               + (r.Refused.Count > 0 ? $" · {r.Refused.Count:N0} refused" : "") + "\n");
+        int width = r.Restored.Count > 0 ? "hand merge undone".Length : 12; // one column for both kinds of row
         foreach (var d in r.Done.Take(maxList))
         {
             var what = new List<string>();
@@ -774,12 +800,12 @@ public static class ConflictResolver
             if (d.Copied is { } c) what.Add($"v2's {c} copied in");
             if (d.AddedDeletes.Count > 0) what.Add($"{string.Join(", ", d.AddedDeletes)} to delete");
             if (d.RemovedDeletes.Count > 0) what.Add($"{string.Join(", ", d.RemovedDeletes)} kept");
-            o.Append($"  {(r.Choice == "undo" ? $"{d.Choice} undone" : d.Choice),-12} {ResultStore.Escaped(d.Path)}")
+            o.Append("  ").Append((r.Choice == "undo" ? $"{d.Choice} undone" : d.Choice).PadRight(width)).Append($" {ResultStore.Escaped(d.Path)}")
              .Append(what.Count > 0 ? $"  ({string.Join(" · ", what)})" : "").Append('\n');
         }
         if (r.Done.Count > maxList) o.Append($"  ... {r.Done.Count - maxList:N0} more\n");
         foreach (var h in r.Restored.Take(maxList))
-            o.Append($"  {(h.WasMerged ? "hand merge undone" : "hand edit undone"),-12} {ResultStore.Escaped(h.Path)}  (markers put back")
+            o.Append("  ").Append((h.WasMerged ? "hand merge undone" : "hand edit undone").PadRight(width)).Append($" {ResultStore.Escaped(h.Path)}  (markers put back")
              .Append(h.Existed ? $" · your edit kept in {OverlayConflicts.SetAsideDir}\\{ResultStore.Escaped(h.Keep).Replace('/', '\\')})\n" : ")\n");
         if (r.Restored.Count > maxList) o.Append($"  ... {r.Restored.Count - maxList:N0} more\n");
         if (r.Refused.Count > 0)

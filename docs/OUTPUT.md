@@ -320,9 +320,9 @@ bytes, comes out "already" — a case-only rename already done, and a file v2 tu
 place, too). The overlay holds `APPLYING.txt` while it runs and `APPLIED.txt` (target, time)
 once done with nothing failed — after a failure it stays unapplied, so the same apply can be run again once the
 cause is fixed; a second finished apply to the same target is refused unless `--again`, since it would
-overwrite conflicts resolved since. `--write` is also refused while an undecided text conflict's file in `files\`
-still holds conflict markers (the merger's own labelled `<<<<<<< v1 (`, `||||||| base (` and `>>>>>>> v2 (` lines),
-unless `--with-markers`; a dry run lists those files and their blocks instead. On the `death` corpus the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
+overwrite conflicts resolved since. `--write` is also refused while a text conflict's file in `files\` still holds
+conflict markers, the merger's own labelled `<<<<<<< v1 (`, `||||||| base (` and `>>>>>>> v2 (` lines (an
+undecided one, or a decided one whose markers file was put back by hand), unless `--with-markers`; a dry run lists those files and their blocks instead. On the `death` corpus the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
 
 **Conflicts settled in bulk (built):** the overlay also holds `conflicts.json`, the conflicts for a program: each
 one's base path, kind, note, its markers file in `files\` and the delete made for it (a rename), where v1 and v2
@@ -339,7 +339,8 @@ read-only has it on every file), so it can be replaced, set aside and undone. `d
 a leading `/`) it is anchored at the top and takes what is under it; a leading `./` is dropped, and a pattern that
 picks nothing (empty, `/`, `.`) is refused; a conflict matches by its base path or either side's. A conflict already
 decided is left alone until undone, and one the overlay failed to write is refused (write it again). A markers file
-edited since the overlay was written (its size or time differs from the one recorded) is a hand merge: with no
+edited since the overlay was written (its size or time differs from the one recorded, and its bytes from the copy in
+`originals\`: saved unchanged, or copied onto coarser file times, it is not an edit) is a hand merge: with no
 labelled marker lines left it counts as decided ("merged by hand", listed as such and left alone by a rule); with
 some left it is "being merged by hand", undecided, and a rule picking it is refused. `originals\` keeps each markers
 file as written, so `undo` takes a hand merge (or a markers file deleted by hand) back: the original is copied in
@@ -721,7 +722,7 @@ that tops out ~95–110 MB/s:
 | `apply` dry run or `--write` after a warm compare | reads the changed files of three trees: ~1–2 min |
 | HTML report (`--html`, `report <id>`, `write_report`) | seconds, a ~20 MB write |
 | `report --large` / `blockdiff` | trivial, unless many giant files mean tens of GB to read |
-| `selftest` (5 compares, 3 dry-run applies, on 3 trees 5 resolves and 2 more apply-overlay dry runs on a copy of the merge, the MCP server's run of each tool, 3 reports) | warm, about 2 warm compares' worth of each per tree: `death` base / v1 / v2, 3:00 on one core (1:40 on 8); a `--cold` first compare adds one full read |
+| `selftest` (5 compares, 3 dry-run applies, on 3 trees 5 resolves and 2 more apply-overlay dry runs on a copy of the merge, then one hand merge (refused part way, decided, undone), the MCP server's run of each tool, 3 reports) | warm, about 2 warm compares' worth of each per tree: `death` base / v1 / v2, 3:00 on one core (1:40 on 8); a `--cold` first compare adds one full read |
 
 Memory stays small throughout: compares stream and hold only the verdicts (peak working set about 160–380 MB).
 

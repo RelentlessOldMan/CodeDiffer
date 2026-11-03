@@ -675,7 +675,54 @@ internal static class SelfTest
                 Expect(area, $"undo puts the overlay back as written (after {choice})", u.Exit == 0 && back.Count == 0 && left == 0,
                     $"exit {u.Exit} · {left} decision(s) left" + (back.Count > 0 ? " · differ: " + Few(back) : " · byte-equal to the overlay as written"));
             }
+            HandMerge(area, merge, copy, v1, oc);
             return Brief(cf.Out, 1);
+        }
+
+        /// <summary>A text conflict merged by hand, on the copy of the overlay: part way (markers left), resolve refuses
+        /// it and apply-overlay --write refuses the overlay, touching nothing; merged (v1's file saved over the markers),
+        /// it counts as decided; undo puts the markers file back byte for byte and keeps the edit in set-aside\.</summary>
+        private void HandMerge(string area, string merge, string copy, string v1, OverlayConflicts oc)
+        {
+            var c = oc.All.FirstOrDefault(x => x.Markers is not null && x.MarkersSize >= 0 && x.Path.IndexOfAny(['*', '?']) < 0
+                                               && File.Exists(Path.Combine(copy, "files", x.Markers.Replace('/', Path.DirectorySeparatorChar))));
+            if (c is null)
+            {
+                Add(area, "a hand merge counts as decided, and undo takes it back", Verdict.Skip, "no conflict with markers");
+                return;
+            }
+            var file = Path.Combine(copy, "files", c.Markers!.Replace('/', Path.DirectorySeparatorChar));
+            var original = File.ReadAllBytes(file);
+            List<string> Changed() => DirDiff(merge, copy).Where(k => !k.Equals(OverlayConflicts.DecisionsName, StringComparison.OrdinalIgnoreCase)
+                && !k.StartsWith(Path.Combine(OverlayConflicts.SetAsideDir, OverlayConflicts.HandMergesDir), StringComparison.OrdinalIgnoreCase)).ToList();
+
+            File.WriteAllBytes(file, [.. original, (byte)'\n']); // part way: every marker still there
+            var rp = Run("resolve v1 on a file being merged by hand", cli, "resolve", copy, "v1", "/" + c.Path, "--write");
+            var target = Path.Combine(_work, "apply-refused");
+            Directory.CreateDirectory(target);
+            var ap = Run("apply-overlay --write with markers left", cli, ["apply-overlay", copy, target, "--write", .. ThreadArgs]);
+            bool untouched = !Directory.EnumerateFileSystemEntries(target).Any();
+            Expect(area, "a file being merged by hand is refused by resolve and apply-overlay --write",
+                rp.Exit == 1 && rp.Out.Contains("being merged by hand") && ap.Exit == 2 && ap.Err.Contains("still have conflict markers") && untouched,
+                $"resolve exit {rp.Exit} · apply-overlay exit {ap.Exit}" + (untouched ? " · nothing written" : " · the target was written to"));
+
+            var merged = c.V1At is { } at && File.Exists(Path.Combine(v1, at.Replace('/', Path.DirectorySeparatorChar)))
+                ? File.ReadAllBytes(Path.Combine(v1, at.Replace('/', Path.DirectorySeparatorChar))) : "merged by hand\n"u8.ToArray();
+            File.WriteAllBytes(file, merged);
+            File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddSeconds(5)); // edited, even if v1's bytes happen to be the same size
+            var cl = Run("conflicts after a hand merge", cli, "conflicts", copy, "/" + c.Path, "--list");
+            var s = OverlayConflicts.Load(copy);
+            Expect(area, "a hand merge counts as decided", cl.Exit == 0 && s.HandMerged(c) && cl.Out.Contains("merged by hand"),
+                $"exit {cl.Exit} · {(s.HandMerged(c) ? "merged by hand" : "not read as merged")} · {s.Undecided.Count():N0} undecided of {s.All.Count:N0}");
+
+            var u = Run("resolve undo on a hand merge", cli, "resolve", copy, "undo", "/" + c.Path, "--write");
+            var back = Changed();
+            var kept = Path.Combine(copy, OverlayConflicts.SetAsideDir, OverlayConflicts.HandMergesDir);
+            bool keptEdit = Directory.Exists(kept) && Directory.EnumerateFiles(kept, "*", SearchOption.AllDirectories)
+                .Any(f => File.ReadAllBytes(f).AsSpan().SequenceEqual(merged));
+            Expect(area, "undo takes a hand merge back and keeps the edit", u.Exit == 0 && back.Count == 0 && keptEdit,
+                $"exit {u.Exit}" + (back.Count > 0 ? " · differ: " + Few(back) : " · markers file byte-equal to as written") +
+                (keptEdit ? " · edit kept in set-aside" : " · edit not found in set-aside"));
         }
 
         private static void CopyDir(string from, string to)

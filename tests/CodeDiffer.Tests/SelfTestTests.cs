@@ -89,7 +89,9 @@ public sealed class SelfTestTests : IDisposable
                                      "conflicts lists every conflict", "resolve v2 --all (dry run) changes nothing",
                                      "resolve v2 --all, then apply-overlay (dry run)", "undo puts the overlay back as written (after v2)",
                                      "resolve v1 --all, then apply-overlay (dry run)", "undo puts the overlay back as written (after v1)",
-                                     "list_conflicts counts as the CLI does" })
+                                     "list_conflicts counts as the CLI does",
+                                     "a file being merged by hand is refused by resolve and apply-overlay --write",
+                                     "a hand merge counts as decided", "undo takes a hand merge back and keeps the edit" })
             Assert.Contains(checks, c => c.GetProperty("Name").GetString() == must && c.GetProperty("verdict").GetString() == "pass");
         Assert.True(json.RootElement.GetProperty("metrics").GetArrayLength() >= 4);
         Assert.Single(File.ReadAllLines(Path.Combine(outDir, "demo_app", "history.jsonl")));

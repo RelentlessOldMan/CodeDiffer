@@ -441,7 +441,7 @@ public sealed class ConflictResolverTests : IDisposable
         var text = ConflictResolver.Text(u);
         Assert.Contains("2 choice(s) undone", text);
         Assert.Contains("hand merge undone src/clash.c  (markers put back · your edit kept in set-aside\\hand-merges\\", text);
-        Assert.Contains("hand edit undone gen/regs.h  (markers put back)", text);
+        Assert.Contains("hand edit undone  gen/regs.h  (markers put back)", text);
         Assert.Equal(0, Resolve(o, "undo", ["src"]).Restored.Count);         // nothing left to take back
     }
 
@@ -465,6 +465,47 @@ public sealed class ConflictResolverTests : IDisposable
         Assert.Equal("merged\n", File.ReadAllText(keep));
         Resolve(o, "undo", ["blob.bin"]);
         Assert.Equal(before, Snapshot(o));
+    }
+
+    [Fact]
+    public void AStoppedHandMergeUndo_WhoseOriginalIsGone_LeavesTheEditInPlace()
+    {
+        var o = Overlay();
+        var markers = Path.Combine(o, "files", "src", "clash.c");
+        File.WriteAllText(markers, "merged\n");
+        var h = Assert.Single(Resolve(o, "undo", ["src"], write: false).Restored);
+        File.WriteAllText(Path.Combine(o, OverlayConflicts.ResolvingName),
+            $"{{\"undo\": true, \"decisions\": [], \"restore\": [{{\"path\": \"src/clash.c\", \"markers\": \"src/clash.c\", \"keep\": \"{h.Keep}\"}}]}}");
+        File.Delete(Path.Combine(o, OverlayConflicts.OriginalsDir, "src", "clash.c"));
+
+        var next = Resolve(o, "v1", ["blob.bin"]);                          // finishes it, never stuck
+        Assert.True(next.FinishedStopped);
+        Assert.Contains(next.Refused, x => x.Path == "src/clash.c" && x.Why.Contains("originals"));
+        Assert.Equal("merged\n", File.ReadAllText(markers));
+        Assert.False(File.Exists(Path.Combine(o, OverlayConflicts.ResolvingName)));
+    }
+
+    [Fact]
+    public void AMarkersFileSavedUnchanged_IsNotAnEdit()
+    {
+        var o = Overlay();
+        var markers = Path.Combine(o, "files", "src", "clash.c");
+        File.WriteAllBytes(markers, File.ReadAllBytes(markers));
+        File.SetLastWriteTimeUtc(markers, DateTime.UtcNow.AddMinutes(1));
+        Assert.Empty(OverlayConflicts.Load(o).Edited);
+        Assert.Single(Resolve(o, "v2", ["src"]).Done);
+    }
+
+    [Fact]
+    public void AMarkersFilePutBackAfterAChoice_IsRefusedByApply()
+    {
+        var o = Overlay();
+        Resolve(o, "v1", ["src"]);
+        Directory.CreateDirectory(Path.Combine(o, "files", "src"));
+        File.Copy(Path.Combine(o, OverlayConflicts.SetAsideDir, "src", "clash.c"), Path.Combine(o, "files", "src", "clash.c"));
+        var target = CopyOfV1();
+        Assert.Contains(OverlayApplier.Run(o, target, write: false).MarkersLeft!, m => m.Path == "src/clash.c");
+        Assert.Contains("src/clash.c", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(o, target, write: true)).Message);
     }
 
     [Fact]
