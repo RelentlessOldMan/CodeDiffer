@@ -705,9 +705,15 @@ public sealed class CliTests : IDisposable
         Assert.Contains("1 would be deleted", dry.Stdout);
         Assert.Contains("4 would be written", dry.Stdout);
         Assert.Contains("nothing was changed", dry.Stdout);
+        Assert.Contains("--write refuses: 2 file(s)", dry.Stdout);
         AssertUnchanged(target);
 
-        var write = Cli("apply-overlay", "overlay", "T", "--write");
+        var refused = Cli("apply-overlay", "overlay", "T", "--write");     // conf.txt and addadd.txt still have markers
+        Assert.Equal(2, refused.ExitCode);
+        Assert.Contains("still have conflict markers: addadd.txt, conf.txt", refused.Stderr);
+        AssertUnchanged(target);
+
+        var write = Cli("apply-overlay", "overlay", "T", "--write", "--with-markers");
         Assert.True(write.ExitCode == 0, write.ToString());
         Assert.Contains("APPLIED", write.Stdout);
         Assert.False(File.Exists(_t.P("T/del2.txt")));
@@ -723,7 +729,7 @@ public sealed class CliTests : IDisposable
         Assert.Contains("already applied", again.Stderr);
         Assert.Equal("c1\nresolved\nc3\n", _t.Read("T/conf.txt"));
 
-        var forced = Cli("apply-overlay", "overlay", "T", "--write", "--again");
+        var forced = Cli("apply-overlay", "overlay", "T", "--write", "--again", "--with-markers");
         Assert.True(forced.ExitCode == 0, forced.ToString());
         Assert.Contains("<<<<<<< v1", _t.Read("T/conf.txt"));
     }

@@ -8,7 +8,8 @@ namespace CodeDiffer.Core.ThreeWay;
 /// <summary>What <see cref="OverlayApplier.Run"/> did (or, on a dry run, would do).</summary>
 public sealed record OverlayApplyResult(string Overlay, string Target, string? MadeForV1, bool Written, bool Cancelled,
     int Deleted, int AlreadyGone, int Copied, int AlreadyThere, int RemovedDirectories, int NotReached, long Bytes,
-    IReadOnlyList<string> Deletes, IReadOnlyList<(string Path, string Why)> Failed, int? Undecided = null);
+    IReadOnlyList<string> Deletes, IReadOnlyList<(string Path, string Why)> Failed, int? Undecided = null,
+    IReadOnlyList<(string Path, int Blocks)>? MarkersLeft = null);
 
 /// <summary>
 /// Applies a merge overlay (<see cref="MergeOverlay"/>) to a tree — v1, or better a copy of it — the documented way:
@@ -23,14 +24,16 @@ public sealed record OverlayApplyResult(string Overlay, string Target, string? M
 /// </para>
 /// It refuses, before touching anything, an overlay still being written (<c>INCOMPLETE.txt</c>), a target inside
 /// the overlay (or the reverse), and a <c>deletes.txt</c> line that is not a plain path inside the target.
-/// It deletes files only, never a directory that is in a deletes.txt path's place.
+/// It deletes files only, never a directory that is in a deletes.txt path's place. A write is refused while a file in
+/// <c>files\</c> still holds conflict markers (an undecided text conflict), unless <c>withMarkers</c>: a merge left half
+/// done never lands in the tree unnoticed.
 /// </summary>
 public static class OverlayApplier
 {
     public const string AppliedName = "APPLIED.txt", ApplyingName = "APPLYING.txt";
 
     public static OverlayApplyResult Run(string overlay, string target, bool write, bool again = false, int parallelism = 8,
-        CancellationToken ct = default, PortProgress? progress = null)
+        CancellationToken ct = default, PortProgress? progress = null, bool withMarkers = false)
     {
         overlay = Path.TrimEndingDirectorySeparator(Path.GetFullPath(overlay));
         target = Path.TrimEndingDirectorySeparator(Path.GetFullPath(target));
@@ -69,6 +72,12 @@ public static class OverlayApplier
                 throw new ArgumentException($"deletes.txt has a line that is not a plain relative path: \"{line}\"");
             deletes.Add(line);
         }
+        var markersLeft = MarkersLeft(overlay, files);
+        if (write && !withMarkers && markersLeft.Count > 0)
+            throw new ArgumentException($"{markersLeft.Count:N0} file(s) in files\\ still have conflict markers: " +
+                                        string.Join(", ", markersLeft.Take(5).Select(m => ResultStore.Escaped(m.Path))) + (markersLeft.Count > 5 ? ", ..." : "") +
+                                        " — edit and save them (one with no markers left counts as merged), or settle them with codediffer resolve; " +
+                                        "--with-markers applies them as they are");
         var copies = Directory.EnumerateFiles(files, "*", SearchOption.AllDirectories)
             .Select(f => Path.GetRelativePath(files, f)).Order(StringComparer.Ordinal).ToList();
         if (progress is not null) progress.Total = deletes.Count + copies.Count;
@@ -214,7 +223,23 @@ public static class OverlayApplier
             try { undecided = OverlayConflicts.Load(overlay).Undecided.Count(); }
             catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or ArgumentException) { }
         return new OverlayApplyResult(overlay, target, madeFor, write, cancelled, deleted, gone, copied, there, removedDirs, notReached, bytes,
-            hits, fails, undecided);
+            hits, fails, undecided, markersLeft);
+    }
+
+    /// <summary>The undecided text conflicts whose file in files\ still holds conflict markers, and how many blocks.
+    /// None for an overlay from before conflicts.json.</summary>
+    private static List<(string Path, int Blocks)> MarkersLeft(string overlay, string files)
+    {
+        var left = new List<(string, int)>();
+        if (!File.Exists(Path.Combine(overlay, OverlayConflicts.FileName))) return left;
+        OverlayConflicts cs;
+        try { cs = OverlayConflicts.Load(overlay); }
+        catch (System.Text.Json.JsonException) { return left; }
+        foreach (var c in cs.Undecided)
+            if (c.Markers is { } m && Full(files, m) is var f && File.Exists(f)
+                && (cs.Edited.TryGetValue(c.Path, out var n) ? n : OverlayConflicts.MarkerBlocks(f)) is var blocks and > 0)
+                left.Add((m, blocks));
+        return left;
     }
 
     /// <summary>The v1 the overlay was written for (its OVERLAY.txt "v1" line), or null.</summary>
@@ -250,6 +275,14 @@ public static class OverlayApplier
             o.Append("to delete:\n");
             foreach (var d in r.Deletes.Take(maxList)) o.Append($"  {d}\n");
             if (r.Deletes.Count > maxList) o.Append($"  ... {r.Deletes.Count - maxList:N0} more (deletes.txt)\n");
+        }
+        if (r.MarkersLeft is { Count: > 0 } ml)
+        {
+            o.Append(r.Written ? $"{ml.Count:N0} file(s) written with their conflict markers (--with-markers):\n"
+                : $"--write refuses: {ml.Count:N0} file(s) in files\\ still have conflict markers — edit and save them (one with no markers left " +
+                  "counts as merged), settle them with codediffer resolve, or pass --with-markers to apply them as they are:\n");
+            foreach (var (p, n) in ml.Take(maxList)) o.Append($"  {ResultStore.Escaped(p)}  ({n:N0} block(s))\n");
+            if (ml.Count > maxList) o.Append($"  ... {ml.Count - maxList:N0} more (codediffer conflicts lists them)\n");
         }
         if (r.Undecided is > 0)
             o.Append($"{r.Undecided:N0} conflict(s) not decided: {(r.Written ? "they keep" : "they would keep")} the target's version, or their " +

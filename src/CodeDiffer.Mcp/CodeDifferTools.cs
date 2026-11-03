@@ -253,7 +253,8 @@ public static class CodeDifferTools
                  "one-sided changes, clean merges, text conflicts with diff3 markers) plus deletes.txt and conflicts.txt " +
                  "(binary/large/delete/rename conflicts with each side's file). Delete deletes.txt's paths from v1, remove the " +
                  "directories that left empty, then copy files\\ over v1, to get the merged tree (the CLI's apply-overlay " +
-                 "does all three). Reads the changed files of the three trees.")]
+                 "does all three, and refuses a file still holding markers). A text conflict is merged by editing its file in " +
+                 "files\\: saved with no markers left, it counts as merged. Reads the changed files of the three trees.")]
     public static string WriteMerge(
         [Description("compare3 id (default: the most recent).")] string? compare_id = null,
         [Description("A new or empty directory outside the three trees (default: merge\\ in the compare's result directory, or merge-2\\, merge-3\\ … once that holds an " +
@@ -318,7 +319,8 @@ public static class CodeDifferTools
 
     [McpServerTool(Name = "list_conflicts")]
     [Description("A merge overlay's conflicts (write_merge's directory): how many are undecided and decided, the undecided " +
-                 "ones grouped by kind, folder and file type, so whole groups can be settled with one resolve_conflicts; with " +
+                 "ones grouped by kind, folder and file type, so whole groups can be settled with one resolve_conflicts (a " +
+                 "markers file in files\\ edited with no markers left counts as merged by hand; one with markers left is being merged); with " +
                  "list=true, the matching conflicts one per line (bounded). Reads only the overlay.")]
     public static string ListConflicts(
         [Description("The overlay directory write_merge (or compare3 --merge-out) wrote.")] string overlay_dir,
@@ -342,8 +344,9 @@ public static class CodeDifferTools
     [Description("Settle a merge overlay's conflicts in bulk before it is applied: every conflict the patterns and kinds pick " +
                  "is taken from v1, taken from v2 (only if v2's file is still what the overlay saw and lands on no other file), or kept as v1's to " +
                  "regenerate; undo takes choices back. Recorded in the overlay itself (files\\, deletes.txt, decisions.json), " +
-                 "so applying the overlay applies the choices. A conflict already decided is left alone until undone, and a markers " +
-                 "file edited by hand is never set aside. Dry run " +
+                 "so applying the overlay applies the choices. A conflict already decided (a choice, or a hand merge) is left alone " +
+                 "until undone, and a markers file being merged by hand is never set aside; undo of a hand merge puts the markers " +
+                 "file back as written and keeps the edit in set-aside\\hand-merges\\. Dry run " +
                  "unless write=true. Pick with patterns and/or kinds, or all=true for every conflict.")]
     public static string ResolveConflicts(
         [Description("The overlay directory write_merge (or compare3 --merge-out) wrote.")] string overlay_dir,

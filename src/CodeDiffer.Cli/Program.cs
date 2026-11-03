@@ -963,13 +963,13 @@ static int Apply(string[] args)
 /// <summary>apply-overlay: apply a compare3 --merge-out overlay to v1 (dry run unless --write). Exit 1 when a file failed.</summary>
 static int ApplyOverlay(string[] args)
 {
-    const string overlayUsage = "usage: codediffer apply-overlay <overlay-dir> <target> [--write] [--again] [--threads N]";
+    const string overlayUsage = "usage: codediffer apply-overlay <overlay-dir> <target> [--write] [--again] [--with-markers] [--threads N]";
     if (args.Length < 3 || args[1].StartsWith("--") || args[2].StartsWith("--"))
     {
         Console.Error.WriteLine(overlayUsage);
         return 64;
     }
-    if (!ArgsOk(args, 2, overlayUsage, ["--write", "--again"], ["--threads"])) return 64;
+    if (!ArgsOk(args, 2, overlayUsage, ["--write", "--again", "--with-markers"], ["--threads"])) return 64;
     int threads = CompareOptions.DefaultThreadsFor(args[1], args[2]);
     if (FlagValue(args, "--threads", from: 3) is { } t && (!int.TryParse(t, out threads) || threads < 1))
     {
@@ -982,7 +982,7 @@ static int ApplyOverlay(string[] args)
     OverlayApplyResult r;
     try
     {
-        r = WithProgress(() => OverlayApplier.Run(args[1], args[2], write, args.Contains("--again"), threads, stop.Token, progress),
+        r = WithProgress(() => OverlayApplier.Run(args[1], args[2], write, args.Contains("--again"), threads, stop.Token, progress, args.Contains("--with-markers")),
             () => $"{(write ? "applying" : "checking")}: {progress.Done:N0} / {progress.Total:N0}", stop.Cancel);
     }
     catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException or IOException or UnauthorizedAccessException)
@@ -1383,24 +1383,30 @@ static void PrintUsage()
                                        again to finish (done files come out "already").
                                        --resolve-stamps: lines colliding only in keyword
                                        stamps merge, the target's stamp kept if it changed it.
-          codediffer apply-overlay <overlay-dir> <target> [--write] [--again] [--threads N]
+          codediffer apply-overlay <overlay-dir> <target> [--write] [--again] [--with-markers]
+                                       [--threads N]
                                        apply a compare3 --merge-out overlay to v1 (or a copy):
                                        deletes.txt, then the directories the deletes emptied,
                                        then files\. Dry run unless --write; Ctrl+C stops
                                        between files, run again to finish (also after a
                                        failure). Refuses a second finished apply to the same
                                        target unless --again (it would overwrite conflicts
-                                       resolved since).
+                                       resolved since). --write refuses files that still
+                                       have conflict markers unless --with-markers.
           codediffer conflicts <overlay-dir> [<pattern>...] [--kind K[,K]] [--depth N]
                                        [--list [--max N]]
                                        an overlay's conflicts, the undecided ones grouped by
-                                       kind, folder and file type; --list lists them
+                                       kind, folder and file type; --list lists them. A file
+                                       in files\ edited with no markers left counts as merged
+                                       by hand.
           codediffer resolve <overlay-dir> v1|v2|regenerate|undo <pattern>... [--kind K[,K]]
                                        [--all] [--write]
                                        settle the conflicts a rule picks before applying:
                                        take v1's file, take v2's, or keep v1's to regenerate;
-                                       undo takes a choice back. Patterns: *.h, generated
-                                       (a name at any depth), src/gen/** (from the top).
+                                       undo takes a choice back (a hand merge too: the
+                                       markers come back, your edit is kept in set-aside\).
+                                       Patterns: *.h, generated (a name at any depth),
+                                       src/gen/** (from the top).
                                        Recorded in the overlay (files\, deletes.txt), so
                                        apply-overlay applies it. Dry run unless --write.
           codediffer blockdiff <a> <b>         content-defined block diff of two large files

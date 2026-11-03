@@ -29,7 +29,7 @@ public sealed record ConflictDecision(string Path, string Choice, string Rule, D
 public sealed class OverlayConflicts
 {
     public const string FileName = "conflicts.json", DecisionsName = "decisions.json", ResolvingName = "RESOLVING.json";
-    public const string SetAsideDir = "set-aside";
+    public const string SetAsideDir = "set-aside", OriginalsDir = "originals", HandMergesDir = "hand-merges";
 
     public required string Dir { get; init; }
     public required string Base { get; init; }
@@ -39,8 +39,13 @@ public sealed class OverlayConflicts
     public required IReadOnlyList<OverlayConflict> All { get; init; }
     /// <summary>By conflict path.</summary>
     public required IReadOnlyDictionary<string, ConflictDecision> Decisions { get; init; }
+    /// <summary>By conflict path, the undecided ones whose markers file was edited since the overlay wrote it: how many
+    /// conflict blocks it still has. None left: merged by hand, which counts as decided.</summary>
+    public required IReadOnlyDictionary<string, int> Edited { get; init; }
 
-    public IEnumerable<OverlayConflict> Undecided => All.Where(c => !Decisions.ContainsKey(c.Path));
+    public bool HandMerged(OverlayConflict c) => Edited.TryGetValue(c.Path, out var left) && left == 0;
+    public bool IsDecided(OverlayConflict c) => Decisions.ContainsKey(c.Path) || HandMerged(c);
+    public IEnumerable<OverlayConflict> Undecided => All.Where(c => !IsDecided(c));
 
     /// <summary>Written by <see cref="MergeOverlay.Write"/>. Paths are written with an unpaired surrogate as <c>\uXXXX</c>.</summary>
     internal static void Write(string dir, string baseDir, string v1, string v2, IEnumerable<OverlayConflict> conflicts)
@@ -103,6 +108,16 @@ public sealed class OverlayConflicts
                 Rel(c, "markers"), Rel(c, "alsoDelete"), Rel(c, "v1"), Rel(c, "v2"), c.GetProperty("v2Size").GetInt64(),
                 c.GetProperty("v2Ticks").GetInt64(), c.TryGetProperty("failed", out var f) && f.GetBoolean(),
                 c.TryGetProperty("markersSize", out var ms) ? ms.GetInt64() : -1, c.TryGetProperty("markersTicks", out var mt) ? mt.GetInt64() : 0));
+        var decisions = ReadDecisions(System.IO.Path.Combine(overlay, DecisionsName));
+        var edited = new Dictionary<string, int>(StringComparer.Ordinal);
+        var files = System.IO.Path.Combine(overlay, "files");
+        foreach (var c in all)
+            if (!decisions.ContainsKey(c.Path) && c.Markers is { } m && c.MarkersSize >= 0)
+            {
+                var full = System.IO.Path.Combine(files, m.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                var fi = new FileInfo(full);
+                if (fi.Exists && (fi.Length != c.MarkersSize || fi.LastWriteTimeUtc.Ticks != c.MarkersTicks)) edited[c.Path] = MarkerBlocks(full);
+            }
         return new OverlayConflicts
         {
             Dir = overlay,
@@ -110,8 +125,25 @@ public sealed class OverlayConflicts
             V1 = root.GetProperty("v1").GetString()!,
             V2 = root.GetProperty("v2").GetString()!,
             All = all,
-            Decisions = ReadDecisions(System.IO.Path.Combine(overlay, DecisionsName)),
+            Decisions = decisions,
+            Edited = edited,
         };
+    }
+
+    /// <summary>How many conflict blocks a markers file holds: the most of any one of the marker lines the merger writes
+    /// (<c>&lt;&lt;&lt;&lt;&lt;&lt;&lt; v1 (</c>, <c>||||||| base (</c>, <c>&gt;&gt;&gt;&gt;&gt;&gt;&gt; v2 (</c>), so a block with only some of its
+    /// lines removed still counts. A bare <c>=======</c> is not counted: text has those of its own.</summary>
+    public static int MarkerBlocks(string path)
+    {
+        int open = 0, mid = 0, close = 0;
+        using var r = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        for (var line = r.ReadLine(); line is not null; line = r.ReadLine())
+        {
+            if (line.StartsWith("<<<<<<< v1 (", StringComparison.Ordinal)) open++;
+            else if (line.StartsWith("||||||| base (", StringComparison.Ordinal)) mid++;
+            else if (line.StartsWith(">>>>>>> v2 (", StringComparison.Ordinal)) close++;
+        }
+        return Math.Max(open, Math.Max(mid, close));
     }
 
     private static string? P(JsonElement c, string name)
@@ -169,14 +201,18 @@ public sealed class OverlayConflicts
         var o = new StringBuilder();
         var matcher = new ConflictMatcher(patterns, kinds);
         var picked = All.Where(matcher.Matches).ToList();
-        var open = picked.Where(c => !Decisions.ContainsKey(c.Path)).ToList();
-        var decided = picked.Where(c => Decisions.ContainsKey(c.Path)).ToList();
+        var open = picked.Where(c => !IsDecided(c)).ToList();
+        var decided = picked.Where(IsDecided).ToList();
+        string Choice(OverlayConflict c) => Decisions.TryGetValue(c.Path, out var d) ? d.Choice : "merged by hand";
         string scope = matcher.Any ? $" matching {matcher}" : "";
         o.Append($"{picked.Count:N0} conflict(s){scope} in {Dir} · {open.Count:N0} undecided · {decided.Count:N0} decided");
         if (decided.Count > 0)
-            o.Append(" (" + string.Join(" · ", decided.GroupBy(c => Decisions[c.Path].Choice).OrderBy(g => g.Key, StringComparer.Ordinal)
+            o.Append(" (" + string.Join(" · ", decided.GroupBy(Choice).OrderBy(g => g.Key, StringComparer.Ordinal)
                 .Select(g => $"{g.Count():N0} {g.Key}")) + ")");
         o.Append('\n');
+        var partly = open.Where(c => Edited.ContainsKey(c.Path)).ToList();
+        if (partly.Count > 0)
+            o.Append($"{partly.Count:N0} being merged by hand: edited, with {partly.Sum(c => Edited[c.Path]):N0} conflict block(s) still in them\n");
         if (open.Count > 0)
         {
             Group(o, "undecided, by kind", open, c => c.Kind + (c.Markers is not null ? " (markers in files\\)" : ""));
@@ -187,18 +223,24 @@ public sealed class OverlayConflicts
         {
             if (open.Count > 0) o.Append("undecided:\n");
             foreach (var c in open.Take(max))
-                o.Append($"  {c.Kind,-14} {ResultStore.Escaped(c.Path)}").Append(c.Note is { } n ? $"  — {n}" : "").Append('\n');
+                o.Append($"  {c.Kind,-14} {ResultStore.Escaped(c.Path)}").Append(c.Note is { } n ? $"  — {n}" : "")
+                 .Append(Edited.TryGetValue(c.Path, out var left) ? $"  (being merged by hand: {left:N0} block(s) left)" : "").Append('\n');
             if (open.Count > max) o.Append($"  ... {open.Count - max:N0} more (--max N)\n");
             if (decided.Count > 0) o.Append("decided:\n");
             foreach (var c in decided.Take(max))
-                o.Append($"  {Decisions[c.Path].Choice,-10} {ResultStore.Escaped(c.Path)}  (rule: {Decisions[c.Path].Rule})\n");
+                o.Append(Decisions.TryGetValue(c.Path, out var d) ? $"  {d.Choice,-10} {ResultStore.Escaped(c.Path)}  (rule: {d.Rule})\n"
+                    : $"  {"merged",-10} {ResultStore.Escaped(c.Path)}  (by hand: files\\{ResultStore.Escaped(c.Markers!)})\n");
             if (decided.Count > max) o.Append($"  ... {decided.Count - max:N0} more (--max N)\n");
         }
         if (open.Any(c => c.Failed))
             o.Append($"{open.Count(c => c.Failed):N0} \"not written\" are files the overlay failed to write: write the overlay again for them\n");
-        o.Append(open.Count == 0
-            ? "nothing left to decide here: apply it with codediffer apply-overlay (text conflicts left in files\\ keep their markers)\n"
-            : $"settle a group: codediffer resolve \"{Dir}\" v1|v2|regenerate <pattern>... [--kind K]   (dry run; --write records it)\n");
+        if (open.Count == 0) o.Append("nothing left to decide here: apply it with codediffer apply-overlay\n");
+        else
+        {
+            if (open.Any(c => c.Markers is not null))
+                o.Append("merge one by hand: edit its file in files\\ and save it; with no markers left it counts as merged\n");
+            o.Append($"settle a group: codediffer resolve \"{Dir}\" v1|v2|regenerate <pattern>... [--kind K]   (dry run; --write records it)\n");
+        }
         return o.ToString();
     }
 
@@ -281,7 +323,13 @@ public sealed class ConflictMatcher
 
 /// <summary>What <see cref="ConflictResolver.Run"/> did (or, on a dry run, would do).</summary>
 public sealed record ResolveResult(string Overlay, string Choice, string Rule, bool Written, IReadOnlyList<ConflictDecision> Done,
-    IReadOnlyList<(string Path, string Why)> Refused, int AlreadyDecided, int NotDecided, int Undecided, bool FinishedStopped);
+    IReadOnlyList<(string Path, string Why)> Refused, int AlreadyDecided, int NotDecided, int Undecided, bool FinishedStopped,
+    IReadOnlyList<HandUndo> Restored);
+
+/// <summary>A hand merge undone: <see cref="Markers"/> (in <c>files\</c>) put back as the overlay wrote it, from
+/// <c>originals\</c>; the edited file, if <see cref="Existed"/>, moved to <c>set-aside\</c><see cref="Keep"/> first.
+/// <see cref="WasMerged"/>: it had no markers left (it counted as decided).</summary>
+public sealed record HandUndo(string Path, string Markers, string Keep, bool WasMerged, bool Existed);
 
 /// <summary>
 /// Settles a merge overlay's conflicts in bulk, before it is applied: every conflict a rule (path patterns and kinds,
@@ -293,8 +341,10 @@ public sealed record ResolveResult(string Overlay, string Choice, string Rule, b
 /// <item>v2: the same, then v2's file is copied into <c>files\</c> at v2's path (only if it is still the file the
 ///   overlay saw: its size and time), and v1's copy at another path, or one v2 deleted, goes into <c>deletes.txt</c>.</item>
 /// </list>
-/// Dry run unless <c>write</c>. A conflict already decided is left alone (undo it first), and so is one whose markers
-/// file was edited since the overlay was written (merged by hand). v2 is never taken where its file would land on
+/// Dry run unless <c>write</c>. A conflict already decided is left alone (undo it first): by a choice, or merged by
+/// hand (its markers file edited, no markers left). So is one being merged by hand (edited, markers left). Undo takes a
+/// hand merge back too: the markers file as written comes back from <c>originals\</c>, the edit kept in
+/// <c>set-aside\hand-merges\</c>. v2 is never taken where its file would land on
 /// another file: one v1 has of its own, another conflict's, or another write in <c>files\</c>; nor for a kind whose
 /// sides aren't known well enough (<see cref="NotFromV2"/>): decide those by hand. While it writes, the overlay holds
 /// <c>RESOLVING.json</c> (what it is doing; created only if absent, so two resolves never write at once), and
@@ -334,8 +384,10 @@ public static class ConflictResolver
         var files = Path.Combine(s.Dir, "files");
         var aside = Path.Combine(s.Dir, OverlayConflicts.SetAsideDir);
         var done = new List<ConflictDecision>();
+        var restores = new List<HandUndo>();
         int already = 0, notDecided = 0;
         var now = DateTime.UtcNow;
+        string kept = $"{OverlayConflicts.HandMergesDir}/{now:yyyyMMdd-HHmmss-fff}"; // where this undo keeps the hand merges it takes back
         var claimed = new HashSet<string>(TreeMerger.PathComparer); // files\ paths this run copies into
         // How many conflicts have each path (on a side, or as their markers): v2's file never lands on another's.
         var holders = new Dictionary<string, int>(TreeMerger.PathComparer);
@@ -347,7 +399,20 @@ public static class ConflictResolver
             bool isDecided = s.Decisions.TryGetValue(c.Path, out var was);
             if (choice == "undo")
             {
-                if (!isDecided) { notDecided++; continue; }
+                if (!isDecided)
+                {
+                    // A markers file edited (merged by hand, or part way) or deleted: the file as written goes back.
+                    var m0 = c.Markers;
+                    bool there = m0 is not null && File.Exists(Path.Combine(files, Native(m0)));
+                    if (m0 is null || c.MarkersSize < 0 || there && !s.Edited.ContainsKey(c.Path)) { notDecided++; continue; }
+                    if (!File.Exists(Path.Combine(s.Dir, OverlayConflicts.OriginalsDir, Native(m0))))
+                    {
+                        refused.Add((c.Path, $"no copy of files\\{m0} as written is kept (an overlay from an older CodeDiffer): write the overlay again"));
+                        continue;
+                    }
+                    restores.Add(new HandUndo(c.Path, m0, $"{kept}/{m0}", s.HandMerged(c), there));
+                    continue;
+                }
                 // Its markers file goes back where it was, unless another file is there now.
                 bool same = was!.SetAside is not null && was.Copied is not null && TreeMerger.PathComparer.Equals(was.SetAside, was.Copied);
                 if (was.SetAside is { } m && !same && File.Exists(Path.Combine(aside, Native(m))) && File.Exists(Path.Combine(files, Native(m))))
@@ -358,9 +423,13 @@ public static class ConflictResolver
                 done.Add(was);
                 continue;
             }
-            if (isDecided) { already++; continue; }
+            if (isDecided || s.HandMerged(c)) { already++; continue; }
             if (c.Failed) { refused.Add((c.Path, "the overlay failed to write it: write the overlay again")); continue; }
-            if (MarkersEdited(files, c) is { } edited) { refused.Add((c.Path, edited)); continue; }
+            if (s.Edited.TryGetValue(c.Path, out var left))
+            {
+                refused.Add((c.Path, $"files\\{c.Markers} is being merged by hand ({left:N0} conflict block(s) left): finish it, or undo it to start over"));
+                continue;
+            }
             if (choice != "v2")
             {
                 var removed = c.AlsoDelete is { } ad && deletes.Contains(ad) ? new[] { ad } : [];
@@ -395,9 +464,9 @@ public static class ConflictResolver
             done.Add(new ConflictDecision(c.Path, choice, rule, now, c.Markers, c.V2At, added, removedDeletes));
         }
 
-        if (write && done.Count > 0)
+        if (write && done.Count + restores.Count > 0)
         {
-            using var held = Claim(journal, choice == "undo", done);
+            using var held = Claim(journal, choice == "undo", done, restores);
             try
             {
                 // Taken: now nothing else changes it. Check nothing did between reading it and taking it.
@@ -409,8 +478,8 @@ public static class ConflictResolver
             refused.AddRange(dropped);
             done.RemoveAll(d => dropped.Any(x => x.Path == d.Path));
         }
-        int undecided = s.All.Count - s.Decisions.Count + (choice == "undo" ? done.Count : -done.Count);
-        return new ResolveResult(s.Dir, choice, rule, write, done, refused, already, notDecided, undecided, finished);
+        int undecided = s.Undecided.Count() + (choice == "undo" ? done.Count + restores.Count(h => h.WasMerged) : -done.Count);
+        return new ResolveResult(s.Dir, choice, rule, write, done, refused, already, notDecided, undecided, finished, restores);
     }
 
     private static void RefuseApplied(string dir)
@@ -425,15 +494,6 @@ public static class ConflictResolver
     private static string Stamp(string dir)
         => string.Join("|", new[] { "deletes.txt", OverlayConflicts.DecisionsName }.Select(n => new FileInfo(Path.Combine(dir, n)))
             .Select(f => f.Exists ? $"{f.Length}:{f.LastWriteTimeUtc.Ticks}" : "-"));
-
-    /// <summary>Why a markers file mustn't be set aside: it was edited since the overlay wrote it (merged by hand).</summary>
-    private static string? MarkersEdited(string files, OverlayConflict c)
-    {
-        if (c.Markers is null || c.MarkersSize < 0) return null;
-        var fi = new FileInfo(Path.Combine(files, Native(c.Markers)));
-        if (!fi.Exists || fi.Length == c.MarkersSize && fi.LastWriteTimeUtc.Ticks == c.MarkersTicks) return null;
-        return $"files\\{c.Markers} was edited since the overlay was written (merged by hand?): it stays — delete it first to choose a side anyway";
-    }
 
     /// <summary>The first folder of <paramref name="rel"/> that <c>files\</c> holds as a file.</summary>
     private static string? FileInTheWay(string files, string rel)
@@ -454,12 +514,15 @@ public static class ConflictResolver
     {
         bool undo;
         List<ConflictDecision> ds;
+        List<(string Path, string Markers, string Keep)> restores = [];
         var bytes = new byte[held.Length];
         held.ReadExactly(bytes);
         using (var doc = JsonDocument.Parse(bytes))
         {
             undo = doc.RootElement.GetProperty("undo").GetBoolean();
             ds = [.. doc.RootElement.GetProperty("decisions").EnumerateArray().Select(OverlayConflicts.Decision)];
+            if (doc.RootElement.TryGetProperty("restore", out var rs))
+                restores = [.. rs.EnumerateArray().Select(e => (OverlayConflicts.Rel(e, "path")!, OverlayConflicts.Rel(e, "markers")!, OverlayConflicts.Rel(e, "keep")!))];
         }
         var files = Path.Combine(s.Dir, "files");
         var aside = Path.Combine(s.Dir, OverlayConflicts.SetAsideDir);
@@ -522,6 +585,29 @@ public static class ConflictResolver
                 }
             }
             kept.Add(d);
+        }
+        // Hand merges undone: the edited file set aside, then the markers file as written put back with its size and
+        // time, so it reads as untouched again. Each step is skipped once done.
+        foreach (var (path, m, keep) in restores)
+        {
+            var c = byPath[path];
+            var dest = Path.Combine(files, Native(m));
+            var fi = new FileInfo(dest);
+            if (fi.Exists && fi.Length == c.MarkersSize && fi.LastWriteTimeUtc.Ticks == c.MarkersTicks) continue;
+            if (fi.Exists)
+            {
+                var to = Path.Combine(aside, Native(keep));
+                if (File.Exists(to)) throw new IOException($"set-aside\\{keep} is there already: move it away, then run a resolve with --write again");
+                Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+                File.Move(dest, to);
+            }
+            Directory.CreateDirectory(temp);
+            var tmp = Path.Combine(temp, Guid.NewGuid().ToString("N"));
+            File.Copy(Path.Combine(s.Dir, OverlayConflicts.OriginalsDir, Native(m)), tmp, overwrite: true);
+            MergeOverlay.Writable(tmp);
+            File.SetLastWriteTimeUtc(tmp, new DateTime(c.MarkersTicks, DateTimeKind.Utc));
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.Move(tmp, dest);
         }
         if (Directory.Exists(temp)) Directory.Delete(temp, recursive: true);
 
@@ -603,7 +689,7 @@ public static class ConflictResolver
 
     /// <summary>Write the journal, only if there is none, and hold it: it is also the lock, so two resolves never write
     /// at once.</summary>
-    private static FileStream Claim(string journal, bool undo, IReadOnlyList<ConflictDecision> ds)
+    private static FileStream Claim(string journal, bool undo, IReadOnlyList<ConflictDecision> ds, IReadOnlyList<HandUndo> restores)
     {
         using var ms = new MemoryStream();
         using (var w = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
@@ -613,6 +699,16 @@ public static class ConflictResolver
             w.WriteBoolean("undo", undo);
             w.WriteStartArray("decisions");
             foreach (var d in ds) OverlayConflicts.WriteDecision(w, d);
+            w.WriteEndArray();
+            w.WriteStartArray("restore");
+            foreach (var h in restores)
+            {
+                w.WriteStartObject();
+                w.WriteString("path", ResultStore.Escaped(h.Path));
+                w.WriteString("markers", ResultStore.Escaped(h.Markers));
+                w.WriteString("keep", ResultStore.Escaped(h.Keep));
+                w.WriteEndObject();
+            }
             w.WriteEndArray();
             w.WriteEndObject();
         }
@@ -667,7 +763,8 @@ public static class ConflictResolver
         if (r.FinishedStopped) o.Append("finished a resolve that was stopped part way first\n");
         string w = r.Written ? "" : "would be ";
         o.Append(r.Choice == "undo"
-            ? $"{r.Done.Count:N0} choice(s) {w}undone" + (r.NotDecided > 0 ? $" · {r.NotDecided:N0} matching not decided" : "") + "\n"
+            ? $"{r.Done.Count + r.Restored.Count:N0} choice(s) {w}undone" + (r.NotDecided > 0 ? $" · {r.NotDecided:N0} matching not decided" : "")
+              + (r.Refused.Count > 0 ? $" · {r.Refused.Count:N0} refused" : "") + "\n"
             : $"{r.Done.Count:N0} conflict(s) {w}decided" + (r.AlreadyDecided > 0 ? $" · {r.AlreadyDecided:N0} already decided (left alone; undo them first)" : "")
               + (r.Refused.Count > 0 ? $" · {r.Refused.Count:N0} refused" : "") + "\n");
         foreach (var d in r.Done.Take(maxList))
@@ -681,6 +778,10 @@ public static class ConflictResolver
              .Append(what.Count > 0 ? $"  ({string.Join(" · ", what)})" : "").Append('\n');
         }
         if (r.Done.Count > maxList) o.Append($"  ... {r.Done.Count - maxList:N0} more\n");
+        foreach (var h in r.Restored.Take(maxList))
+            o.Append($"  {(h.WasMerged ? "hand merge undone" : "hand edit undone"),-12} {ResultStore.Escaped(h.Path)}  (markers put back")
+             .Append(h.Existed ? $" · your edit kept in {OverlayConflicts.SetAsideDir}\\{ResultStore.Escaped(h.Keep).Replace('/', '\\')})\n" : ")\n");
+        if (r.Restored.Count > maxList) o.Append($"  ... {r.Restored.Count - maxList:N0} more\n");
         if (r.Refused.Count > 0)
         {
             o.Append("refused:\n");
@@ -688,7 +789,7 @@ public static class ConflictResolver
             if (r.Refused.Count > maxList) o.Append($"  ... {r.Refused.Count - maxList:N0} more\n");
         }
         o.Append($"{r.Undecided:N0} conflict(s) {(r.Written ? "" : "would be ")}left undecided\n");
-        o.Append(!r.Written ? (r.Done.Count > 0 ? "nothing was changed — run again with --write to record it\n" : "nothing to do\n")
+        o.Append(!r.Written ? (r.Done.Count + r.Restored.Count > 0 ? "nothing was changed — run again with --write to record it\n" : "nothing to do\n")
                  : "apply-overlay now applies these choices (codediffer conflicts lists what is left)\n");
         return o.ToString();
     }

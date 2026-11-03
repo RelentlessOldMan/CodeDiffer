@@ -25,6 +25,7 @@ public sealed class OverlayDirTakenException(string dir)
 ///   as one file (binary, large, modify/delete, rename/rename, path collision, encoding, line endings) with each side's file to choose from.</item>
 /// <item><c>conflicts.json</c> — the same conflicts for <see cref="ConflictResolver"/>, which records choices made in
 ///   bulk (take v1, take v2, regenerate) by editing <c>files\</c> and <c>deletes.txt</c>.</item>
+/// <item><c>originals\</c> — each markers file as written, so a hand merge of it can be undone.</item>
 /// <item><c>OVERLAY.txt</c> — what this is and how to apply it.</item>
 /// </list>
 /// Applying it: delete the paths in <c>deletes.txt</c> from v1, remove the directories that left empty, then copy
@@ -156,6 +157,12 @@ public static class MergeOverlay
                         if (now != expected)
                             throw new IOException($"changed since the compare: it now merges with {now} conflict region(s), not {expected}; compare again");
                         File.WriteAllBytes(temp, merged);
+                        if (w.Kind == Kind.Markers) // the file as written, so undoing a hand merge can put it back
+                        {
+                            var original = Full(Path.Combine(dir, OverlayConflicts.OriginalsDir), w.Dest);
+                            Directory.CreateDirectory(Path.GetDirectoryName(original)!);
+                            File.WriteAllBytes(original, merged);
+                        }
                         break;
                 }
                 File.Move(temp, target);
@@ -217,9 +224,12 @@ public static class MergeOverlay
             Or let CodeDiffer do all three (dry run first; safe to stop and run again):
               codediffer apply-overlay "{dir}" <v1 or a copy of it> --write
             Paths only v1 changed need nothing (v1 already has them).
-            To settle conflicts in bulk first (take v1, take v2 or regenerate, by folder, pattern or kind):
+            Decide the conflicts first. A file in files\ with conflict markers: edit it and save it; one with no
+            markers left counts as merged by hand (originals\ keeps it as written, so undo can put it back).
+            The rest in bulk (take v1, take v2 or regenerate, by folder, pattern or kind):
               codediffer conflicts "{dir}"
               codediffer resolve "{dir}" v1|v2|regenerate <pattern>... [--kind K] --write
+            apply-overlay --write refuses a file still holding markers (--with-markers applies it as it is).
             (decisions.json records the choices; while RESOLVING.json is here a resolve is writing, or was stopped:
             don't apply until a resolve --write has finished it)
 

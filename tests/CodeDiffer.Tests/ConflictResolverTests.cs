@@ -73,8 +73,8 @@ public sealed class ConflictResolverTests : IDisposable
         return dir;
     }
 
-    /// <summary>apply-overlay onto a fresh copy of v1.</summary>
-    private string Apply(string overlay)
+    /// <summary>apply-overlay onto a fresh copy of v1 (with the files still holding markers, unless told not to).</summary>
+    private string Apply(string overlay, bool withMarkers = true)
     {
         var target = Path.Combine(_dir, "M-" + Guid.NewGuid().ToString("N")[..6]);
         foreach (var f in Directory.EnumerateFiles(_v1, "*", SearchOption.AllDirectories))
@@ -83,8 +83,20 @@ public sealed class ConflictResolverTests : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.Copy(f, dest);
         }
-        var a = OverlayApplier.Run(overlay, target, write: true);
+        var a = OverlayApplier.Run(overlay, target, write: true, withMarkers: withMarkers);
         Assert.Empty(a.Failed);
+        return target;
+    }
+
+    private string CopyOfV1()
+    {
+        var target = Path.Combine(_dir, "T-" + Guid.NewGuid().ToString("N")[..6]);
+        foreach (var f in Directory.EnumerateFiles(_v1, "*", SearchOption.AllDirectories))
+        {
+            var dest = Path.Combine(target, Path.GetRelativePath(_v1, f));
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.Copy(f, dest);
+        }
         return target;
     }
 
@@ -354,15 +366,142 @@ public sealed class ConflictResolverTests : IDisposable
     }
 
     [Fact]
-    public void AMarkersFileMergedByHand_IsNeverSetAside()
+    public void AMarkersFileMergedByHand_CountsAsDecided_AndIsApplied()
     {
         var o = Overlay();
         var markers = Path.Combine(o, "files", "src", "clash.c");
-        File.WriteAllText(markers, "merged by hand\n");
+        var merged = Ten.Replace("line 5\n", "five both\n");
+        File.WriteAllText(markers, merged);
+        var s = OverlayConflicts.Load(o);
+        Assert.True(s.HandMerged(s.All.Single(c => c.Path == "src/clash.c")));
+        Assert.DoesNotContain(s.Undecided, c => c.Path == "src/clash.c");
+        var text = s.Text([], [], list: true);
+        Assert.Contains("5 undecided · 1 decided (1 merged by hand)", text);
+        Assert.Contains("merged     src/clash.c  (by hand", text);
+
+        var r = Resolve(o, "v2", ["src"]);                                  // never set aside or replaced
+        Assert.Empty(r.Done);
+        Assert.Empty(r.Refused);
+        Assert.Equal(1, r.AlreadyDecided);
+        Assert.Equal(merged, File.ReadAllText(markers));
+
+        Assert.Equal(5, Resolve(o, "v1", ["*"]).Done.Count);               // the rest settled: none left, nothing refused
+        Assert.Empty(OverlayConflicts.Load(o).Undecided);
+        Assert.Equal(merged, Read(Apply(o, withMarkers: false), "src/clash.c"));
+    }
+
+    [Fact]
+    public void AMarkersFileMergedPartWay_IsRefusedByResolve_AndByApply()
+    {
+        var o = Overlay();
+        var markers = Path.Combine(o, "files", "src", "clash.c");
+        File.WriteAllText(markers, File.ReadAllText(markers).Replace("five v1", "FIVE v1"));
+        var s = OverlayConflicts.Load(o);
+        Assert.Equal(1, s.Edited["src/clash.c"]);
+        Assert.Contains(s.Undecided, c => c.Path == "src/clash.c");
+        Assert.Contains("1 being merged by hand", s.Text([], []));
+
         var r = Resolve(o, "v2", ["src"]);
         Assert.Empty(r.Done);
-        Assert.Contains("edited since the overlay was written", Assert.Single(r.Refused).Why);
-        Assert.Equal("merged by hand\n", File.ReadAllText(markers));
+        Assert.Contains("being merged by hand (1 conflict block(s) left)", Assert.Single(r.Refused).Why);
+
+        var target = CopyOfV1();
+        var dry = OverlayApplier.Run(o, target, write: false);
+        Assert.Equal(["gen/regs.h", "new/r.c", "src/clash.c"], dry.MarkersLeft!.Select(m => m.Path).Order(StringComparer.Ordinal));
+        Assert.Contains("--write refuses: 3 file(s)", OverlayApplier.Text(dry));
+        Assert.Contains("still have conflict markers", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(o, target, write: true)).Message);
+        Assert.False(File.Exists(Path.Combine(o, OverlayApplier.ApplyingName)));
+        Assert.Equal(Read(_v1, "src/clash.c"), Read(target, "src/clash.c")); // nothing touched
+        Assert.Contains("written with their conflict markers", OverlayApplier.Text(OverlayApplier.Run(o, target, write: true, withMarkers: true)));
+        Assert.Contains("FIVE v1", Read(target, "src/clash.c"));
+    }
+
+    [Fact]
+    public void Undo_TakesAHandMergeBack_AndKeepsTheEdit()
+    {
+        var o = Overlay();
+        var before = Snapshot(o);
+        var markers = Path.Combine(o, "files", "src", "clash.c");
+        var merged = Ten.Replace("line 5\n", "five both\n");
+        File.WriteAllText(markers, merged);
+        File.Delete(Path.Combine(o, "files", "gen", "regs.h"));            // deleted by hand: put back too
+
+        var dry = Resolve(o, "undo", ["src", "gen"], write: false);
+        Assert.Equal(["gen/regs.h", "src/clash.c"], dry.Restored.Select(h => h.Path).Order(StringComparer.Ordinal));
+        Assert.Equal(merged, File.ReadAllText(markers));
+
+        var u = Resolve(o, "undo", ["src", "gen"]);
+        Assert.Equal(before, Snapshot(o));
+        var s = OverlayConflicts.Load(o);
+        Assert.Empty(s.Edited);                                             // as written: size and time too
+        Assert.Equal(6, s.Undecided.Count());
+        Assert.Equal(6, u.Undecided);
+        var keptAt = Assert.Single(Directory.GetFiles(Path.Combine(o, OverlayConflicts.SetAsideDir, OverlayConflicts.HandMergesDir), "clash.c", SearchOption.AllDirectories));
+        Assert.Equal(merged, File.ReadAllText(keptAt));
+        var text = ConflictResolver.Text(u);
+        Assert.Contains("2 choice(s) undone", text);
+        Assert.Contains("hand merge undone src/clash.c  (markers put back · your edit kept in set-aside\\hand-merges\\", text);
+        Assert.Contains("hand edit undone gen/regs.h  (markers put back)", text);
+        Assert.Equal(0, Resolve(o, "undo", ["src"]).Restored.Count);         // nothing left to take back
+    }
+
+    [Fact]
+    public void AStoppedHandMergeUndo_IsFinishedByTheNextResolve()
+    {
+        var o = Overlay();
+        var before = Snapshot(o);
+        var markers = Path.Combine(o, "files", "src", "clash.c");
+        File.WriteAllText(markers, "merged\n");
+        var plan = Resolve(o, "undo", ["src"], write: false);
+        var h = Assert.Single(plan.Restored);
+        // Stopped after the edit was set aside, before the markers came back.
+        var keep = Path.Combine(o, OverlayConflicts.SetAsideDir, h.Keep.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(keep)!);
+        File.Move(markers, keep);
+        File.WriteAllText(Path.Combine(o, OverlayConflicts.ResolvingName),
+            $"{{\"undo\": true, \"decisions\": [], \"restore\": [{{\"path\": \"src/clash.c\", \"markers\": \"src/clash.c\", \"keep\": \"{h.Keep}\"}}]}}");
+
+        Assert.True(Resolve(o, "v1", ["blob.bin"]).FinishedStopped);
+        Assert.Equal("merged\n", File.ReadAllText(keep));
+        Resolve(o, "undo", ["blob.bin"]);
+        Assert.Equal(before, Snapshot(o));
+    }
+
+    [Fact]
+    public void UndoOfAHandMerge_InAnOverlayWithoutOriginals_IsRefused()
+    {
+        var o = Overlay();
+        Directory.Delete(Path.Combine(o, OverlayConflicts.OriginalsDir), recursive: true);
+        File.WriteAllText(Path.Combine(o, "files", "src", "clash.c"), "merged\n");
+        var u = Resolve(o, "undo", ["src"]);
+        Assert.Empty(u.Restored);
+        Assert.Contains("older CodeDiffer", Assert.Single(u.Refused).Why);
+        Assert.Equal("merged\n", File.ReadAllText(Path.Combine(o, "files", "src", "clash.c")));
+    }
+
+    [Theory]
+    [InlineData("a\n<<<<<<< v1 (x:1)\nb\n||||||| base (x:1)\nc\n=======\nd\n>>>>>>> v2 (x:1)\ne\n", 1)]
+    [InlineData("a\nb\n=======\nd\n>>>>>>> v2 (x:1)\n", 1)]                  // part of a block taken out: still one
+    [InlineData("heading\n=======\ntext\n", 0)]                                // a bare ======= is text's own
+    [InlineData("<<<<<<< v1 (x:1)\n>>>>>>> v2 (x:1)\r\n<<<<<<< v1 (x:9)\r\n>>>>>>> v2 (x:9)\n", 2)]
+    public void MarkerBlocks_CountsTheMergersOwnMarkerLines(string text, int blocks)
+    {
+        var f = Path.Combine(_dir, "m.txt");
+        Put("m.txt", text);
+        Assert.Equal(blocks, OverlayConflicts.MarkerBlocks(f));
+        File.WriteAllBytes(f, [.. Encoding.Unicode.GetPreamble(), .. Encoding.Unicode.GetBytes(text)]); // UTF-16 too
+        Assert.Equal(blocks, OverlayConflicts.MarkerBlocks(f));
+    }
+
+    [Fact]
+    public void TheOverlaySummary_SaysWhatIsLeftToDecide()
+    {
+        var r = TreeMerger.Run(_b, _v1, _v2, NoCache);
+        var o = MergeOverlay.Write(r, _b, _v1, _v2, Path.Combine(_dir, "summary"));
+        var text = CodeDiffer.Core.Sessions.ThreeWayViews.OverlayText(o);
+        Assert.Contains("to decide: 6 conflict(s) · 3 to merge by hand", text);
+        Assert.Contains("· 3 to choose a side for", text);
+        Assert.Contains("codediffer conflicts", text);
     }
 
     [Fact]

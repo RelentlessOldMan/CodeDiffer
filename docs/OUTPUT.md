@@ -309,7 +309,7 @@ a giant file's merge included: the overlay keeps its `INCOMPLETE.txt` and is nev
 it again into a new or empty directory.
 Unlike `apply --write` (which skips any file with a conflict), conflicts land in the overlay with markers.
 
-`codediffer apply-overlay <overlay-dir> <target> [--write] [--again]` does those steps (on v1, or better a copy
+`codediffer apply-overlay <overlay-dir> <target> [--write] [--again] [--with-markers]` does those steps (on v1, or better a copy
 of it): the deletes, then the directories the deletes left empty, then `files\`. Dry run unless `--write`.
 Before touching anything it refuses an unfinished overlay (`INCOMPLETE.txt`), one written from an incomplete
 compare, a `deletes.txt` line that is not a plain path inside the target, and a target and overlay inside each
@@ -320,7 +320,9 @@ bytes, comes out "already" — a case-only rename already done, and a file v2 tu
 place, too). The overlay holds `APPLYING.txt` while it runs and `APPLIED.txt` (target, time)
 once done with nothing failed — after a failure it stays unapplied, so the same apply can be run again once the
 cause is fixed; a second finished apply to the same target is refused unless `--again`, since it would
-overwrite conflicts resolved since. On the `death` corpus the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
+overwrite conflicts resolved since. `--write` is also refused while an undecided text conflict's file in `files\`
+still holds conflict markers (the merger's own labelled `<<<<<<< v1 (`, `||||||| base (` and `>>>>>>> v2 (` lines),
+unless `--with-markers`; a dry run lists those files and their blocks instead. On the `death` corpus the dry run onto v1 takes 1.5 s (1,354 files, 33.3 MB, 0 deletes).
 
 **Conflicts settled in bulk (built):** the overlay also holds `conflicts.json`, the conflicts for a program: each
 one's base path, kind, note, its markers file in `files\` and the delete made for it (a rename), where v1 and v2
@@ -336,9 +338,13 @@ read-only has it on every file), so it can be replaced, set aside and undone. `d
 `--write`. A pattern is `/`-separated with `*`, `?` and `**`; without a `/` it is a name at any depth, with one (or
 a leading `/`) it is anchored at the top and takes what is under it; a leading `./` is dropped, and a pattern that
 picks nothing (empty, `/`, `.`) is refused; a conflict matches by its base path or either side's. A conflict already
-decided is left alone until undone, one the overlay failed to write is refused (write it again), and so is one
-whose markers file was edited since the overlay was written (merged by hand: delete it from `files\` to choose a
-side anyway). `v2` is refused where v2's file would land on another: one v1 has of its own at that path, another
+decided is left alone until undone, and one the overlay failed to write is refused (write it again). A markers file
+edited since the overlay was written (its size or time differs from the one recorded) is a hand merge: with no
+labelled marker lines left it counts as decided ("merged by hand", listed as such and left alone by a rule); with
+some left it is "being merged by hand", undecided, and a rule picking it is refused. `originals\` keeps each markers
+file as written, so `undo` takes a hand merge (or a markers file deleted by hand) back: the original is copied in
+with its recorded time, and the edit moved to `set-aside\hand-merges\<yyyyMMdd-HHmmss-fff>\` first. An overlay
+written without `originals\` refuses that undo. `v2` is refused where v2's file would land on another: one v1 has of its own at that path, another
 conflict's, or another write in `files\`; and for the kinds whose sides aren't known well enough (path collision,
 file/directory clash, unreadable, behind a link, unlisted directory, unopenable name). An overlay that is applied
 or being applied is refused, and a path in its records that isn't a plain path inside the tree is refused (the

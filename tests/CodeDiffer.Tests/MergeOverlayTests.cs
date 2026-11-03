@@ -292,7 +292,7 @@ public sealed class MergeOverlayTests : IDisposable
         Assert.Contains("old/moved.c", dry.Deletes);
         Assert.Contains("nothing was changed", OverlayApplier.Text(dry));
 
-        var r = OverlayApplier.Run(outDir, t, write: true);
+        var r = OverlayApplier.Run(outDir, t, write: true, withMarkers: true);
         Assert.Empty(r.Failed);
         Assert.Equal(Tree(Apply(outDir)), Tree(t));
         Assert.False(Directory.Exists(Path.Combine(t, "old"))); // emptied by the deletes: removed
@@ -302,7 +302,7 @@ public sealed class MergeOverlayTests : IDisposable
 
         // Run again: the case-only rename is done (on a case-insensitive disk "same.c" still answers to the new
         // name), so nothing is deleted or rewritten.
-        var rerun = OverlayApplier.Run(outDir, t, write: true, again: true);
+        var rerun = OverlayApplier.Run(outDir, t, write: true, withMarkers: true, again: true);
         Assert.Empty(rerun.Failed);
         Assert.Equal((0, 0), (rerun.Deleted, rerun.Copied));
         Assert.Equal(Tree(Apply(outDir)), Tree(t));
@@ -317,7 +317,7 @@ public sealed class MergeOverlayTests : IDisposable
         var mine = Path.Combine(t, "many", "m00.c.codediffer.tmp");
         Directory.CreateDirectory(Path.GetDirectoryName(mine)!);
         File.WriteAllText(mine, "mine\n");
-        var r = OverlayApplier.Run(outDir, t, write: true);
+        var r = OverlayApplier.Run(outDir, t, write: true, withMarkers: true);
         Assert.Empty(r.Failed);
         Assert.Equal("new 0\n", File.ReadAllText(Path.Combine(t, "many", "m00.c")));
         Assert.Equal("mine\n", File.ReadAllText(mine));
@@ -330,7 +330,7 @@ public sealed class MergeOverlayTests : IDisposable
         var outDir = Overlay();
         var t = CopyOfV1();
         using var stop = new CancellationTokenSource();
-        var r = OverlayApplier.Run(outDir, t, write: true, parallelism: 1, ct: stop.Token,
+        var r = OverlayApplier.Run(outDir, t, write: true, withMarkers: true, parallelism: 1, ct: stop.Token,
             progress: new CodeDiffer.Core.Port.PortProgress { AfterFile = n => { if (n == 6) stop.Cancel(); } });
         Assert.True(r.Cancelled);
         Assert.True(r.NotReached > 0);
@@ -339,7 +339,7 @@ public sealed class MergeOverlayTests : IDisposable
         Assert.False(File.Exists(Path.Combine(outDir, OverlayApplier.AppliedName)));
         Assert.Empty(Directory.EnumerateFiles(t, "*.codediffer.tmp", SearchOption.AllDirectories));
 
-        var again = OverlayApplier.Run(outDir, t, write: true); // not refused: the first never finished
+        var again = OverlayApplier.Run(outDir, t, write: true, withMarkers: true); // not refused: the first never finished
         Assert.False(again.Cancelled);
         Assert.True(again.AlreadyThere > 0);
         Assert.Equal(Tree(Apply(outDir)), Tree(t));
@@ -350,12 +350,12 @@ public sealed class MergeOverlayTests : IDisposable
     {
         var outDir = Overlay();
         var t = CopyOfV1();
-        OverlayApplier.Run(outDir, t, write: true);
+        OverlayApplier.Run(outDir, t, write: true, withMarkers: true);
         File.WriteAllText(Path.Combine(t, "clash.c"), "resolved by hand\n");
-        Assert.Contains("already applied", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(outDir, t, write: true)).Message);
+        Assert.Contains("already applied", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(outDir, t, write: true, withMarkers: true)).Message);
         Assert.Equal("resolved by hand\n", Read(t, "clash.c"));
         OverlayApplier.Run(outDir, t, write: false); // a dry run is always allowed
-        OverlayApplier.Run(outDir, t, write: true, again: true);
+        OverlayApplier.Run(outDir, t, write: true, withMarkers: true, again: true);
         Assert.Contains("<<<<<<< v1", Read(t, "clash.c"));
     }
 
@@ -365,12 +365,12 @@ public sealed class MergeOverlayTests : IDisposable
         var outDir = Overlay();
         var t = CopyOfV1();
         File.WriteAllText(Path.Combine(outDir, "INCOMPLETE.txt"), "");
-        Assert.Contains("not finished", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(outDir, t, write: true)).Message);
+        Assert.Contains("not finished", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(outDir, t, write: true, withMarkers: true)).Message);
         File.Delete(Path.Combine(outDir, "INCOMPLETE.txt"));
 
         File.AppendAllText(Path.Combine(outDir, "deletes.txt"), "../outside.c\n");
         var before = Tree(t);
-        Assert.Contains("not a plain relative path", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(outDir, t, write: true)).Message);
+        Assert.Contains("not a plain relative path", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(outDir, t, write: true, withMarkers: true)).Message);
         Assert.Equal(before, Tree(t)); // refused before touching anything
 
         Assert.Contains("inside each other", Assert.Throws<ArgumentException>(
@@ -385,7 +385,7 @@ public sealed class MergeOverlayTests : IDisposable
         var t = CopyOfV1();
         File.Delete(Path.Combine(t, "gone.c"));
         Put(Path.GetRelativePath(_dir, Path.Combine(t, "gone.c", "keep.c")), "mine\n"); // the target has a directory there
-        var r = OverlayApplier.Run(outDir, t, write: true);
+        var r = OverlayApplier.Run(outDir, t, write: true, withMarkers: true);
         Assert.Contains(r.Failed, f => f.Path == "gone.c" && f.Why.Contains("directory"));
         Assert.Equal("mine\n", Read(t, "gone.c/keep.c"));
 
@@ -394,7 +394,7 @@ public sealed class MergeOverlayTests : IDisposable
         Assert.True(File.Exists(Path.Combine(outDir, OverlayApplier.ApplyingName)));
         Assert.Contains("run the same apply-overlay again", OverlayApplier.Text(r));
         Directory.Delete(Path.Combine(t, "gone.c"), true);
-        var again = OverlayApplier.Run(outDir, t, write: true);
+        var again = OverlayApplier.Run(outDir, t, write: true, withMarkers: true);
         Assert.Empty(again.Failed);
         Assert.True(again.AlreadyThere > 0);
         Assert.True(File.Exists(Path.Combine(outDir, OverlayApplier.AppliedName)));
@@ -415,7 +415,7 @@ public sealed class MergeOverlayTests : IDisposable
 
         var dry = OverlayApplier.Run(outDir, t, write: false);
         Assert.Empty(dry.Failed); // the deletes empty pkg\, so the file would land
-        var r = OverlayApplier.Run(outDir, t, write: true);
+        var r = OverlayApplier.Run(outDir, t, write: true, withMarkers: true);
         Assert.Empty(r.Failed);
         Assert.Equal("now a file\n", Read(t, "pkg"));
         Assert.Equal(Tree(Apply(outDir)), Tree(t));
@@ -424,7 +424,7 @@ public sealed class MergeOverlayTests : IDisposable
         var t2 = CopyOfV1();
         Put(Path.GetRelativePath(_dir, Path.Combine(t2, "pkg", "mine.c")), "mine\n");
         Assert.Contains(OverlayApplier.Run(outDir, t2, write: false).Failed, f => f.Path == "pkg");
-        Assert.Contains(OverlayApplier.Run(outDir, t2, write: true).Failed, f => f.Path == "pkg");
+        Assert.Contains(OverlayApplier.Run(outDir, t2, write: true, withMarkers: true).Failed, f => f.Path == "pkg");
         Assert.Equal("mine\n", Read(t2, "pkg/mine.c"));
     }
 
@@ -435,11 +435,11 @@ public sealed class MergeOverlayTests : IDisposable
         var t = CopyOfV1();
         using var stop = new CancellationTokenSource();
         int deletes = File.ReadAllLines(Path.Combine(outDir, "deletes.txt")).Length;
-        OverlayApplier.Run(outDir, t, write: true, parallelism: 1, ct: stop.Token,
+        OverlayApplier.Run(outDir, t, write: true, withMarkers: true, parallelism: 1, ct: stop.Token,
             progress: new CodeDiffer.Core.Port.PortProgress { AfterFile = n => { if (n == deletes) stop.Cancel(); } });
         Assert.True(Directory.Exists(Path.Combine(t, "old"))); // deleted old/moved.c, stopped before the directories
 
-        OverlayApplier.Run(outDir, t, write: true);
+        OverlayApplier.Run(outDir, t, write: true, withMarkers: true);
         Assert.False(Directory.Exists(Path.Combine(t, "old")));
         Assert.Equal(Tree(Apply(outDir)), Tree(t));
     }

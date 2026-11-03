@@ -129,9 +129,16 @@ codediffer apply-overlay D:\merge D:\work\team-a-copy --write
 - `conflicts.txt`: what needs a person. It lists the files with markers, and the conflicts it couldn't merge
   (binary, delete/modify, ...), where v1's version stays until you decide.
 - `OVERLAY.txt`: the same steps, written out.
+- `originals\`: each markers file as it was written, so a hand merge can be undone.
+
+To merge a text conflict, open its file in `files\`, edit it and save it. Once it has no conflict markers left it
+counts as merged by hand: `codediffer conflicts` lists it as decided, and `apply-overlay` applies it. A file still
+holding markers counts as being merged by hand, still undecided.
 
 `apply-overlay` does those steps in order. It's a dry run unless `--write`, and it's safe to stop and run again. Apply it
-to a copy of v1, or to v1 itself if that's what you mean to change. From an agent: `write_merge`.
+to a copy of v1, or to v1 itself if that's what you mean to change. `--write` refuses while a file in `files\` still
+has conflict markers, so a half-done merge never lands unnoticed. The dry run lists those files. Pass
+`--with-markers` to apply them as they are. From an agent: `write_merge`.
 
 To settle whole groups of conflicts first, see the next section.
 
@@ -182,12 +189,15 @@ apply-overlay now applies these choices (codediffer conflicts lists what is left
   It is also refused where v2's file would land on another file (one v1 has of its own at that path, or another
   conflict's), and for a path collision, a file/directory clash, a link or a file that couldn't be read: decide those
   by hand.
-- A markers file you've already edited (merged by hand) is never set aside: that conflict is refused, and your merge
-  stays.
+- A markers file you've merged by hand counts as decided, and a rule leaves it alone. One you're part way through
+  (markers left) is refused, and your edit stays.
 - A conflict already decided is left alone until you `undo` it. `undo` puts the overlay back the way it was written.
+  For a hand merge, that means the markers file comes back from `originals\`, and your edit is kept in
+  `set-aside\hand-merges\<time>\`.
 - An overlay that has been applied is refused: a choice made after that wouldn't reach the tree.
 
-What's left after that are the text conflicts with markers, to edit in `files\`, and any others to decide by hand.
+What's left after that are the text conflicts with markers, to merge by hand in `files\`, and any others to decide
+one at a time. When `codediffer conflicts` says nothing is left to decide, apply the overlay.
 From an agent: `list_conflicts` and `resolve_conflicts`.
 
 ## Port a change onto another tree

@@ -65,6 +65,11 @@ public static class ThreeWayViews
            $"  conflicts.txt {o.Markers:N0} with markers · {o.Unresolved - o.Failed:N0} not merged (v1's version stays until decided)\n" +
            (o.Failed > 0 ? $"  FAILED: {o.Failed:N0} file(s) could not be written (see conflicts.txt; v1's version stays)\n" : "") +
            (o.DroppedDirectories > 0 ? $"  INCOMPLETE: {o.DroppedDirectories:N0} director(ies) could not be read; changes under them are missing\n" : "") +
+           (o.Unresolved + o.Markers == 0 ? "  no conflicts: nothing to decide\n"
+               : $"  to decide: {o.Unresolved + o.Markers:N0} conflict(s)" +
+                 (o.Markers > 0 ? $" · {o.Markers:N0} to merge by hand: edit the file in files\\ and save it (one with no markers left counts as merged)" : "") +
+                 (o.Unresolved > 0 ? $" · {o.Unresolved:N0} to choose a side for" : "") + "\n" +
+                 $"         codediffer conflicts \"{o.Dir}\" lists them; codediffer resolve settles them in bulk\n") +
            "  apply: delete the paths in deletes.txt from v1, remove the directories that left empty, then copy files\\\n" +
            "         over v1 (OVERLAY.txt says the same),\n" +
            $"         or: codediffer apply-overlay \"{o.Dir}\" <v1 or a copy of it> [--write]\n";

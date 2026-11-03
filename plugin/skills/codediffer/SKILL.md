@@ -32,6 +32,8 @@ files over 1 GB, locally or on a network share, and every answer is bounded so t
 - **list_conflicts** / **resolve_conflicts**: an overlay's conflicts grouped by kind, folder and file type; then
   settle a whole group at once (take v1, take v2, regenerate, undo) before the overlay is applied. Dry run unless
   write=true. Choosing for the user's code is the user's call: propose the groups and choices, and ask before writing.
+  A text conflict is merged by editing its markers file in the overlay's files\: saved with no markers left, it counts
+  as merged by hand (undo puts the markers back and keeps the edit). Applying refuses files that still hold markers.
 - **list_compares**: saved compares (any id reopens without re-comparing). **cancel_compare**: stop one.
 - **get_run_telemetry**: how recent compares ran, numbers only (safe to share): how each ended, including a run
   killed outright, peak memory, time per phase, and network vs work. A killed or stopped compare resumes by

@@ -99,7 +99,8 @@ From source: `./build-plugin.ps1` builds `plugin\bin`, then point at `<repo>\plu
 - **`CodeDiffer.Cli.exe`** — `compare <left> <right>` (status + reason per file; `--patch` for a
   `git apply`-able patch), `compare3 <base> <v1> <v2>` (3-way: v1 only · v2 only · agreed · merged ·
   conflict; `--merge-out DIR` writes the merge as an overlay on v1), `apply-overlay <dir> <target> [--write]`
-  (apply that overlay), `conflicts <dir>` / `resolve <dir> v1|v2|regenerate|undo <pattern>... [--write]` (the overlay's
+  (apply that overlay; it refuses files still holding markers, and a markers file edited with none left counts as
+  merged by hand), `conflicts <dir>` / `resolve <dir> v1|v2|regenerate|undo <pattern>... [--write]` (the overlay's
   conflicts grouped by kind, folder and file type, then settled a group at a time before applying),
   `apply <left> <right> <target> [--write]` (port a change set onto a third tree), `diff <a> <b>`,
   `blockdiff`, `verify`, `report <id>` (HTML report of a saved compare; or `--html` on `compare`/`compare3`),
