@@ -331,9 +331,16 @@ public static class CodeDifferTools
                      "behind a link, unlisted directory, unopenable name, not written).")] string[]? kinds = null,
         [Description("Folder depth to group by (default 1).")] int depth = 1,
         [Description("Also list the matching conflicts, one per line.")] bool list = false,
-        [Description("Most to list of each, undecided and decided (default 50).")] int max = 50)
+        [Description("Most to list of each, undecided and decided (default 50; with blocks, most files, default 10).")] int max = 0,
+        [Description("Instead, each matching undecided markers file's conflict blocks, numbered (as resolve_conflicts' blocks " +
+                     "takes them), with each side's line count and first lines.")] bool blocks = false)
     {
-        try { return OverlayConflicts.Load(overlay_dir).Text(patterns ?? [], kinds ?? [], Math.Max(1, depth), list, Math.Max(1, max)); }
+        try
+        {
+            var s = OverlayConflicts.Load(overlay_dir);
+            return blocks ? ConflictBlocks.View(s, patterns ?? [], kinds ?? [], max > 0 ? max : 10)
+                : s.Text(patterns ?? [], kinds ?? [], Math.Max(1, depth), list, max > 0 ? max : 50);
+        }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
             return $"error: {ex.Message}";
@@ -346,21 +353,25 @@ public static class CodeDifferTools
                  "regenerate; undo takes choices back. Recorded in the overlay itself (files\\, deletes.txt, decisions.json), " +
                  "so applying the overlay applies the choices. A conflict already decided (a choice, or a hand merge) is left alone " +
                  "until undone, and a markers file being merged by hand is never set aside; undo of a hand merge puts the markers " +
-                 "file back as written and keeps the edit in set-aside\\hand-merges\\. Dry run " +
+                 "file back as written and keeps the edit in set-aside\\hand-merges\\. With blocks, it settles conflict " +
+                 "blocks instead, keeping the cleanly merged lines: each block is replaced by v1's lines, v2's, or both (v1's " +
+                 "then v2's), and the file reads as merged by hand once none is left (undo puts it back as written). Dry run " +
                  "unless write=true. Pick with patterns and/or kinds, or all=true for every conflict.")]
     public static string ResolveConflicts(
         [Description("The overlay directory write_merge (or compare3 --merge-out) wrote.")] string overlay_dir,
-        [Description("v1, v2, regenerate (keep v1's file until it is regenerated) or undo.")] string choice,
+        [Description("v1, v2, regenerate (keep v1's file until it is regenerated) or undo; with blocks: v1, v2 or both.")] string choice,
         [Description("Path patterns, as list_conflicts takes them.")] string[]? patterns = null,
         [Description("Conflict kinds, as list_conflicts takes them.")] string[]? kinds = null,
         [Description("Every conflict (instead of patterns and kinds).")] bool all = false,
-        [Description("Record it (default false: a dry run that says what it would do).")] bool write = false)
+        [Description("Record it (default false: a dry run that says what it would do).")] bool write = false,
+        [Description("Settle conflict blocks, not whole conflicts: \"all\" (every block left of each file picked), or numbers " +
+                     "and ranges like \"1,3,5-7\" of one markers file (list_conflicts with blocks=true numbers them).")] string? blocks = null)
     {
         patterns ??= [];
         kinds ??= [];
         if (all == (patterns.Length > 0 || kinds.Length > 0))
             return "error: give patterns and/or kinds, or all=true — not both, not neither";
-        try { return ConflictResolver.Text(ConflictResolver.Run(overlay_dir, choice, patterns, kinds, write)); }
+        try { return ConflictResolver.Text(ConflictResolver.Run(overlay_dir, choice, patterns, kinds, write, string.IsNullOrWhiteSpace(blocks) ? null : blocks)); }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
             return $"error: {ex.Message}";

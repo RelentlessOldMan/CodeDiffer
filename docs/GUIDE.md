@@ -135,6 +135,24 @@ To merge a text conflict, open its file in `files\`, edit it and save it. Once i
 counts as merged by hand: `codediffer conflicts` lists it as decided, and `apply-overlay` applies it. A file still
 holding markers counts as being merged by hand, still undecided.
 
+When a block only needs one side, or both one after the other, pick it without an editor. The lines merged cleanly
+around the blocks stay as they are:
+
+```powershell
+codediffer conflicts D:\merge /src/shipping.py --blocks           # the file's blocks, numbered, with their lines
+codediffer resolve D:\merge v1 /src/shipping.py --blocks 1,3 --write
+codediffer resolve D:\merge both /src/shipping.py --blocks 2 --write   # v1's lines, then v2's
+codediffer resolve D:\merge v2 --kind content --blocks all --write    # every block left, in every file picked
+```
+
+- Each block picked is replaced by that side's lines, so the file reads as merged by hand once no block is left, and
+  `undo` puts it back as written. A block keeps its number while the others are settled.
+- Block numbers belong to one file, so the pattern must pick one file. `all` takes every block still left in each
+  file picked.
+- A block is found by the line counts the overlay recorded for it, so a line of the text that looks like a marker (an
+  `=======` underline) is never taken for one. A block you've edited by hand is left alone.
+- The HTML report numbers the blocks the same way.
+
 `apply-overlay` does those steps in order. It's a dry run unless `--write`, and it's safe to stop and run again. Apply it
 to a copy of v1, or to v1 itself if that's what you mean to change. `--write` refuses while a file in `files\` still
 has conflict markers, so a half-done merge never lands unnoticed. The dry run lists those files. Pass

@@ -11,7 +11,7 @@ to Claude Code (and Codex) as MCP tools, plus the `CodeDiffer.Cli.exe` command l
 - `export_changeset`, `apply_changeset`: the whole patch to a file; port the changes onto a third tree
   (dry run unless `write=true`)
 - `write_merge`, `write_report`: a 3-way merge as an overlay; the HTML report for a human
-- `list_conflicts`, `resolve_conflicts`: an overlay's conflicts grouped; settle a group at once (dry run unless `write=true`)
+- `list_conflicts`, `resolve_conflicts`: an overlay's conflicts grouped; settle a group at once, or one conflict block at a time (dry run unless `write=true`)
 - `list_compares`, `cancel_compare`: saved compares (reopen by id); stop a running one
 
 Compares are saved under `%LOCALAPPDATA%\CodeDiffer\results` (`CODEDIFFER_RESULTS_DIR` overrides), never

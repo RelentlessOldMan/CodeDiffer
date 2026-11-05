@@ -219,6 +219,7 @@ public sealed class MergeStoreTests : IDisposable
         (1, "7ECB19DD12C3DE26"), // v2 listed while base->v1 runs: the same compares, sooner
         (1, "85A2B650CFA522D5"), // noise's strip steps done once per text: the same answers, less memory
         (1, "EEC9C0B481F5439C"), // comments only
+        (1, "4CA4D0344028F52F"), // each conflict block's line counts returned too: the same merges
     ];
 
     [Fact]

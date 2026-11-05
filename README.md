@@ -101,7 +101,8 @@ From source: `./build-plugin.ps1` builds `plugin\bin`, then point at `<repo>\plu
   conflict; `--merge-out DIR` writes the merge as an overlay on v1), `apply-overlay <dir> <target> [--write]`
   (apply that overlay; it refuses files still holding markers, and a markers file edited with none left counts as
   merged by hand), `conflicts <dir>` / `resolve <dir> v1|v2|regenerate|undo <pattern>... [--write]` (the overlay's
-  conflicts grouped by kind, folder and file type, then settled a group at a time before applying),
+  conflicts grouped by kind, folder and file type, then settled a group at a time before applying; `--blocks N|all`
+  with `v1|v2|both` settles single conflict blocks and keeps the rest of the merge),
   `apply <left> <right> <target> [--write]` (port a change set onto a third tree), `diff <a> <b>`,
   `blockdiff`, `verify`, `report <id>` (HTML report of a saved compare; or `--html` on `compare`/`compare3`),
   `results` (saved compares; `--prune` deletes all but the newest N, a dry run unless `--yes`), `selftest <left> <right> [<v2>]`
@@ -115,7 +116,7 @@ From source: `./build-plugin.ps1` builds `plugin\bin`, then point at `<repo>\plu
   third tree by 3-way merge; dry run unless `write=true`), `write_report` (the HTML report, for a human), `write_merge` (a compare3's merge as an overlay on v1:
   the changed files, text conflicts with diff3 markers, a deletes list; CLI `compare3 --merge-out DIR`),
   `list_conflicts` / `resolve_conflicts` (an overlay's conflicts grouped, then settled in bulk: take v1, take v2,
-  regenerate, undo; dry run unless `write=true`),
+  regenerate, undo, or one conflict block at a time; dry run unless `write=true`),
   `list_compares` (saved compares; any id reopens without re-comparing), `get_run_telemetry` (how recent
   compares ran, numbers only: how each ended, memory, time per phase, network vs work), `cancel_compare` (stop a running
   compare; the hashes it read are kept, so starting it again only reads the rest; Ctrl+C in the CLI).

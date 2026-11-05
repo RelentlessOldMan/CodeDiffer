@@ -396,6 +396,7 @@ public sealed class ConflictResolverTests : IDisposable
         var o = Overlay();
         var markers = Path.Combine(o, "files", "src", "clash.c");
         File.WriteAllText(markers, File.ReadAllText(markers).Replace("five v1", "FIVE v1"));
+        File.SetLastWriteTimeUtc(markers, DateTime.UtcNow.AddSeconds(5)); // the same size: within a clock tick of the overlay, only the time tells
         var s = OverlayConflicts.Load(o);
         Assert.Equal(1, s.Edited["src/clash.c"]);
         Assert.Contains(s.Undecided, c => c.Path == "src/clash.c");

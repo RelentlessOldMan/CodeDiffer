@@ -128,6 +128,7 @@ public static class MergeOverlay
         long bytes = 0;
         var failed = new System.Collections.Concurrent.ConcurrentBag<(Merge3Entry E, string Why)>();
         var written = new System.Collections.Concurrent.ConcurrentBag<(string Dest, Kind Kind, Merge3Entry E, string? AlsoDelete)>();
+        var blocksOf = new System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<ConflictBlock>>(StringComparer.Ordinal);
         Parallel.ForEach(writes, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism), CancellationToken = ct }, w =>
         {
             var target = Path.GetFullPath(Full(files, w.Dest));
@@ -151,7 +152,7 @@ public static class MergeOverlay
                         break;
                     default:
                         // Re-merged from the trees as they are now: it must still be what the compare found.
-                        var merged = TreeMerger.MergedBytes(w.E, baseDir, v1, v2, out int now, ct)
+                        var merged = TreeMerger.MergedBytes(w.E, baseDir, v1, v2, out int now, out var blocks, ct)
                                      ?? throw new IOException("a side is no longer readable text (changed since the compare? compare again)");
                         int expected = w.Kind == Kind.Merged ? 0 : w.E.ConflictRegions;
                         if (now != expected)
@@ -162,6 +163,7 @@ public static class MergeOverlay
                             var original = Full(Path.Combine(dir, OverlayConflicts.OriginalsDir), w.Dest);
                             Directory.CreateDirectory(Path.GetDirectoryName(original)!);
                             File.WriteAllBytes(original, merged);
+                            blocksOf[w.Dest] = blocks;
                         }
                         break;
                 }
@@ -205,7 +207,7 @@ public static class MergeOverlay
         File.WriteAllText(Path.Combine(dir, "conflicts.txt"), c.ToString(), new UTF8Encoding(false));
         var failedSet = failed.Select(f => f.E).ToHashSet(ReferenceEqualityComparer.Instance);
         OverlayConflicts.Write(dir, baseDir, v1, v2,
-            markers.Select(w => Recorded(w.E, v1, v2, w.Dest, w.AlsoDelete, false, files))
+            markers.Select(w => Recorded(w.E, v1, v2, w.Dest, w.AlsoDelete, false, files) with { Blocks = blocksOf.GetValueOrDefault(w.Dest) })
                 .Concat(unresolved.Select(u => Recorded(u.E, v1, v2, null, null, failedSet.Contains(u.E), files))));
 
         var result = new OverlayResult(dir, done.Count(w => w.Kind == Kind.FromV2), done.Count(w => w.Kind == Kind.Merged),

@@ -676,7 +676,50 @@ internal static class SelfTest
                     $"exit {u.Exit} · {left} decision(s) left" + (back.Count > 0 ? " · differ: " + Few(back) : " · byte-equal to the overlay as written"));
             }
             HandMerge(area, merge, copy, v1, oc);
+            BlockSettle(area, merge, copy, oc);
             return Brief(cf.Out, 1);
+        }
+
+        /// <summary>Every block of a text conflict settled by one side, on the copy of the overlay: the file counts as
+        /// merged, holds no marker line, and has exactly as many lines fewer as the recorded blocks say (four marker
+        /// lines and the two other sections each, less an ending a side's last line didn't have), counted on its bytes;
+        /// undo puts it back byte for byte. Then v2 the same way.</summary>
+        private void BlockSettle(string area, string merge, string copy, OverlayConflicts oc)
+        {
+            static bool Wide(byte[] b) => b.Length >= 2 && (b[0] == 0xFF && b[1] == 0xFE || b[0] == 0xFE && b[1] == 0xFF || b.Length >= 4 && b[0] == 0 && b[1] == 0 && b[2] == 0xFE);
+            string Full(OverlayConflict x) => Path.Combine(copy, "files", x.Markers!.Replace('/', Path.DirectorySeparatorChar));
+            var c = oc.All.FirstOrDefault(x => x.Markers is not null && x.Blocks is { Count: > 0 } && x.Path.IndexOfAny(['*', '?']) < 0
+                                               && File.Exists(Full(x)) && !Wide(File.ReadAllBytes(Full(x))));
+            if (c is null)
+            {
+                Add(area, "resolve --blocks settles each block by a side, and undo takes it back", Verdict.Skip, "no text conflict with recorded blocks");
+                return;
+            }
+            var file = Full(c);
+            var original = File.ReadAllBytes(file);
+            int lines = original.Count(b => b == (byte)'\n');
+            List<string> Changed() => DirDiff(merge, copy).Where(k => !k.Equals(OverlayConflicts.DecisionsName, StringComparison.OrdinalIgnoreCase)
+                && !k.StartsWith(Path.Combine(OverlayConflicts.SetAsideDir, OverlayConflicts.HandMergesDir), StringComparison.OrdinalIgnoreCase)).ToList();
+
+            var view = Run("conflicts --blocks", cli, "conflicts", copy, "/" + c.Path, "--blocks");
+            Expect(area, "conflicts --blocks numbers a file's blocks", view.Exit == 0 && view.Out.Contains($"{c.Blocks!.Count:N0} block(s) · {c.Blocks.Count:N0} as written"),
+                $"exit {view.Exit} · {c.Blocks.Count:N0} block(s) recorded");
+            foreach (var (side, bit) in new[] { ("v1", 1), ("v2", 4) })
+            {
+                var w = Run($"resolve {side} --blocks all --write", cli, "resolve", copy, side, "/" + c.Path, "--blocks", "all", "--write");
+                var now = File.ReadAllBytes(file);
+                int expect = lines - c.Blocks.Sum(g => 4 + g.V1 + g.Base + g.V2 - (side == "v1" ? g.V1 : g.V2) + ((g.Open & bit) != 0 ? 1 : 0));
+                int got = now.Count(b => b == (byte)'\n');
+                var s = OverlayConflicts.Load(copy);
+                int markers = OverlayConflicts.MarkerBlocks(file);
+                Expect(area, $"resolve {side} --blocks all settles every block",
+                    w.Exit == 0 && s.HandMerged(c) && markers == 0 && got == expect,
+                    $"exit {w.Exit} · {c.Blocks.Count:N0} block(s) · {got:N0} line(s), {expect:N0} expected from the recorded counts · {markers} marker block(s) left");
+                var u = Run($"resolve undo after --blocks {side}", cli, "resolve", copy, "undo", "/" + c.Path, "--write");
+                var back = Changed();
+                Expect(area, $"undo takes a block settle back ({side})", u.Exit == 0 && back.Count == 0,
+                    $"exit {u.Exit}" + (back.Count > 0 ? " · differ: " + Few(back) : " · markers file byte-equal to as written"));
+            }
         }
 
         /// <summary>A text conflict merged by hand, on the copy of the overlay: part way (markers left), resolve refuses

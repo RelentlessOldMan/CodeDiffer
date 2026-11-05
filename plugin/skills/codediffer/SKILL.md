@@ -34,6 +34,8 @@ files over 1 GB, locally or on a network share, and every answer is bounded so t
   write=true. Choosing for the user's code is the user's call: propose the groups and choices, and ask before writing.
   A text conflict is merged by editing its markers file in the overlay's files\: saved with no markers left, it counts
   as merged by hand (undo puts the markers back and keeps the edit). Applying refuses files that still hold markers.
+  A file's blocks can be settled one at a time without editing it: list_conflicts blocks=true numbers them, and
+  resolve_conflicts with blocks ("1,3" of one file, or "all") and choice v1, v2 or both replaces just those blocks.
 - **list_compares**: saved compares (any id reopens without re-comparing). **cancel_compare**: stop one.
 - **get_run_telemetry**: how recent compares ran, numbers only (safe to share): how each ended, including a run
   killed outright, peak memory, time per phase, and network vs work. A killed or stopped compare resumes by

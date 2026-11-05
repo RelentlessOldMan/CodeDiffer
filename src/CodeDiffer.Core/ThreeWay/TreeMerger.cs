@@ -435,10 +435,17 @@ public static class TreeMerger
 
     /// <param name="conflicts">How many conflict regions the merge has now (re-merged from the trees as they are).</param>
     public static byte[]? MergedBytes(Merge3Entry e, string b, string v1, string v2, out int conflicts, CancellationToken ct = default)
+        => MergedBytes(e, b, v1, v2, out conflicts, out _, ct);
+
+    /// <param name="blocks">Each conflict block's line counts, in file order (so its blocks can be settled one at a time).</param>
+    internal static byte[]? MergedBytes(Merge3Entry e, string b, string v1, string v2, out int conflicts, out IReadOnlyList<ConflictBlock> blocks,
+        CancellationToken ct = default)
     {
         conflicts = 0;
+        blocks = [];
         if (Compose(e, b, v1, v2, ct) is not { } m) return null;
         conflicts = m.Conflicts;
+        blocks = m.Blocks;
         var text = m.Form.Normalize && m.Form.Eol == "CRLF" ? m.Merged.Replace("\n", "\r\n") : m.Merged;
         return m.Form.Encoding.Encode(text);
     }
@@ -458,7 +465,7 @@ public static class TreeMerger
     }
 
     /// <summary>The merge of one entry; its base as lines, joined only by the one caller that diffs against it.</summary>
-    private static (List<string> Base, string Merged, Form Form, int Conflicts)? Compose(Merge3Entry e, string b, string v1, string v2,
+    private static (List<string> Base, string Merged, Form Form, int Conflicts, List<ConflictBlock> Blocks)? Compose(Merge3Entry e, string b, string v1, string v2,
         CancellationToken ct)
     {
         if (e.V1 is null || e.V2 is null || !(e.ConflictKind is null || HasMarkers(e.ConflictKind)) || e.Outcome == Merge3Outcome.Agreed) return null;
@@ -484,6 +491,7 @@ public static class TreeMerger
         var gap = form.GapSide switch { 1 when raw => o1, 2 when raw => o2, _ => ob };
 
         var o = new StringBuilder();
+        var blocks = new List<ConflictBlock>();
         int cursor = 0, conflicts = 0;
         string nl = !form.Normalize && form.Eol == "CRLF" ? "\r\n" : "\n"; // markers in the file's line endings (converted later if normalized)
         void Emit(List<string> lines, int start, int count)
@@ -496,10 +504,12 @@ public static class TreeMerger
             for (int i = from; i < to; i++) o.Append(o2[i + s2] != ob[i] ? o2[i + s2] : o1[i + s1]);
         }
         int Shift(MergeRegion r) => form.GapSide switch { 1 when raw => r.V1Start0 - r.BaseStart0, 2 when raw => r.V2Start0 - r.BaseStart0, _ => 0 };
-        void Marker(string text)
+        bool Marker(string text) // whether the side before it ended without a newline
         {
-            if (o.Length > 0 && o[^1] != '\n') o.Append(nl); // a side ending without a newline: marker still on its own line
+            bool open = o.Length > 0 && o[^1] != '\n';
+            if (open) o.Append(nl); // a side ending without a newline: marker still on its own line
             o.Append(text).Append(nl);
+            return open;
         }
         foreach (var r in regions)
         {
@@ -514,11 +524,12 @@ public static class TreeMerger
                     conflicts++;
                     Marker($"<<<<<<< v1 ({e.V1.RelativePath}:{r.V1Start0 + 1})");
                     Emit(o1, r.V1Start0, r.V1Lines);
-                    Marker($"||||||| base ({e.Path}:{r.BaseStart0 + 1})");
+                    bool open1 = Marker($"||||||| base ({e.Path}:{r.BaseStart0 + 1})") && r.V1Lines > 0;
                     Emit(ob, r.BaseStart0, r.BaseLines);
-                    Marker("=======");
+                    bool openB = Marker("=======") && r.BaseLines > 0;
                     Emit(o2, r.V2Start0, r.V2Lines);
-                    Marker($">>>>>>> v2 ({e.V2.RelativePath}:{r.V2Start0 + 1})");
+                    bool open2 = Marker($">>>>>>> v2 ({e.V2.RelativePath}:{r.V2Start0 + 1})") && r.V2Lines > 0;
+                    blocks.Add(new ConflictBlock(r.V1Lines, r.BaseLines, r.V2Lines, (open1 ? 1 : 0) | (openB ? 2 : 0) | (open2 ? 4 : 0)));
                     break;
                 case RegionKind.Agreed when stamps || form.GapSide == 2 && raw: Emit(o2, r.V2Start0, r.V2Lines); break;
                 default: Emit(o1, r.V1Start0, r.V1Lines); break; // V1Only or Agreed
@@ -527,7 +538,7 @@ public static class TreeMerger
         int tail = form.GapSide switch { 1 when raw => o1.Count - ob.Count, 2 when raw => o2.Count - ob.Count, _ => 0 };
         if (stamps) EmitStampGap(cursor, ob.Count, o1.Count - ob.Count, o2.Count - ob.Count);
         else EmitGap(cursor, lb.Count, tail);
-        return (ob, o.ToString(), form, conflicts);
+        return (ob, o.ToString(), form, conflicts, blocks);
     }
 
     /// <summary>

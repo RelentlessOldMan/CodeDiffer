@@ -97,6 +97,8 @@ table.d tr.v1 td.tx { background: var(--v1-bg); }
 table.d tr.base td.tx { background: var(--base-bg); }
 table.d tr.v2 td.tx { background: var(--v2-bg); }
 table.d tr.mk td { background: var(--mk-bg); font-weight: 600; }
+table.d tr.mk td .bn { color: var(--muted); font-weight: 400; }
+.bhint { padding: 6px 10px; color: var(--muted); font-size: 12px; }
 table.d tr.void td { background: var(--hover); }
 /* Side by side: two equal panes, each scrolling on its own axis (kept in step by script). Every row is one line
    high, an empty one too, so the two tables stay row for row. */
@@ -697,7 +699,7 @@ var CD = (function () {
         a.href = d.full; // a relative path we wrote ourselves (full/N.*), never data from the trees
         head.appendChild(a);
       }
-      var view = d.mode === "merge" ? mergeView(d, head) : (state.mode === "split" ? splitView(parse(d.text)) : inlineView(parse(d.text)));
+      var view = d.mode === "merge" ? mergeView(d, head, f.p) : (state.mode === "split" ? splitView(parse(d.text)) : inlineView(parse(d.text)));
       body.replaceWith(view);
       if (view.fit) view.fit();
       if (panel.dataset.i !== undefined && measure(panel)) draw();
@@ -815,8 +817,9 @@ var CD = (function () {
   }
 
   // A merged file with diff3 markers, as segments [startLine, text] (conflict blocks with context; the
-  // stretches between are collapsed). Colour the v1 / base / v2 sections; a button steps through conflicts.
-  function mergeView(d, head) {
+  // stretches between are collapsed). Colour the v1 / base / v2 sections; a button steps through conflicts. Blocks
+  // are numbered as resolve --blocks takes them: the ones shown are always the file's first.
+  function mergeView(d, head, path) {
     var box = el("div", "diff"), t = el("table", "d"), zone = "", marks = [], next = 1;
     var segs = d.segs || [[1, d.text || ""]];
     function gap(n) {
@@ -836,9 +839,10 @@ var CD = (function () {
         else if (l.indexOf(">>>>>>> v2") === 0) zone = "end";
         else mk = false;
         tr = el("tr", mk ? "mk" : zone && zone !== "end" ? zone : "");
-        if (mk && zone === "v1") marks.push(tr);
+        var cell = td("tx", l);
+        if (mk && zone === "v1") { marks.push(tr); cell.appendChild(el("span", "bn", "   block " + marks.length)); }
         if (zone === "end") zone = "";
-        tr.append(td("ln", start + k), td("tx", l));
+        tr.append(td("ln", start + k), cell);
         t.appendChild(tr);
       });
       next = start + lines.length;
@@ -852,6 +856,7 @@ var CD = (function () {
       step.addEventListener("click", function () { at = (at + 1) % marks.length; marks[at].scrollIntoView({ block: "center" }); label.textContent = " conflict " + (at + 1) + " of " + marks.length + " shown "; });
       nav.append(label, step);
       head.appendChild(nav);
+      box.appendChild(el("div", "bhint", "settle blocks one at a time, the rest of the merge kept: codediffer resolve <overlay> v1|v2|both \"/" + path + "\" --blocks N[,N...] --write"));
     }
     return box;
   }

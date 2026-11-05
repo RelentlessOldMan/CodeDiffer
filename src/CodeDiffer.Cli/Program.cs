@@ -997,10 +997,10 @@ static int ApplyOverlay(string[] args)
 /// <summary>conflicts: an overlay's conflicts, grouped (undecided ones by kind, folder and file type), or listed.</summary>
 static int Conflicts(string[] args)
 {
-    const string usage = "usage: codediffer conflicts <overlay-dir> [<pattern>...] [--kind K[,K]] [--depth N] [--list [--max N]]";
-    if (!RuleArgs(args, usage, ["--list"], ["--kind", "--depth", "--max"], out var positional, out var kinds)) return 64;
+    const string usage = "usage: codediffer conflicts <overlay-dir> [<pattern>...] [--kind K[,K]] [--depth N] [--list|--blocks [--max N]]";
+    if (!RuleArgs(args, usage, ["--list", "--blocks"], ["--kind", "--depth", "--max"], out var positional, out var kinds)) return 64;
     if (positional.Count < 1) { Console.Error.WriteLine(usage); return 64; }
-    int depth = 1, max = 50;
+    int depth = 1, max = args.Contains("--blocks") ? 10 : 50;
     if (FlagValue(args, "--depth", from: 1) is { } d && (!int.TryParse(d, out depth) || depth < 1)
         || FlagValue(args, "--max", from: 1) is { } m && (!int.TryParse(m, out max) || max < 1))
     {
@@ -1009,7 +1009,9 @@ static int Conflicts(string[] args)
     }
     try
     {
-        Console.Write(OverlayConflicts.Load(positional[0]).Text(positional.Skip(1).ToList(), kinds, depth, args.Contains("--list"), max));
+        var s = OverlayConflicts.Load(positional[0]);
+        Console.Write(args.Contains("--blocks") ? ConflictBlocks.View(s, positional.Skip(1).ToList(), kinds, max)
+            : s.Text(positional.Skip(1).ToList(), kinds, depth, args.Contains("--list"), max));
         return 0;
     }
     catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
@@ -1022,8 +1024,9 @@ static int Conflicts(string[] args)
 /// <summary>resolve: settle the conflicts a rule picks (v1, v2, regenerate, or undo a choice). Dry run unless --write.</summary>
 static int Resolve(string[] args)
 {
-    const string usage = "usage: codediffer resolve <overlay-dir> v1|v2|regenerate|undo <pattern>... [--kind K[,K]] [--all] [--write]";
-    if (!RuleArgs(args, usage, ["--all", "--write"], ["--kind"], out var positional, out var kinds)) return 64;
+    const string usage = "usage: codediffer resolve <overlay-dir> v1|v2|regenerate|undo <pattern>... [--kind K[,K]] [--all] [--write]\n" +
+                         "       codediffer resolve <overlay-dir> v1|v2|both <pattern>... --blocks N[,N-M...]|all [--write]";
+    if (!RuleArgs(args, usage, ["--all", "--write"], ["--kind", "--blocks"], out var positional, out var kinds)) return 64;
     if (positional.Count < 2 || !ConflictResolver.Choices.Contains(positional[1])) { Console.Error.WriteLine(usage); return 64; }
     var patterns = positional.Skip(2).ToList();
     if (patterns.Count == 0 && kinds.Count == 0 && !args.Contains("--all"))
@@ -1038,7 +1041,7 @@ static int Resolve(string[] args)
     }
     try
     {
-        var r = ConflictResolver.Run(positional[0], positional[1], patterns, kinds, args.Contains("--write"));
+        var r = ConflictResolver.Run(positional[0], positional[1], patterns, kinds, args.Contains("--write"), FlagValue(args, "--blocks", from: 1));
         Console.Write(ConflictResolver.Text(r));
         return r.Refused.Count > 0 ? 1 : 0;
     }
@@ -1394,11 +1397,12 @@ static void PrintUsage()
                                        resolved since). --write refuses files that still
                                        have conflict markers unless --with-markers.
           codediffer conflicts <overlay-dir> [<pattern>...] [--kind K[,K]] [--depth N]
-                                       [--list [--max N]]
+                                       [--list|--blocks [--max N]]
                                        an overlay's conflicts, the undecided ones grouped by
                                        kind, folder and file type; --list lists them. A file
                                        in files\ edited with no markers left counts as merged
-                                       by hand.
+                                       by hand. --blocks shows each markers file's conflict
+                                       blocks, numbered, with their lines.
           codediffer resolve <overlay-dir> v1|v2|regenerate|undo <pattern>... [--kind K[,K]]
                                        [--all] [--write]
                                        settle the conflicts a rule picks before applying:
@@ -1409,6 +1413,15 @@ static void PrintUsage()
                                        src/gen/** (from the top).
                                        Recorded in the overlay (files\, deletes.txt), so
                                        apply-overlay applies it. Dry run unless --write.
+          codediffer resolve <overlay-dir> v1|v2|both <pattern>... --blocks N[,N-M...]|all
+                                       [--write]
+                                       settle conflict blocks one at a time, keeping the
+                                       cleanly merged lines around them: each block is
+                                       replaced by v1's lines, v2's, or both (v1's then
+                                       v2's). Numbers are one file's (conflicts --blocks);
+                                       all takes every block left of each file picked. The
+                                       file then reads as merged by hand (once no block is
+                                       left); undo puts it back as written.
           codediffer blockdiff <a> <b>         content-defined block diff of two large files
                                                (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]

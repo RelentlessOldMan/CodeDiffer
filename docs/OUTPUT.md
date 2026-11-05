@@ -342,7 +342,20 @@ decided is left alone until undone, and one the overlay failed to write is refus
 edited since the overlay was written (its size or time differs from the one recorded, and its bytes from the copy in
 `originals\`: saved unchanged, or copied onto coarser file times, it is not an edit) is a hand merge: with no
 labelled marker lines left it counts as decided ("merged by hand", listed as such and left alone by a rule); with
-some left it is "being merged by hand", undecided, and a rule picking it is refused. `originals\` keeps each markers
+some left it is "being merged by hand", undecided, and a rule picking it is refused. `resolve ... --blocks N[,N-M...]|all`
+(MCP `resolve_conflicts` `blocks`) settles conflict blocks instead, with `v1`, `v2` or `both` (v1's lines, then
+v2's): each markers file picked is written again in `files\` with those blocks replaced, the cleanly merged lines
+around them kept, so it reads as being merged by hand, or merged once no block is left, and `undo` takes it back like
+any hand merge. `conflicts.json` records each markers file's blocks as `[v1 lines, base lines, v2 lines, open]` (open:
+bits 1, 2, 4 for a section whose last line had no line ending, so the marker after it got one added, which a choice
+takes off again). A block is found where those counts put its exact marker lines, so text with an `=======` line of
+its own is never cut there, and one with any line edited by hand is never touched. Blocks are numbered from 1 in the
+file as written and keep their numbers; numbers need a rule that picks one markers file, `all` takes every block still
+intact. Bytes are kept: a UTF-16 or UTF-32 file is decoded by its byte order mark, any other is cut byte for byte (a
+UTF-8 byte order mark kept apart). It is refused for an overlay that doesn't record blocks (written by an older
+CodeDiffer), block numbers aimed at a file already decided or merged, or a block not found intact; `all` leaves a
+decided file alone. `conflicts ... --blocks` (MCP `list_conflicts` `blocks`) shows each block numbered, with
+each side's line count and first lines, and the HTML report numbers the blocks it shows the same way. `originals\` keeps each markers
 file as written, so `undo` takes a hand merge (or a markers file deleted by hand) back: the original is copied in
 with its recorded time, and the edit moved to `set-aside\hand-merges\<yyyyMMdd-HHmmss-fff>\` first. An overlay
 written without `originals\` refuses that undo. `v2` is refused where v2's file would land on another: one v1 has of its own at that path, another
