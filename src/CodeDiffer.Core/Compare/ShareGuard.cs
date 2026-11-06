@@ -101,7 +101,7 @@ internal sealed class ShareGuard
     private readonly object _gate = new();
     private readonly string?[][] _good;  // by root, files read under it this run, the newest few: one must still open
     private readonly int[] _goodNext;
-    private Task<bool>? _probing;       // the check of the trees under way: every failed read waits on the one
+    private TaskCompletionSource<bool>? _probing; // the check of the trees under way: every failed read waits on the one
     private Task? _pause;               // set while paused; completes when the trees answer again
     private ShareUnavailableException? _lost;
     private int _pauses, _retried;
@@ -184,7 +184,6 @@ internal sealed class ShareGuard
     /// <summary>The root a path is under (-1: none of them).</summary>
     private int RootOf(string path)
     {
-        Span<byte> one = stackalloc byte[1];
         for (int r = 0; r < _roots.Length; r++)
             if (path.Length > _roots[r].Length && path.StartsWith(_roots[r], StringComparison.OrdinalIgnoreCase)
                 && (path[_roots[r].Length] is '\\' or '/' || Path.EndsInDirectorySeparator(_roots[r])))
@@ -204,27 +203,29 @@ internal sealed class ShareGuard
     /// one check under way, outside the lock, so a check that hangs on a quiet share holds up no other read.</summary>
     private async Task<bool> Probe()
     {
-        Task<bool> probe;
+        TaskCompletionSource<bool>? under, mine = null;
         lock (_gate)
         {
             if (_pause is not null) return false;
             if (_lastProbe is { } last && _clock.ElapsedTicks - last.At < Stopwatch.Frequency) return last.Ok;
-            probe = _probing ??= Task.Run(() =>
-            {
-                bool ok = false;
-                try { ok = _answers(); }
-                finally
-                {
-                    lock (_gate)
-                    {
-                        _lastProbe = (_clock.ElapsedTicks, ok);
-                        _probing = null;
-                    }
-                }
-                return ok;
-            });
+            under = _probing;
+            if (under is null) _probing = mine = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
-        return await probe.ConfigureAwait(false);
+        if (under is not null) return await under.Task.ConfigureAwait(false);
+        // The first read to fail checks, on its own thread (never one taken from the pool, which the reads blocked on
+        // their own checks may be holding): the rest wait on its answer.
+        bool ok = false;
+        try { ok = _answers(); }
+        finally
+        {
+            lock (_gate)
+            {
+                _lastProbe = (_clock.ElapsedTicks, ok);
+                _probing = null;
+            }
+            mine!.SetResult(ok);
+        }
+        return ok;
     }
 
     /// <summary>Each root still lists as a directory, and under each, a file read earlier in the run still opens and
