@@ -35,7 +35,7 @@ internal static class SelfTest
             string a = args[i];
             if (a is "--name" or "--out" or "--sample" or "--threads")
             {
-                if (i + 1 >= args.Length) { Console.Error.WriteLine($"error: {a} needs a value\n{Usage}"); return 64; }
+                if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal)) { Console.Error.WriteLine($"error: {a} needs a value\n{Usage}"); return 64; }
                 string v = args[++i];
                 switch (a)
                 {
@@ -308,7 +308,9 @@ internal static class SelfTest
                     bad.Count == 0 ? $"{first.Changes.Count} verdicts alike" : $"{bad.Count} differ: {Few(bad)}");
                 var (r1, s1) = ReadCost(_compares[0].Id);
                 var (r2, s2) = ReadCost(_compares[^1].Id);
-                Expect(A, "warm compare reads no more", !(r2 > r1 + 1), $"first {r1:0.0} MB read ({s1} sides from the cache), warm {r2:0.0} MB ({s2} from the cache)");
+                if (double.IsNaN(r1) || double.IsNaN(r2))
+                    Add(A, "warm compare reads no more", Verdict.Skip, "a compare's run record could not be read");
+                else Expect(A, "warm compare reads no more", r2 <= r1 + 1, $"first {r1:0.0} MB read ({s1} sides from the cache), warm {r2:0.0} MB ({s2} from the cache)");
             }
 
             // The verdicts, checked by reading the files here.
@@ -387,10 +389,17 @@ internal static class SelfTest
             var onR = Run("apply onto right (dry run)", cli, ["apply", l, r, r, .. ThreadArgs]);
             var al = ApplyCounts(onL.Out);
             var ar = ApplyCounts(onR.Out);
-            Expect(A, "apply onto left: every file applies", al is { Conflict: 0 } && onL.Exit == 0,
-                al is { } x ? $"{x.Would} would apply · {x.Already} already · {x.Conflict} conflict" : $"exit {onL.Exit}: {Brief(onL.Out + onL.Err, 3)}");
-            Expect(A, "apply onto right: everything already there", ar is { Would: 0, Conflict: 0 },
-                ar is { } y ? $"{y.Would} would apply · {y.Already} already · {y.Conflict} conflict" : $"exit {onR.Exit}: {Brief(onR.Out + onR.Err, 3)}");
+            // A tree with a directory that can't be listed: apply refuses (exit 3), as it should — a warning, not a failure.
+            bool unlisted = first.LeftDroppedDirectories + first.RightDroppedDirectories > 0;
+            if (unlisted && onL.Exit == 3 && onR.Exit == 3)
+                Add(A, "apply onto left and right", Verdict.Warn, "refused: the walk is incomplete (a directory could not be listed)");
+            else
+            {
+                Expect(A, "apply onto left: every file applies", al is { Conflict: 0 } && onL.Exit == 0,
+                    al is { } x ? $"{x.Would} would apply · {x.Already} already · {x.Conflict} conflict" : $"exit {onL.Exit}: {Brief(onL.Out + onL.Err, 3)}");
+                Expect(A, "apply onto right: everything already there", ar is { Would: 0, Conflict: 0 } && onR.Exit == 0,
+                    ar is { } y ? $"{y.Would} would apply · {y.Already} already · {y.Conflict} conflict" : $"exit {onR.Exit}: {Brief(onR.Out + onR.Err, 3)}");
+            }
 
             var rep = Run("report (2-way)", cli, "report", _compares[0].Id, "--out", Path.Combine(_work, "report-2way"));
             var index = Path.Combine(_work, "report-2way", "index.html");
@@ -695,6 +704,7 @@ internal static class SelfTest
                 Add(area, "resolve --blocks settles each block by a side, and undo takes it back", Verdict.Skip, "no text conflict with recorded blocks");
                 return;
             }
+            var blocks = c.Blocks!;
             var file = Full(c);
             var original = File.ReadAllBytes(file);
             int lines = original.Count(b => b == (byte)'\n');
@@ -702,19 +712,19 @@ internal static class SelfTest
                 && !k.StartsWith(Path.Combine(OverlayConflicts.SetAsideDir, OverlayConflicts.HandMergesDir), StringComparison.OrdinalIgnoreCase)).ToList();
 
             var view = Run("conflicts --blocks", cli, "conflicts", copy, "/" + c.Path, "--blocks");
-            Expect(area, "conflicts --blocks numbers a file's blocks", view.Exit == 0 && view.Out.Contains($"{c.Blocks!.Count:N0} block(s) · {c.Blocks.Count:N0} as written"),
-                $"exit {view.Exit} · {c.Blocks.Count:N0} block(s) recorded");
+            Expect(area, "conflicts --blocks numbers a file's blocks", view.Exit == 0 && view.Out.Contains($"{blocks.Count:N0} block(s) · {blocks.Count:N0} as written"),
+                $"exit {view.Exit} · {blocks.Count:N0} block(s) recorded");
             foreach (var (side, bit) in new[] { ("v1", 1), ("v2", 4) })
             {
                 var w = Run($"resolve {side} --blocks all --write", cli, "resolve", copy, side, "/" + c.Path, "--blocks", "all", "--write");
                 var now = File.ReadAllBytes(file);
-                int expect = lines - c.Blocks.Sum(g => 4 + g.V1 + g.Base + g.V2 - (side == "v1" ? g.V1 : g.V2) + ((g.Open & bit) != 0 ? 1 : 0));
+                int expect = lines - blocks.Sum(g => 4 + g.V1 + g.Base + g.V2 - (side == "v1" ? g.V1 : g.V2) + ((g.Open & bit) != 0 ? 1 : 0));
                 int got = now.Count(b => b == (byte)'\n');
                 var s = OverlayConflicts.Load(copy);
                 int markers = OverlayConflicts.MarkerBlocks(file);
                 Expect(area, $"resolve {side} --blocks all settles every block",
                     w.Exit == 0 && s.HandMerged(c) && markers == 0 && got == expect,
-                    $"exit {w.Exit} · {c.Blocks.Count:N0} block(s) · {got:N0} line(s), {expect:N0} expected from the recorded counts · {markers} marker block(s) left");
+                    $"exit {w.Exit} · {blocks.Count:N0} block(s) · {got:N0} line(s), {expect:N0} expected from the recorded counts · {markers} marker block(s) left");
                 var u = Run($"resolve undo after --blocks {side}", cli, "resolve", copy, "undo", "/" + c.Path, "--write");
                 var back = Changed();
                 Expect(area, $"undo takes a block settle back ({side})", u.Exit == 0 && back.Count == 0,

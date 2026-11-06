@@ -252,13 +252,13 @@ public sealed class ConflictResolverTests : IDisposable
         Assert.Equal(Read(_v2, "src/clash.c"), Read(Apply(o), "src/clash.c"));
     }
 
-    private static string Journal(IReadOnlyList<ConflictDecision> ds)
+    private static string Journal(IReadOnlyList<ConflictDecision> ds, bool undo = false)
     {
         using var ms = new MemoryStream();
         using (var w = new System.Text.Json.Utf8JsonWriter(ms))
         {
             w.WriteStartObject();
-            w.WriteBoolean("undo", false);
+            w.WriteBoolean("undo", undo);
             w.WriteStartArray("decisions");
             foreach (var d in ds) OverlayConflicts.WriteDecision(w, d);
             w.WriteEndArray();
@@ -564,8 +564,11 @@ public sealed class ConflictResolverTests : IDisposable
         var o = Overlay();
         var plan = Resolve(o, "v2", ["blob.bin", "src"], write: false);
         File.WriteAllText(Path.Combine(o, OverlayConflicts.ResolvingName), Journal(plan.Done));
-        Directory.CreateDirectory(Path.Combine(o, OverlayConflicts.SetAsideDir, ".copying"));
-        File.WriteAllText(Path.Combine(o, OverlayConflicts.SetAsideDir, ".copying", "stale"), "a copy stopped part way");
+        Directory.CreateDirectory(Path.Combine(o, ConflictResolver.TempDir));
+        File.WriteAllText(Path.Combine(o, ConflictResolver.TempDir, "stale"), "a copy stopped part way");
+        var legacy = Path.Combine(o, OverlayConflicts.SetAsideDir, ".copying");      // where older runs copied
+        Directory.CreateDirectory(legacy);
+        File.WriteAllText(Path.Combine(legacy, Guid.NewGuid().ToString("N")), "an older copy stopped part way");
         Put("V2/blob.bin", "\0\u0001changed after the compare");
 
         var next = Resolve(o, "v1", ["gen"]);
@@ -574,7 +577,8 @@ public sealed class ConflictResolverTests : IDisposable
         var s = OverlayConflicts.Load(o);
         Assert.False(s.Decisions.ContainsKey("blob.bin"));
         Assert.Equal("v2", s.Decisions["src/clash.c"].Choice);
-        Assert.False(Directory.Exists(Path.Combine(o, OverlayConflicts.SetAsideDir, ".copying")));
+        Assert.False(Directory.Exists(Path.Combine(o, ConflictResolver.TempDir)));
+        Assert.False(Directory.Exists(legacy));
         var m = Apply(o);
         Assert.Equal("\0\u0001v1!", Read(m, "blob.bin"));
         Assert.Equal(Read(_v2, "src/clash.c"), Read(m, "src/clash.c"));
@@ -612,6 +616,182 @@ public sealed class ConflictResolverTests : IDisposable
         finally
         {
             foreach (var f in Directory.EnumerateFiles(_dir, "*", SearchOption.AllDirectories)) File.SetAttributes(f, FileAttributes.Normal);
+        }
+    }
+
+    /// <summary>A binary conflict in a folder of its own: taking v2 copies its file into files\bin\, with nothing else there.</summary>
+    private void BinaryInAFolder()
+    {
+        Put("B/bin/data.bin", "\0\u0001base");
+        Put("V1/bin/data.bin", "\0\u0001one");
+        Put("V2/bin/data.bin", "\0\u0001two!");
+    }
+
+    [Fact]
+    public void AStoppedUndo_WhoseCopyAndItsFolderAreGone_IsFinished()
+    {
+        BinaryInAFolder();
+        var o = Overlay();
+        Resolve(o, "v2", ["bin"]);
+        var journal = Path.Combine(o, OverlayConflicts.ResolvingName);
+        File.WriteAllText(journal, Journal(Resolve(o, "undo", ["bin"], write: false).Done, undo: true));
+        Directory.Delete(Path.Combine(o, "files", "bin"), true);           // stopped after the copy and its folder went
+
+        Assert.True(Resolve(o, "v1", ["gen"]).FinishedStopped);
+        Assert.False(OverlayConflicts.Load(o).Decisions.ContainsKey("bin/data.bin"));
+        Assert.False(File.Exists(journal));
+    }
+
+    [Fact]
+    public void AStoppedUndo_WithAFileInTheMarkersPlace_KeepsThatChoice_AndFinishesTheRest()
+    {
+        var o = Overlay();
+        Resolve(o, "v1", ["src", "gen"]);
+        var journal = Path.Combine(o, OverlayConflicts.ResolvingName);
+        File.WriteAllText(journal, Journal(Resolve(o, "undo", ["src", "gen"], write: false).Done, undo: true));
+        Directory.CreateDirectory(Path.Combine(o, "files", "src"));
+        File.WriteAllText(Path.Combine(o, "files", "src", "clash.c"), "put here since\n");
+
+        var next = Resolve(o, "v1", ["blob.bin"]);
+        Assert.True(next.FinishedStopped);
+        Assert.Contains(next.Refused, x => x.Path == "src/clash.c" && x.Why.Contains("holds another file"));
+        var s = OverlayConflicts.Load(o);
+        Assert.Equal("v1", s.Decisions["src/clash.c"].Choice);
+        Assert.False(s.Decisions.ContainsKey("gen/regs.h"));
+        Assert.Equal("put here since\n", Read(Path.Combine(o, "files"), "src/clash.c"));
+        Assert.True(File.Exists(Path.Combine(o, OverlayConflicts.SetAsideDir, "src", "clash.c")));
+        Assert.False(File.Exists(journal));
+    }
+
+    [Fact]
+    public void AStoppedTakeV2_OverItsOwnMarkers_WhoseV2FileChanged_PutsTheMarkersBack()
+    {
+        var o = Overlay();
+        var before = Snapshot(o);
+        File.WriteAllText(Path.Combine(o, OverlayConflicts.ResolvingName), Journal(Resolve(o, "v2", ["src"], write: false).Done));
+        // Stopped after the markers went aside and v2's file was copied over them.
+        var markers = Path.Combine(o, "files", "src", "clash.c");
+        var aside = Path.Combine(o, OverlayConflicts.SetAsideDir, "src", "clash.c");
+        Directory.CreateDirectory(Path.GetDirectoryName(aside)!);
+        File.Move(markers, aside);
+        File.Copy(Path.Combine(_v2, "src", "clash.c"), markers);
+        Put("V2/src/clash.c", Ten.Replace("line 5\n", "five v2, edited since\n"));
+
+        var next = Resolve(o, "v1", ["blob.bin"]);
+        Assert.Contains(next.Refused, x => x.Path == "src/clash.c" && x.Why.Contains("not taken"));
+        Assert.False(OverlayConflicts.Load(o).Decisions.ContainsKey("src/clash.c"));
+        Assert.False(File.Exists(aside));
+        Resolve(o, "undo", ["blob.bin"]);
+        Assert.Equal(before, Snapshot(o));
+    }
+
+    [Fact]
+    public void AStoppedTakeV2_WhoseV2FileChanged_LeavesNoCopyInFiles()
+    {
+        BinaryInAFolder();
+        var o = Overlay();
+        var before = Snapshot(o);
+        File.WriteAllText(Path.Combine(o, OverlayConflicts.ResolvingName), Journal(Resolve(o, "v2", ["bin"], write: false).Done));
+        var copy = Path.Combine(o, "files", "bin", "data.bin");                // stopped after the copy
+        Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
+        File.Copy(Path.Combine(_v2, "bin", "data.bin"), copy);
+        Put("V2/bin/data.bin", "\0\u0001changed after the compare");
+
+        Assert.Contains(Resolve(o, "v1", ["gen"]).Refused, x => x.Path == "bin/data.bin" && x.Why.Contains("not taken"));
+        Assert.False(File.Exists(copy));
+        Resolve(o, "undo", ["gen"]);
+        Assert.Equal(before, Snapshot(o));
+        Assert.Equal("\0\u0001one", Read(Apply(o), "bin/data.bin"));
+    }
+
+    [Fact]
+    public void UndoOfTakeV2_KeepsAnEditOfV2sCopy()
+    {
+        BinaryInAFolder();
+        var o = Overlay();
+        var before = Snapshot(o);
+        Resolve(o, "v2", ["src", "bin"]);
+        File.WriteAllText(Path.Combine(o, "files", "src", "clash.c"), "v2's, edited by hand\n");
+        File.WriteAllText(Path.Combine(o, "files", "bin", "data.bin"), "\0\u0001edited by hand");
+
+        var u = Resolve(o, "undo", ["src", "bin"]);
+        Assert.Equal(2, u.Done.Count);
+        Assert.Equal(2, u.Notes!.Count);
+        Assert.Equal(before, Snapshot(o));
+        var kept = Path.Combine(o, OverlayConflicts.SetAsideDir, OverlayConflicts.HandMergesDir);
+        Assert.Equal("v2's, edited by hand\n", File.ReadAllText(Assert.Single(Directory.GetFiles(kept, "clash.c", SearchOption.AllDirectories))));
+        Assert.Equal("\0\u0001edited by hand", File.ReadAllText(Assert.Single(Directory.GetFiles(kept, "data.bin", SearchOption.AllDirectories))));
+        var text = ConflictResolver.Text(u);
+        Assert.Contains("kept:\n", text);
+        Assert.Contains("  src/clash.c: files\\src\\clash.c was edited after v2's file was copied in — the edit is kept in set-aside\\hand-merges\\", text);
+    }
+
+    [Fact]
+    public void UndoOfTakeV2_DeletesAnUneditedCopy()
+    {
+        BinaryInAFolder();
+        var o = Overlay();
+        Resolve(o, "v2", ["bin"]);
+        var u = Resolve(o, "undo", ["bin"]);
+        Assert.Empty(u.Notes!);
+        Assert.False(Directory.Exists(Path.Combine(o, "files", "bin")));
+        Assert.False(Directory.Exists(Path.Combine(o, OverlayConflicts.SetAsideDir, OverlayConflicts.HandMergesDir)));
+    }
+
+    [Fact]
+    public void Undo_LeavesADeleteAnotherChoiceStillNeeds()
+    {
+        var o = Overlay();
+        Resolve(o, "v2", ["kept.c"]);                                       // v2 deleted it: v1's goes
+        var s = OverlayConflicts.Load(o);
+        Assert.Equal(["kept.c"], s.Decisions["kept.c"].AddedDeletes);
+        // A second choice needing the same delete (two conflicts with the same v1 file).
+        var also = new ConflictDecision("model.c", "v2", "model.c", DateTime.UtcNow, null, null, ["kept.c"], []);
+        using (var ms = new MemoryStream())
+        {
+            using (var w = new System.Text.Json.Utf8JsonWriter(ms))
+            {
+                w.WriteStartObject();
+                w.WriteStartArray("decisions");
+                foreach (var d in s.Decisions.Values.Append(also)) OverlayConflicts.WriteDecision(w, d);
+                w.WriteEndArray();
+                w.WriteEndObject();
+            }
+            File.WriteAllBytes(Path.Combine(o, OverlayConflicts.DecisionsName), ms.ToArray());
+        }
+
+        Resolve(o, "undo", ["kept.c"]);
+        Assert.Contains("kept.c\n", File.ReadAllText(Path.Combine(o, "deletes.txt")));
+        Resolve(o, "undo", ["model.c"]);
+        Assert.DoesNotContain("kept.c\n", File.ReadAllText(Path.Combine(o, "deletes.txt")));
+    }
+
+    [Fact]
+    public void ATreeFolderNamedLikeTheOldCopyFolder_IsSetAsideAndPutBack()
+    {
+        foreach (var d in new[] { "B", "V1", "V2" }) Put($"{d}/.copying/x.c", Ten);
+        Put("V1/.copying/x.c", Ten.Replace("line 7\n", "seven v1\n"));
+        Put("V2/.copying/x.c", Ten.Replace("line 7\n", "seven v2\n"));
+        var o = Overlay();
+        var before = Snapshot(o);
+        Resolve(o, "v1", [".copying"]);
+        Assert.True(File.Exists(Path.Combine(o, OverlayConflicts.SetAsideDir, ".copying", "x.c")));
+        Resolve(o, "v2", ["src"]);                                          // a run that copies
+        Assert.True(File.Exists(Path.Combine(o, OverlayConflicts.SetAsideDir, ".copying", "x.c")));
+        Resolve(o, "undo", []);
+        Assert.Equal(before, Snapshot(o));
+    }
+
+    [Fact]
+    public void AMarkersFileThatCantBeRead_IsAnErrorNotACrash()
+    {
+        var o = Overlay();
+        var markers = Path.Combine(o, "files", "src", "clash.c");
+        File.WriteAllText(markers, "being edited\n");
+        using (new FileStream(markers, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Contains("can't be read", Assert.Throws<ArgumentException>(() => OverlayConflicts.Load(o)).Message);
+            Assert.Contains("can't be read", Assert.Throws<ArgumentException>(() => OverlayApplier.Run(o, CopyOfV1(), write: true)).Message);
         }
     }
 }

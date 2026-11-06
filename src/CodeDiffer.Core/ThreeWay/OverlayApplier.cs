@@ -31,6 +31,8 @@ public sealed record OverlayApplyResult(string Overlay, string Target, string? M
 public static class OverlayApplier
 {
     public const string AppliedName = "APPLIED.txt", ApplyingName = "APPLYING.txt";
+    /// <summary>The suffix of a file being written into files (by a merge or a resolve), moved to its name once whole.</summary>
+    public const string TempSuffix = ".codediffer-tmp";
 
     public static OverlayApplyResult Run(string overlay, string target, bool write, bool again = false, int parallelism = 8,
         CancellationToken ct = default, PortProgress? progress = null, bool withMarkers = false)
@@ -78,7 +80,9 @@ public static class OverlayApplier
                                         string.Join(", ", markersLeft.Take(5).Select(m => ResultStore.Escaped(m.Path))) + (markersLeft.Count > 5 ? ", ..." : "") +
                                         " — edit and save them (one with no markers left counts as merged), or settle them with codediffer resolve; " +
                                         "--with-markers applies them as they are");
+        // A write or resolve stopped between its temp file and the move leaves the temp behind: never part of the merge.
         var copies = Directory.EnumerateFiles(files, "*", SearchOption.AllDirectories)
+            .Where(f => !f.EndsWith(TempSuffix, StringComparison.OrdinalIgnoreCase))
             .Select(f => Path.GetRelativePath(files, f)).Order(StringComparer.Ordinal).ToList();
         if (progress is not null) progress.Total = deletes.Count + copies.Count;
 
@@ -115,7 +119,7 @@ public static class OverlayApplier
         foreach (var c in copies) copyByCase.TryAdd(c.Replace('\\', '/'), c); // two names differing in case only: the first
         bool RenamedAlready(string d, string p) =>
             copyByCase.TryGetValue(d, out var to) && !string.Equals(to.Replace('\\', '/'), d, StringComparison.Ordinal)
-            && NameOnDisk(p) == Path.GetFileName(to);
+            && SpelledOnDisk(target, d) == to.Replace('\\', '/'); // every folder too: R/r.txt -> r/r.txt is not done while R/ is
 
         var links = new CodeDiffer.Core.Walk.LinkGuard(target);
         string? Link(string full) => links.LinkOnTheWay(full) is { } l ? $"the target has a symlink/junction at {l} — never written or deleted through" : null;
@@ -240,9 +244,18 @@ public static class OverlayApplier
             if (c.Markers is { } m && !cs.HandMerged(c)
                 && !(cs.Decisions.TryGetValue(c.Path, out var d) && d.Copied is { } at && TreeMerger.PathComparer.Equals(at, m))
                 && Full(files, m) is var f && File.Exists(f)
-                && (cs.Edited.TryGetValue(c.Path, out var n) ? n : OverlayConflicts.MarkerBlocks(f)) is var blocks and > 0)
+                && (cs.Edited.TryGetValue(c.Path, out var n) ? n : Blocks(f, m)) is var blocks and > 0)
                 left.Add((m, blocks));
         return left;
+
+        static int Blocks(string f, string m)
+        {
+            try { return OverlayConflicts.MarkerBlocks(f); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new ArgumentException($"files\\{m.Replace('/', '\\')} can't be read ({ex.Message}): close what holds it, then run this again");
+            }
+        }
     }
 
     /// <summary>The v1 the overlay was written for (its OVERLAY.txt "v1" line), or null.</summary>
@@ -296,13 +309,24 @@ public static class OverlayApplier
         return o.ToString();
     }
 
-    /// <summary>The file's name as the directory spells it (a case-insensitive file system answers any spelling).</summary>
-    private static string? NameOnDisk(string path)
+    /// <summary>A path under <paramref name="root"/> as its folders and name are spelled on disk ('/'-separated), or null
+    /// when a part of it is not there.</summary>
+    private static string? SpelledOnDisk(string root, string rel)
     {
-        var dir = new DirectoryInfo(Path.GetDirectoryName(path)!);
-        var name = Path.GetFileName(path);
-        var names = dir.EnumerateFiles().Select(f => f.Name).Where(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase)).ToList();
-        return names.Contains(name, StringComparer.Ordinal) ? name : names.FirstOrDefault(); // case-sensitive: both may exist
+        var parts = rel.Replace('\\', '/').Split('/');
+        var dir = root;
+        var spelled = new List<string>(parts.Length);
+        for (int i = 0; i < parts.Length; i++)
+        {
+            var info = new DirectoryInfo(dir);
+            var names = (i == parts.Length - 1 ? info.EnumerateFiles().Select(f => f.Name) : info.EnumerateDirectories().Select(d => d.Name))
+                .Where(n => string.Equals(n, parts[i], StringComparison.OrdinalIgnoreCase)).ToList();
+            if (names.Count == 0) return null;
+            var name = names.Contains(parts[i], StringComparer.Ordinal) ? parts[i] : names[0]; // case-sensitive: both may exist
+            spelled.Add(name);
+            dir = Path.Combine(dir, name);
+        }
+        return string.Join('/', spelled);
     }
 
     private static string Full(string root, string rel) => Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));

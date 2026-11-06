@@ -779,8 +779,21 @@ static string? PeekDeltaKind(string path)
 /// <returns>True when the arguments are fine; else the error and the usage are printed.</returns>
 static bool ArgsOk(string[] args, int positional, string usage, string[] switches, string[] valued)
 {
+    // A flag where a tree or file belongs (a positional left out) is a usage error, never a path.
+    for (int i = 1; i <= positional && i < args.Length; i++)
+        if (args[i].StartsWith("--", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine($"error: {args[i]} where an argument belongs\n{usage}");
+            return false;
+        }
+    var seen = new HashSet<string>(StringComparer.Ordinal);
     for (int i = 1 + positional; i < args.Length; i++)
     {
+        if ((switches.Contains(args[i]) || valued.Contains(args[i])) && !seen.Add(args[i]))
+        {
+            Console.Error.WriteLine($"error: {args[i]} given twice\n{usage}");
+            return false;
+        }
         if (switches.Contains(args[i])) continue;
         if (valued.Contains(args[i]))
         {
@@ -1000,6 +1013,11 @@ static int Conflicts(string[] args)
     const string usage = "usage: codediffer conflicts <overlay-dir> [<pattern>...] [--kind K[,K]] [--depth N] [--list|--blocks [--max N]]";
     if (!RuleArgs(args, usage, ["--list", "--blocks"], ["--kind", "--depth", "--max"], out var positional, out var kinds)) return 64;
     if (positional.Count < 1) { Console.Error.WriteLine(usage); return 64; }
+    if (args.Contains("--max") && !args.Contains("--list") && !args.Contains("--blocks"))
+    {
+        Console.Error.WriteLine($"error: --max goes with --list or --blocks\n{usage}");
+        return 64;
+    }
     int depth = 1, max = args.Contains("--blocks") ? 10 : 50;
     if (FlagValue(args, "--depth", from: 1) is { } d && (!int.TryParse(d, out depth) || depth < 1)
         || FlagValue(args, "--max", from: 1) is { } m && (!int.TryParse(m, out max) || max < 1))

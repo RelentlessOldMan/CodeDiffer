@@ -427,6 +427,18 @@ public static class TreeMerger
     /// <param name="ct">Stops the line merge (a giant file's diffs may run long): throws <see cref="OperationCanceledException"/>.</param>
     public static string? MergedText(Merge3Entry e, string b, string v1, string v2, CancellationToken ct = default) => Compose(e, b, v1, v2, ct)?.Merged;
 
+    /// <param name="blocks">Each conflict block where the merger put it: its number (from 1), the 0-based line of its
+    /// <c>&lt;&lt;&lt;&lt;&lt;&lt;&lt; v1</c> marker in the text, and its line counts — never found again by marker text,
+    /// which a file's own lines can hold too.</param>
+    internal static string? MergedText(Merge3Entry e, string b, string v1, string v2, out IReadOnlyList<ConflictBlocks.Found> blocks,
+        CancellationToken ct = default)
+    {
+        blocks = [];
+        if (Compose(e, b, v1, v2, ct) is not { } m) return null;
+        blocks = [.. m.Blocks.Select((g, i) => new ConflictBlocks.Found(i + 1, m.Opens[i], g))];
+        return m.Merged;
+    }
+
     /// <summary>
     /// The merged file as bytes to write: <see cref="MergedText"/> in the merged encoding and line endings — 3-way like
     /// the lines: a side that changed them wins (see <see cref="Form"/>). Null when the entry has no line-level merge.
@@ -465,7 +477,7 @@ public static class TreeMerger
     }
 
     /// <summary>The merge of one entry; its base as lines, joined only by the one caller that diffs against it.</summary>
-    private static (List<string> Base, string Merged, Form Form, int Conflicts, List<ConflictBlock> Blocks)? Compose(Merge3Entry e, string b, string v1, string v2,
+    private static (List<string> Base, string Merged, Form Form, int Conflicts, List<ConflictBlock> Blocks, List<int> Opens)? Compose(Merge3Entry e, string b, string v1, string v2,
         CancellationToken ct)
     {
         if (e.V1 is null || e.V2 is null || !(e.ConflictKind is null || HasMarkers(e.ConflictKind)) || e.Outcome == Merge3Outcome.Agreed) return null;
@@ -492,23 +504,31 @@ public static class TreeMerger
 
         var o = new StringBuilder();
         var blocks = new List<ConflictBlock>();
-        int cursor = 0, conflicts = 0;
+        var opens = new List<int>(); // each block's first line (its <<<<<<< v1 marker), 0-based
+        int cursor = 0, conflicts = 0, line = 0, markedAt = 0;
+        void Put(string s) // every append goes through here: the lines so far are counted as they are written
+        {
+            o.Append(s);
+            line += s.AsSpan().Count('\n');
+        }
         string nl = !form.Normalize && form.Eol == "CRLF" ? "\r\n" : "\n"; // markers in the file's line endings (converted later if normalized)
         void Emit(List<string> lines, int start, int count)
         {
-            for (int k = 0; k < count; k++) o.Append(lines[start + k]);
+            for (int k = 0; k < count; k++) Put(lines[start + k]);
         }
         void EmitGap(int from, int to, int shift) => Emit(gap, from + shift, to - from); // unchanged base lines, from the gap source
         void EmitStampGap(int from, int to, int s1, int s2) // the same, but a side may have changed a stamp in them
         {
-            for (int i = from; i < to; i++) o.Append(o2[i + s2] != ob[i] ? o2[i + s2] : o1[i + s1]);
+            for (int i = from; i < to; i++) Put(o2[i + s2] != ob[i] ? o2[i + s2] : o1[i + s1]);
         }
         int Shift(MergeRegion r) => form.GapSide switch { 1 when raw => r.V1Start0 - r.BaseStart0, 2 when raw => r.V2Start0 - r.BaseStart0, _ => 0 };
         bool Marker(string text) // whether the side before it ended without a newline
         {
             bool open = o.Length > 0 && o[^1] != '\n';
-            if (open) o.Append(nl); // a side ending without a newline: marker still on its own line
-            o.Append(text).Append(nl);
+            if (open) Put(nl); // a side ending without a newline: marker still on its own line
+            markedAt = line;
+            Put(text);
+            Put(nl);
             return open;
         }
         foreach (var r in regions)
@@ -518,11 +538,12 @@ public static class TreeMerger
             cursor = r.BaseStart0 + r.BaseLines;
             switch (r.Kind)
             {
-                case RegionKind.V1Only or RegionKind.V2Only when stamps: o.AppendJoin("", StampedEdit(r, ob, o1, o2)!); break;
+                case RegionKind.V1Only or RegionKind.V2Only when stamps: foreach (var s in StampedEdit(r, ob, o1, o2)!) Put(s); break;
                 case RegionKind.V2Only: Emit(o2, r.V2Start0, r.V2Lines); break;
                 case RegionKind.Conflict:
                     conflicts++;
                     Marker($"<<<<<<< v1 ({e.V1.RelativePath}:{r.V1Start0 + 1})");
+                    opens.Add(markedAt);
                     Emit(o1, r.V1Start0, r.V1Lines);
                     bool open1 = Marker($"||||||| base ({e.Path}:{r.BaseStart0 + 1})") && r.V1Lines > 0;
                     Emit(ob, r.BaseStart0, r.BaseLines);
@@ -538,7 +559,7 @@ public static class TreeMerger
         int tail = form.GapSide switch { 1 when raw => o1.Count - ob.Count, 2 when raw => o2.Count - ob.Count, _ => 0 };
         if (stamps) EmitStampGap(cursor, ob.Count, o1.Count - ob.Count, o2.Count - ob.Count);
         else EmitGap(cursor, lb.Count, tail);
-        return (ob, o.ToString(), form, conflicts, blocks);
+        return (ob, o.ToString(), form, conflicts, blocks, opens);
     }
 
     /// <summary>

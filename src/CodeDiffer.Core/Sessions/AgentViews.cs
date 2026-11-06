@@ -824,10 +824,11 @@ public static class AgentViews
     {
         filter = (_, _) => true;
         error = "";
-        bool many = pattern.IndexOfAny([';', ',']) >= 0;
+        var parts = Terms(pattern);
+        bool many = parts.Count > 1;
         var keep = new List<Func<string, bool>>();
         var drop = new List<Func<string, bool>>();
-        foreach (var part in many ? pattern.Split([';', ',']) : [pattern])
+        foreach (var part in parts)
         {
             var term = many ? part.Trim() : part;
             bool not = term.StartsWith('!');
@@ -839,7 +840,12 @@ public static class AgentViews
                 Regex re;
                 try { re = new Regex(term[1..^1], RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)); }
                 catch (ArgumentException ex) { error = $"bad regex {term}: {ex.Message}"; return false; }
-                test = p => re.IsMatch(p);
+                string shown = term;
+                test = p =>
+                {
+                    try { return re.IsMatch(p); }
+                    catch (RegexMatchTimeoutException) { throw new ArgumentException($"regex {shown} took over a second on one path; simplify it"); }
+                };
             }
             else test = Glob(term);
             (not ? drop : keep).Add(test);
@@ -848,6 +854,36 @@ public static class AgentViews
         bool Any(List<Func<string, bool>> tests, string path, string? other) => tests.Any(t => t(path) || (other is not null && t(other)));
         filter = (path, other) => (keep.Count == 0 || Any(keep, path, other)) && !Any(drop, path, other);
         return true;
+    }
+
+    /// <summary>A filter's terms, split on ';' and ','. In a term that starts with '/' (a /regex/), a separator inside
+    /// brackets or escaped is part of it: /a{1,3}\.c/ and /[,;]/ are one term each (a bare ',' between regex
+    /// alternatives still splits: write it [,]).</summary>
+    internal static List<string> Terms(string pattern)
+    {
+        var terms = new List<string>();
+        int i = 0;
+        while (true)
+        {
+            int j = i;
+            while (j < pattern.Length && (char.IsWhiteSpace(pattern[j]) || pattern[j] == '!')) j++;
+            bool regex = j < pattern.Length && pattern[j] == '/';
+            int end = i, depth = 0;
+            bool inClass = false; // in a [class] a '(' or '{' is a plain character
+            for (; end < pattern.Length; end++)
+            {
+                char ch = pattern[end];
+                if (regex && ch == '\\') { end++; continue; }
+                if (inClass) { if (ch == ']') { inClass = false; depth--; } continue; }
+                if (regex && ch == '[') { inClass = true; depth++; }
+                else if (regex && ch is '(' or '{') depth++;
+                else if (regex && ch is ')' or ']' or '}' && depth > 0) depth--;
+                else if (depth == 0 && ch is ';' or ',') break;
+            }
+            terms.Add(pattern[i..Math.Min(end, pattern.Length)]);
+            if (end >= pattern.Length) return terms;
+            i = end + 1;
+        }
     }
 
     /// <summary>

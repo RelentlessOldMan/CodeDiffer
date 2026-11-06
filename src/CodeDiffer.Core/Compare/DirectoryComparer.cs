@@ -189,7 +189,7 @@ public sealed class DirectoryComparer
         var leftCache = HashCache.Open(left, _options.CacheFor(left), _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing,
             sharedLeft?.StartedUtcTicks ?? 0);
         var rightCache = HashCache.Open(right, _options.CacheFor(right), _options.StrictStat, _options.CacheBaseDir, _options.CodeCompassBaseDir, _options.Timing);
-        var guard = new ShareGuard([left, right], _options, progress);
+        var guard = new ShareGuard([left, right], _options, progress, stop: ct);
         // A modified pair's verdict, by both sides' content: trusted only when both ledgers are (a rehash re-classifies).
         bool trustVerdicts = _options.CacheFor(left) == CacheMode.On && _options.CacheFor(right) == CacheMode.On;
         var verdictStore = VerdictStore.Open(_options.CacheBaseDir, _options.MaxClassifyBytes, lookup: trustVerdicts,
@@ -282,7 +282,7 @@ public sealed class DirectoryComparer
             Parallel.For(0, sizeChanged.Count, new ParallelOptions { MaxDegreeOfParallelism = _options.Parallelism, CancellationToken = ct }, i =>
             {
                 var (le, re) = (leftFiles[sizeChanged[i].L], rightFiles[sizeChanged[i].R]);
-                try { classified[i] = guard.Run(le.FullPath, () => Resized(le, re), ct); }
+                try { classified[i] = guard.Run(le.FullPath, () => Resized(le, re), ct, re.FullPath); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     classified[i] = Unknown(le, re, ex); // modified for sure; why is unknown
@@ -322,11 +322,20 @@ public sealed class DirectoryComparer
                 {
                     var (le, re) = (leftFiles[sameSize[i].L], rightFiles[sameSize[i].R]);
                     long streamed = 0; // this pair's bytes already shown by progress as they were read
-                    Action<int, int>? onChunk = progress is null ? null : (advance, bytes) => { streamed += advance; progress.Streamed(advance, bytes); };
+                    // A read tried again (after a pause, a retry, a plain read after error 87) starts over: what it
+                    // streams counts only up to the pair's size, so progress shows it once (bytes read count every read).
+                    Action<int, int>? onChunk = progress is null ? null : (advance, bytes) =>
+                    {
+                        int counted = (int)Math.Min(advance, Math.Max(0, le.Length - streamed));
+                        streamed += counted;
+                        progress.Streamed(counted, bytes);
+                    };
                     bool hasL = false, hasR = false;
+                    // Counted here, once a pair: the read below may be tried again.
+                    if (reused is not null && sharedLeft!.Ids.ContainsKey(le.RelativePath)) Interlocked.Increment(ref reusedFiles);
                     try
                     {
-                        (verdicts[i], hasL, hasR) = await guard.RunAsync(le.FullPath, () => Pair(le, re, onChunk, ct), ct).ConfigureAwait(false);
+                        (verdicts[i], hasL, hasR) = await guard.RunAsync(le.FullPath, () => Pair(le, re, onChunk, ct), ct, re.FullPath).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     {
@@ -349,7 +358,7 @@ public sealed class DirectoryComparer
                     var (le, re) = (leftFiles[sameSize[i].L], rightFiles[sameSize[i].R]);
                     try
                     {
-                        verdicts[i] = (await guard.RunAsync(le.FullPath, () => Pair(le, re, null, ct), ct).ConfigureAwait(false)).Verdict;
+                        verdicts[i] = (await guard.RunAsync(le.FullPath, () => Pair(le, re, null, ct), ct, re.FullPath).ConfigureAwait(false)).Verdict;
                         Interlocked.Increment(ref retriedAtEnd);
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { verdicts[i] = Unknown(le, re, ex); }
@@ -363,7 +372,6 @@ public sealed class DirectoryComparer
                 byte[]? readL = null, readR = null; // a small differing pair's bytes, just read: classified from them
                 ContentId cl = default;
                 bool shared = reused is not null && sharedLeft!.Ids.TryGetValue(le.RelativePath, out cl);
-                if (shared) Interlocked.Increment(ref reusedFiles);
                 bool hasL = shared || leftCache.TryGet(le, out cl);
                 bool hasR = rightCache.TryGet(re, out var cr);
                 ContentId? provenL = hasL ? cl : null; // the left id this run established, passed on via shareIds

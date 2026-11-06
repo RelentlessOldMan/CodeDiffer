@@ -17,6 +17,25 @@ public static class UnifiedDiff
     public const int DefaultContext = 3;
     internal const string NoEolMarker = "\0␀noeol"; // can't occur in decoded text; tags a last line lacking '\n'
 
+    /// <summary>A path as git writes it in a patch header: <paramref name="prefix"/> and the path as they are, or the two
+    /// in C-style quotes when the path holds a quote, a backslash or a control character (as git does; a newline in a name
+    /// must never start a line of the patch). Windows names can't hold these, but a share's server can.</summary>
+    public static string GitName(string prefix, string path)
+    {
+        if (!path.Any(ch => ch is '"' or '\\' || char.IsControl(ch))) return prefix + path;
+        var sb = new StringBuilder("\"");
+        foreach (var ch in prefix + path)
+        {
+            if (ch is '"' or '\\') sb.Append('\\').Append(ch);
+            else if (ch == '\n') sb.Append("\\n");
+            else if (ch == '\t') sb.Append("\\t");
+            else if (char.IsControl(ch))
+                foreach (var b in Encoding.UTF8.GetBytes(ch.ToString())) sb.Append('\\').Append(Convert.ToString(b, 8).PadLeft(3, '0'));
+            else sb.Append(ch);
+        }
+        return sb.Append('"').ToString();
+    }
+
     /// <summary>The lines of a text, last line tagged when the text lacks a trailing newline.</summary>
     public static string[] DiffLines(string text)
     {
@@ -41,13 +60,13 @@ public static class UnifiedDiff
                     ?? LineDiffer.Diff(a, b, LineDiffer.DefaultMaxEditDistance, out coarse, ct: ct);
         if (hunks.Count == 0 && oldText is not null && newText is not null && extraHeader is null) return false;
 
-        w.Write($"diff --git a/{oldPath} b/{newPath}\n");
+        w.Write($"diff --git {GitName("a/", oldPath)} {GitName("b/", newPath)}\n");
         if (oldText is null) w.Write("new file mode 100644\n");
         if (newText is null) w.Write("deleted file mode 100644\n");
         if (extraHeader is not null) w.Write(extraHeader);
         if (hunks.Count == 0) return coarse; // e.g. a pure rename: header only
-        w.Write(oldText is null ? "--- /dev/null\n" : $"--- a/{oldPath}\n");
-        w.Write(newText is null ? "+++ /dev/null\n" : $"+++ b/{newPath}\n");
+        w.Write(oldText is null ? "--- /dev/null\n" : $"--- {GitName("a/", oldPath)}\n");
+        w.Write(newText is null ? "+++ /dev/null\n" : $"+++ {GitName("b/", newPath)}\n");
         WriteHunks(w, a, b, hunks, context);
         return coarse;
     }

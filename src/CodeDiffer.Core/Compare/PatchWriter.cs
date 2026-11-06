@@ -276,11 +276,11 @@ public static class PatchWriter
             case ChangeStatus.Renamed:
                 // git keeps 100% for a byte-identical rename: an edited one (a file reordered) is at most 99%.
                 int similarity = c.PureRename ? 100 : Math.Min(99, (c.SimilarityMilli ?? 0) / 10);
-                var header = $"similarity index {similarity}%\nrename from {c.RenamedFrom}\nrename to {c.RelativePath}\n";
+                var header = $"similarity index {similarity}%\nrename from {UnifiedDiff.GitName("", c.RenamedFrom!)}\nrename to {UnifiedDiff.GitName("", c.RelativePath)}\n";
                 if (c.PureRename)
                 {
                     // Byte-identical: the header alone moves it — for binary and large files too, and nothing is read.
-                    w.Write($"diff --git a/{c.RenamedFrom} b/{c.RelativePath}\n{header}");
+                    w.Write($"diff --git {UnifiedDiff.GitName("a/", c.RenamedFrom!)} {UnifiedDiff.GitName("b/", c.RelativePath)}\n{header}");
                     stats.TextFiles++;
                     break;
                 }
@@ -299,7 +299,7 @@ public static class PatchWriter
                           (l.Enc != r.Enc ? $"; encoding too: a ({l.Enc}) b ({r.Enc})" : "") + "\n"
                         : $"Encoding differs: a/{c.RelativePath} ({l.Enc}) b/{c.RelativePath} ({r.Enc})\n";
                     if (forGit) w.Write($"# {note.TrimEnd('\n')} — a note, not a hunk (--literal carries it)\n");
-                    else w.Write($"diff --git a/{c.RelativePath} b/{c.RelativePath}\n{note}");
+                    else w.Write($"diff --git {UnifiedDiff.GitName("a/", c.RelativePath)} {UnifiedDiff.GitName("b/", c.RelativePath)}\n{note}");
                     stats.NoteFiles++;
                     break;
                 }
@@ -348,9 +348,9 @@ public static class PatchWriter
         bool binary = (oldBytes is not null && TextInspector.LooksBinary(oldBytes)) || (newBytes is not null && TextInspector.LooksBinary(newBytes));
         if (binary)
         {
-            var line = $"Binary files {(oldFull is null ? "/dev/null" : "a/" + oldRel)} and {(newFull is null ? "/dev/null" : "b/" + newRel)} differ";
+            var line = $"Binary files {(oldFull is null ? "/dev/null" : UnifiedDiff.GitName("a/", oldRel))} and {(newFull is null ? "/dev/null" : UnifiedDiff.GitName("b/", newRel))} differ";
             if (forGit) w.Write($"# {line} — not in this patch ({Side(oldRel, newRel, oldFull, newFull)})\n");
-            else w.Write($"diff --git a/{oldRel} b/{newRel}\n{extraHeader}{line}\n");
+            else w.Write($"diff --git {UnifiedDiff.GitName("a/", oldRel)} {UnifiedDiff.GitName("b/", newRel)}\n{extraHeader}{line}\n");
             stats.BinaryFiles++;
             return;
         }
@@ -361,7 +361,7 @@ public static class PatchWriter
             if (WriteGiant(g, oldRel, newRel, oldFull, newFull, oldLen, newLen, opt)) stats.CoarseFiles++;
             if (forGit) w.Write($"# {what}: large file, not in this patch ({Side(oldRel, newRel, oldFull, newFull)}); its changed byte ranges:\n" +
                                 string.Concat(g.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => $"#   {l}\n")));
-            else w.Write($"diff --git a/{oldRel} b/{newRel}\n{extraHeader}{g}");
+            else w.Write($"diff --git {UnifiedDiff.GitName("a/", oldRel)} {UnifiedDiff.GitName("b/", newRel)}\n{extraHeader}{g}");
             stats.GiantFiles++;
             return;
         }

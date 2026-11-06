@@ -404,7 +404,7 @@ public static class CodeDifferTools
                    (r.Stopped > 0 ? $" · STOPPED: {r.Stopped:N0} without a diff (write_report again for the rest)" : "") + "\n" +
                    "  open index.html in a browser (works from disk, no server)\n";
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
         {
             return $"error: {ex.Message}";
         }

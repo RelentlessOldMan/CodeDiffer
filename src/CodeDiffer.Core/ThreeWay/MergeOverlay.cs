@@ -138,7 +138,7 @@ public static class MergeOverlay
                 if (!target.StartsWith(filesRoot, StringComparison.OrdinalIgnoreCase))
                     throw new IOException($"{w.Dest} is not a path inside the tree");
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                temp = Walk.TempNames.Claim(target, ".codediffer-tmp"); // never another write's destination
+                temp = Walk.TempNames.Claim(target, OverlayApplier.TempSuffix); // never another write's destination
                 // Written beside its name and moved into place, so a failure never leaves a truncated file in files\.
                 switch (w.Kind)
                 {

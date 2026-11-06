@@ -220,6 +220,7 @@ public sealed class MergeStoreTests : IDisposable
         (1, "85A2B650CFA522D5"), // noise's strip steps done once per text: the same answers, less memory
         (1, "EEC9C0B481F5439C"), // comments only
         (1, "4CA4D0344028F52F"), // each conflict block's line counts returned too: the same merges
+        (1, "B04435DA70C8FE4A"), // each conflict block's first line counted as it is written: the same merges
     ];
 
     [Fact]

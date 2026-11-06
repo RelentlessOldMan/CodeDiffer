@@ -48,7 +48,7 @@ if ($Publish) {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "-Publish needs the GitHub CLI (gh) on PATH" }
     Native gh auth status | Out-Null
 }
-$dirty = git status --porcelain
+$dirty = Native git status --porcelain
 if ($dirty) { throw "working tree has uncommitted changes - commit them first:`n$($dirty -join "`n")" }
 if ((Native git rev-parse --is-shallow-repository).Trim() -eq 'true') { throw "shallow clone: the version (commit count) would be wrong - git fetch --unshallow first" }
 $sha = (Native git rev-parse HEAD).Trim()
@@ -81,7 +81,8 @@ try {
 }
 finally { Restore-StampedManifests }
 $manifestVersions = @($stamped.Values | ForEach-Object { ($_ | ConvertFrom-Json).version })
-if (git status --porcelain) { throw "publishing changed tracked files - not packaging:`n$(git status --porcelain)" }
+$after = Native git status --porcelain
+if ($after) { throw "publishing changed tracked files - not packaging:`n$($after -join "`n")" }
 
 # The version the shipped CLI reports, e.g. "codediffer 1.0.36+8d5e88b" -> 1.0.36. Its commit must be HEAD, and
 # both manifests must carry the same number.
@@ -196,11 +197,15 @@ function Add-TextEntry($zw, [string]$name, [string]$text) {
     try { $w.Write($text -replace "`r?`n", "`r`n") } finally { $w.Dispose() }
 }
 $pluginRoot = (Resolve-Path $plugin).Path.TrimEnd('\')
+# Only what is committed under plugin/, plus the bin/ build-plugin just wrote: a stray local or ignored file never ships.
+$tracked = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($t in @(Native git -c core.quotepath=false ls-files -- plugin)) { [void]$tracked.Add($t.Substring('plugin/'.Length)) }
 $zw = [System.IO.Compression.ZipFile]::Open($zip, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
     foreach ($f in [System.IO.Directory]::EnumerateFiles($pluginRoot, '*', [System.IO.SearchOption]::AllDirectories)) {
         $entry = $f.Substring($pluginRoot.Length + 1).Replace('\', '/')
         if ($extraText.Contains($entry) -or $extraFiles.Contains($entry)) { continue }   # a stray local copy
+        if (-not ($tracked.Contains($entry) -or $entry.StartsWith('bin/', [System.StringComparison]::OrdinalIgnoreCase))) { continue }
         if ($stamped.ContainsKey($entry)) {
             # The stamped manifest: no BOM, the bytes build-plugin wrote.
             $s = $zw.CreateEntry($entry, $level).Open()
@@ -228,7 +233,8 @@ foreach ($must in @('.claude-plugin/plugin.json', '.claude-plugin/marketplace.js
     if ($names -notcontains $must) { Remove-Item -Force $zip; throw "zip is missing '$must' - not packaging" }
 }
 if ($zippedVer -ne $version) { Remove-Item -Force $zip; throw "the zipped plugin.json says '$zippedVer', not $version - not packaging" }
-if (git status --porcelain) { throw "packaging changed tracked files:`n$(git status --porcelain)" }
+$after = Native git status --porcelain
+if ($after) { throw "packaging changed tracked files:`n$($after -join "`n")" }
 $mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
 Write-Host "PACKAGED: $zip ($mb MB, $($names.Count) files) from commit $sha" -ForegroundColor Green
 

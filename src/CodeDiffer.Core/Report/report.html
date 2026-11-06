@@ -420,7 +420,8 @@ var CD = (function () {
       var re; try { re = new RegExp(q.slice(1, -1), "i"); } catch (e) { return function () { return false; }; }
       return function (i) { var from = val("f", i); return re.test(path(i)) || (from !== undefined && re.test(from)); };
     }
-    q = q.replace(/\\/g, "/");
+    q = q.replace(/\\/g, "/").replace(/^\/+/, ""); // paths are relative: "/src" is "src", as the agent's tools take it
+    if (!q) return null;
     var slash = q.indexOf("/") >= 0, test;
     if (/[*?]/.test(q)) test = globRe(q);
     else { var low = q.toLowerCase(); test = function (s) { return s.toLowerCase().indexOf(low) >= 0; }; }
@@ -729,23 +730,30 @@ var CD = (function () {
     if (other === null || other === undefined) { td.textContent = text; return; }
     var p = 0, max = Math.min(text.length, other.length);
     while (p < max && text[p] === other[p]) p++;
+    // A mark never starts inside a character: not between a surrogate pair's halves, nor before a combining mark.
+    function inside(str, k) { var c = str.charCodeAt(k); return c >= 0xDC00 && c <= 0xDFFF || /\p{M}/u.test(str.charAt(k)); }
+    while (p > 0 && (inside(text, p) || inside(other, p))) p--;
     var s = 0;
     while (s < max - p && text[text.length - 1 - s] === other[other.length - 1 - s]) s++;
+    while (s > 0 && (inside(text, text.length - s) || inside(other, other.length - s))) s--;
     if (p === 0 && s === 0) { td.textContent = text; return; }
     td.appendChild(document.createTextNode(text.slice(0, p)));
     if (text.length - s > p) td.appendChild(el("span", cls, text.slice(p, text.length - s)));
     td.appendChild(document.createTextNode(text.slice(text.length - s)));
   }
 
-  // Pair each run of deletions with the following run of additions (for intra-line marks and side by side).
+  // Pair each run of deletions with the following run of additions (for intra-line marks and side by side). A
+  // "\ No newline at end of file" after either run goes with that run (dn, an), so it never splits the pair.
   function blocks(rows) {
     var out = [];
     for (var i = 0; i < rows.length;) {
       if (rows[i].k === "del" || rows[i].k === "add") {
-        var dels = [], adds = [];
+        var dels = [], adds = [], dn = null, an = null;
         while (i < rows.length && rows[i].k === "del") dels.push(rows[i++]);
+        if (dels.length && i < rows.length && rows[i].k === "nonl") dn = rows[i++];
         while (i < rows.length && rows[i].k === "add") adds.push(rows[i++]);
-        out.push({ dels: dels, adds: adds });
+        if (adds.length && i < rows.length && rows[i].k === "nonl") an = rows[i++];
+        out.push({ dels: dels, adds: adds, dn: dn, an: an });
       } else out.push(rows[i++]);
     }
     return out;
@@ -757,8 +765,11 @@ var CD = (function () {
     var box = el("div", "diff"), t = el("table", "d");
     blocks(rows).forEach(function (b) {
       if (b.dels) {
+        function nonl(r) { if (!r) return; var tr = el("tr"), c = td("tx", r.t); c.colSpan = 4; tr.appendChild(c); t.appendChild(tr); }
         b.dels.forEach(function (r, j) { var tr = el("tr", "del"); tr.append(td("ln", r.o), td("ln"), td("sg", "-")); var x = td("tx"); spans(x, r.t, b.adds[j] && b.adds[j].t, "hl-del"); tr.appendChild(x); t.appendChild(tr); });
+        nonl(b.dn);
         b.adds.forEach(function (r, j) { var tr = el("tr", "add"); tr.append(td("ln"), td("ln", r.n), td("sg", "+")); var x = td("tx"); spans(x, r.t, b.dels[j] && b.dels[j].t, "hl-add"); tr.appendChild(x); t.appendChild(tr); });
+        nonl(b.an);
         return;
       }
       var tr = el("tr", b.k === "hunk" || b.k === "meta" ? b.k : "");
@@ -791,6 +802,8 @@ var CD = (function () {
           if (a) spans(y, a.t, d && d.t, "hl-add");
           pair(d ? "del" : "void", [td("ln", d ? d.o : null), x], a ? "add" : "void", [td("ln", a ? a.n : null), y]);
         }
+        // Only a side's last line can lack a newline: its note goes after the run, in that side's pane.
+        if (b.dn || b.an) pair("nonl", [td("tx", b.dn ? b.dn.t : "")], "nonl", [td("tx", b.an ? b.an.t : "")]);
         return;
       }
       if (b.k === "hunk") started = true;
@@ -800,7 +813,8 @@ var CD = (function () {
         pair("hunk", [td("tx", m ? "@@ " + m[1] + " @@" + m[3] : b.t)], "hunk", [td("tx", m ? "@@ " + m[2] + " @@" + m[3] : b.t)]);
         return;
       }
-      if (b.k === "meta" || b.k === "nonl") { pair(b.k, [td("tx", b.t)], b.k, [td("tx", "")]); return; }
+      if (b.k === "nonl") { pair(b.k, [td("tx", b.t)], b.k, [td("tx", b.t)]); return; } // after a context line: both sides
+      if (b.k === "meta") { pair(b.k, [td("tx", b.t)], b.k, [td("tx", "")]); return; }
       pair("", [td("ln", b.o), td("tx", b.t)], "", [td("ln", b.n), td("tx", b.t)]);
     });
     if (ht.rows.length) { head.appendChild(ht); box.appendChild(head); }
@@ -818,10 +832,24 @@ var CD = (function () {
 
   // A merged file with diff3 markers, as segments [startLine, text] (conflict blocks with context; the
   // stretches between are collapsed). Colour the v1 / base / v2 sections; a button steps through conflicts. Blocks
-  // are numbered as resolve --blocks takes them: the ones shown are always the file's first.
+  // are numbered as resolve --blocks takes them: the ones shown are always the file's first. Where each block is
+  // comes from the merger (d.bk: [number, line of <<<<<<< v1, v1's, base's and v2's line counts]), never from
+  // marker text, which the file's own lines can hold too.
   function mergeView(d, head, path) {
-    var box = el("div", "diff"), t = el("table", "d"), zone = "", marks = [], next = 1;
+    var box = el("div", "diff"), t = el("table", "d"), marks = [], next = 1, bk = d.bk || [], bi = 0;
     var segs = d.segs || [[1, d.text || ""]];
+    // Line n's part in a block: "open" (its <<<<<<< v1 line), "mk" (another marker), "v1", "base", "v2", or "".
+    function zone(n) {
+      while (bi < bk.length && n > bk[bi][1] + 3 + bk[bi][2] + bk[bi][3] + bk[bi][4]) bi++;
+      if (bi >= bk.length || n < bk[bi][1]) return "";
+      var r = n - bk[bi][1], v1 = bk[bi][2], b = bk[bi][3];
+      if (r === 0) return "open";
+      if (r <= v1) return "v1";
+      if (r === v1 + 1) return "mk";
+      if (r <= v1 + 1 + b) return "base";
+      if (r === v1 + b + 2) return "mk";
+      return r <= v1 + b + 2 + bk[bi][4] ? "v2" : "mk";
+    }
     function gap(n) {
       var tr = el("tr", "hunk"), c = td("tx", "⋯ " + fmt(n) + " unchanged line(s) ⋯");
       c.colSpan = 2; tr.appendChild(c); t.appendChild(tr);
@@ -831,17 +859,9 @@ var CD = (function () {
       if (lines.length && lines[lines.length - 1] === "") lines.pop();
       if (start > next) gap(start - next);
       lines.forEach(function (l, k) {
-        var tr, mk = true;
         if (l.charAt(l.length - 1) === "\r") l = l.slice(0, -1); // a CRLF file's lines keep their \r
-        if (l.indexOf("<<<<<<< v1") === 0) zone = "v1";
-        else if (l.indexOf("||||||| base") === 0) zone = "base";
-        else if (l === "=======" && zone === "base") zone = "v2";
-        else if (l.indexOf(">>>>>>> v2") === 0) zone = "end";
-        else mk = false;
-        tr = el("tr", mk ? "mk" : zone && zone !== "end" ? zone : "");
-        var cell = td("tx", l);
-        if (mk && zone === "v1") { marks.push(tr); cell.appendChild(el("span", "bn", "   block " + marks.length)); }
-        if (zone === "end") zone = "";
+        var z = zone(start + k), tr = el("tr", z === "open" ? "mk" : z), cell = td("tx", l);
+        if (z === "open") { marks.push(tr); cell.appendChild(el("span", "bn", "   block " + bk[bi][0])); }
         tr.append(td("ln", start + k), cell);
         t.appendChild(tr);
       });

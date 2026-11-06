@@ -182,11 +182,16 @@ public static class ThreeWayViews
     /// (<paramref name="merge"/> = true); for a one-sided or agreed change that side's patch; otherwise both
     /// sides' patches. <paramref name="kind"/> describes which.
     /// </summary>
-    public static string Body(Compare3Session s, Merge3Entry e, out string kind, out bool merge, PatchOptions? options = null)
+    public static string Body(Compare3Session s, Merge3Entry e, out string kind, out bool merge, PatchOptions? options = null) =>
+        Body(s, e, out kind, out merge, out _, options);
+
+    /// <param name="blocks">For a merged file, its conflict blocks where the merger put them; otherwise none.</param>
+    internal static string Body(Compare3Session s, Merge3Entry e, out string kind, out bool merge, out IReadOnlyList<ConflictBlocks.Found> blocks,
+        PatchOptions? options = null)
     {
         var opt = options ?? new PatchOptions();
         merge = false;
-        if (TreeMerger.MergedText(e, s.Base, s.V1, s.V2, opt.Cancellation) is { } merged)
+        if (TreeMerger.MergedText(e, s.Base, s.V1, s.V2, out blocks, opt.Cancellation) is { } merged)
         {
             merge = true;
             kind = e.Outcome == Merge3Outcome.Conflict ? $"merged with {e.ConflictRegions} conflict marker block(s)" : "clean merge result";

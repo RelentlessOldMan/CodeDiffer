@@ -333,7 +333,9 @@ folder and file type. `codediffer resolve <overlay-dir> v1|v2|regenerate|undo <p
 applies it unchanged: `v1` and `regenerate` move a markers file to `set-aside\` and drop a rename's delete, so v1's
 file stays; `v2` does the same, then copies v2's file into `files\` at v2's path (refused if its size or time changed
 since the overlay was written) and lists v1's copy at another path, or one v2 deleted, in `deletes.txt`; `undo` takes
-choices back, exactly. A file copied into the overlay never keeps its tree's read-only flag (a tree checked out
+choices back, exactly, except that a copy of v2's file edited since it was taken is moved to
+`set-aside\hand-merges\<yyyyMMdd-HHmmss-fff>\`, never deleted (listed under `kept:`), and a delete another choice still
+needs stays in `deletes.txt`. A file copied into the overlay never keeps its tree's read-only flag (a tree checked out
 read-only has it on every file), so it can be replaced, set aside and undone. `decisions.json` records each choice, the rule and what it changed. Dry run unless
 `--write`. A pattern is `/`-separated with `*`, `?` and `**`; without a `/` it is a name at any depth, with one (or
 a leading `/`) it is anchored at the top and takes what is under it; a leading `./` is dropped, and a pattern that
@@ -355,7 +357,8 @@ intact. Bytes are kept: a UTF-16 or UTF-32 file is decoded by its byte order mar
 UTF-8 byte order mark kept apart). It is refused for an overlay that doesn't record blocks (written by an older
 CodeDiffer), block numbers aimed at a file already decided or merged, or a block not found intact; `all` leaves a
 decided file alone. `conflicts ... --blocks` (MCP `list_conflicts` `blocks`) shows each block numbered, with
-each side's line count and first lines, and the HTML report numbers the blocks it shows the same way. `originals\` keeps each markers
+each side's line count and first lines, and the HTML report numbers the blocks it shows the same way (from where the merger put each one, so a line of the
+file's own that looks like a marker never shifts the numbers or the colours). `originals\` keeps each markers
 file as written, so `undo` takes a hand merge (or a markers file deleted by hand) back: the original is copied in
 with its recorded time, and the edit moved to `set-aside\hand-merges\<yyyyMMdd-HHmmss-fff>\` first. An overlay
 written without `originals\` refuses that undo. `v2` is refused where v2's file would land on another: one v1 has of its own at that path, another
@@ -365,7 +368,9 @@ or being applied is refused, and a path in its records that isn't a plain path i
 records were edited). While a resolve writes, the overlay holds `RESOLVING.json` (what it is doing), created only
 if there is none and held open, so two resolves never write at once: `apply-overlay` refuses it, and the next
 `resolve --write` finishes one that was stopped, dropping (and reporting) a choice of v2 whose file changed in
-between. Copies are made in `set-aside\` and moved into `files\`, so one stopped part way is never applied. Exit 1
+between (its copy taken out of `files\` and the markers file put back), or one that can't be carried out as things
+are now (a file in the markers file's place), so a stopped resolve is always finished. Copies are made in the
+overlay's `.resolve-tmp\` and moved into `files\`, so one stopped part way is never applied. Exit 1
 when a conflict the rule picked was refused. An overlay from before v1.0.150 has no `conflicts.json`: write it again.
 
 Measured at full scale on CodeSpawner's synthetic `death` corpus (base / v1 / v2, ~70–75k files and ~91–94 GB a
@@ -714,7 +719,7 @@ Every bounded answer says it's bounded (the CodeCompass contract applied to diff
 | 0 | done: nothing conflicts and nothing is missing |
 | 1 | done, with conflicts (`compare3`, `apply`), a file that failed (`apply-overlay`), a conflict refused (`resolve`), a `verify` gate or a `selftest` check failed, or a prune that could not delete everything |
 | 2 | error: a tree or file not found, a refused directory, an unreadable manifest, a failed `--html` / `--merge-out`, a file or directory that could not be read or written where the command can't go on without it (denied, a share lost) |
-| 3 | done but INCOMPLETE: a directory could not be listed or a file could not be read (the warnings say which), or a report written with a diff it could not read or render (listed with why); or a compare stopped because the trees stopped answering for longer than `--share-wait` (what it read is cached: run it again) |
+| 3 | done but INCOMPLETE: a directory could not be listed or a file could not be read (the warnings say which; after a directory not listed, `compare --patch` and `apply` refuse to write a partial change set), or a report written with a diff it could not read or render (listed with why); or a compare stopped because the trees stopped answering for longer than `--share-wait` (what it read is cached: run it again) |
 | 64 | usage: a missing argument, an unknown option, a flag without its value |
 | 130 | stopped by Ctrl+C (a compare, an apply, or a report or merge overlay written part way) |
 

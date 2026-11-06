@@ -97,18 +97,25 @@ internal sealed class ShareGuard
     private readonly Func<bool> _answers;
     private readonly ReadTally _tally;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly CancellationToken _stop;
     private readonly object _gate = new();
-    private readonly string?[] _good = new string?[4]; // files read this run, the newest few: one must still open
-    private int _goodNext;
+    private readonly string?[][] _good;  // by root, files read under it this run, the newest few: one must still open
+    private readonly int[] _goodNext;
+    private Task<bool>? _probing;       // the check of the trees under way: every failed read waits on the one
     private Task? _pause;               // set while paused; completes when the trees answer again
     private ShareUnavailableException? _lost;
     private int _pauses, _retried;
     private long _pausedTicks;
     private (long At, bool Ok)? _lastProbe; // the last check of the trees: its time (clock ticks) and answer
 
-    public ShareGuard(IEnumerable<string> roots, CompareOptions options, CompareProgress? progress, Func<bool>? answers = null)
+    /// <param name="stop">The compare's own stop: a pause ends with it, rather than checking the trees on.</param>
+    public ShareGuard(IEnumerable<string> roots, CompareOptions options, CompareProgress? progress, Func<bool>? answers = null,
+        CancellationToken stop = default)
     {
-        _roots = [.. roots.Select(Path.GetFullPath).Distinct()];
+        _roots = [.. roots.Select(r => Path.TrimEndingDirectorySeparator(Path.GetFullPath(r))).Distinct(StringComparer.OrdinalIgnoreCase)];
+        _good = [.. _roots.Select(_ => new string?[4])];
+        _goodNext = new int[_roots.Length];
+        _stop = stop;
         _maxWait = options.ShareWait;
         _retryDelays = options.RetryDelays ?? [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(4)];
         _probeDelays = options.ProbeDelays ?? DefaultProbeDelays;
@@ -126,15 +133,15 @@ internal sealed class ShareGuard
     /// <summary>Reads that failed and then worked when tried again (after a pause or a retry).</summary>
     public int Retried => Volatile.Read(ref _retried);
 
-    public T Run<T>(string path, Func<T> read, CancellationToken ct)
-        => RunAsync(path, () => Task.FromResult(read()), ct).GetAwaiter().GetResult();
+    public T Run<T>(string path, Func<T> read, CancellationToken ct, string? other = null)
+        => RunAsync(path, () => Task.FromResult(read()), ct, other).GetAwaiter().GetResult();
 
     /// <summary>
-    /// Do <paramref name="read"/> (of <paramref name="path"/>, and anything else it reads), waiting out a pause before
-    /// it and after a failure. Throws the read's own exception when the file alone can't be read, and
-    /// <see cref="ShareUnavailableException"/> when the trees didn't come back in time.
+    /// Do <paramref name="read"/> (of <paramref name="path"/>, and <paramref name="other"/> when it reads a pair),
+    /// waiting out a pause before it and after a failure. Throws the read's own exception when the file alone can't be
+    /// read, and <see cref="ShareUnavailableException"/> when the trees didn't come back in time.
     /// </summary>
-    public async Task<T> RunAsync<T>(string path, Func<Task<T>> read, CancellationToken ct)
+    public async Task<T> RunAsync<T>(string path, Func<Task<T>> read, CancellationToken ct, string? other = null)
     {
         string? failed = null; // the cause of the last failed try
         for (int retry = 0; ; )
@@ -144,6 +151,7 @@ internal sealed class ShareGuard
             {
                 var result = await read().ConfigureAwait(false);
                 Good(path);
+                if (other is not null) Good(other);
                 if (failed is not null)
                 {
                     Interlocked.Increment(ref _retried);
@@ -156,7 +164,7 @@ internal sealed class ShareGuard
                 ct.ThrowIfCancellationRequested();
                 failed = Cause(ex);
                 _tally.Failed(failed);
-                if (!Probe())
+                if (!await Probe().ConfigureAwait(false))
                 {
                     Pause(ex);
                     continue; // a pause doesn't count as a retry: the read starts over once the trees answer
@@ -173,45 +181,78 @@ internal sealed class ShareGuard
         }
     }
 
-    private void Good(string path)
+    /// <summary>The root a path is under (-1: none of them).</summary>
+    private int RootOf(string path)
     {
-        int i = (Interlocked.Increment(ref _goodNext) & int.MaxValue) % _good.Length;
-        Volatile.Write(ref _good[i], path);
+        Span<byte> one = stackalloc byte[1];
+        for (int r = 0; r < _roots.Length; r++)
+            if (path.Length > _roots[r].Length && path.StartsWith(_roots[r], StringComparison.OrdinalIgnoreCase)
+                && (path[_roots[r].Length] is '\\' or '/' || Path.EndsInDirectorySeparator(_roots[r])))
+                return r;
+        return -1;
     }
 
-    /// <summary>Do the trees answer? One check a second at most, however many reads fail at once.</summary>
-    private bool Probe()
+    private void Good(string path)
     {
+        int r = RootOf(path);
+        if (r < 0) return;
+        int i = (Interlocked.Increment(ref _goodNext[r]) & int.MaxValue) % _good[r].Length;
+        Volatile.Write(ref _good[r][i], path);
+    }
+
+    /// <summary>Do the trees answer? One check a second at most, however many reads fail at once: they all wait on the
+    /// one check under way, outside the lock, so a check that hangs on a quiet share holds up no other read.</summary>
+    private async Task<bool> Probe()
+    {
+        Task<bool> probe;
         lock (_gate)
         {
             if (_pause is not null) return false;
             if (_lastProbe is { } last && _clock.ElapsedTicks - last.At < Stopwatch.Frequency) return last.Ok;
-            bool ok = _answers();
-            _lastProbe = (_clock.ElapsedTicks, ok);
-            return ok;
+            probe = _probing ??= Task.Run(() =>
+            {
+                bool ok = false;
+                try { ok = _answers(); }
+                finally
+                {
+                    lock (_gate)
+                    {
+                        _lastProbe = (_clock.ElapsedTicks, ok);
+                        _probing = null;
+                    }
+                }
+                return ok;
+            });
         }
+        return await probe.ConfigureAwait(false);
     }
 
-    /// <summary>Each root still lists as a directory, and a file read earlier in the run still opens and reads.</summary>
+    /// <summary>Each root still lists as a directory, and under each, a file read earlier in the run still opens and
+    /// reads (or is answered for: gone is the server's answer, not its silence). A root with no file read yet passes on
+    /// its listing alone.</summary>
     private bool Answers()
     {
-        foreach (var root in _roots)
-            if (!Directory.Exists(root)) return false;
-        bool any = false;
-        for (int i = 0; i < _good.Length; i++)
+        Span<byte> one = stackalloc byte[1];
+        for (int r = 0; r < _roots.Length; r++)
         {
-            if (Volatile.Read(ref _good[i]) is not { } path) continue;
-            any = true;
-            try
+            if (!Directory.Exists(_roots[r])) return false;
+            bool any = false, ok = false;
+            for (int i = 0; i < _good[r].Length && !ok; i++)
             {
-                using var h = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                Span<byte> one = stackalloc byte[1];
-                RandomAccess.Read(h, one, 0);
-                return true;
+                if (Volatile.Read(ref _good[r][i]) is not { } path) continue;
+                any = true;
+                try
+                {
+                    using var h = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    RandomAccess.Read(h, one, 0);
+                    ok = true;
+                }
+                catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { ok = true; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            if (any && !ok) return false;
         }
-        return !any;
+        return true;
     }
 
     private void Pause(Exception ex)
@@ -248,7 +289,15 @@ internal sealed class ShareGuard
             }
             var delay = _probeDelays[Math.Min(i, _probeDelays.Count - 1)];
             if (delay > _maxWait - waited) delay = _maxWait - waited;
-            await Task.Delay(delay).ConfigureAwait(false);
+            try { await Task.Delay(delay, _stop).ConfigureAwait(false); }
+            catch (OperationCanceledException)
+            {
+                // The compare was stopped: its reads end with it, so the trees are checked no more.
+                var took = _clock.Elapsed - since;
+                Interlocked.Add(ref _pausedTicks, took.Ticks);
+                _tally.PauseEnded(Math.Round(took.TotalSeconds, 1), resumed: false);
+                return;
+            }
             if (_answers())
             {
                 var took = _clock.Elapsed - since;

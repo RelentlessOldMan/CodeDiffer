@@ -309,6 +309,29 @@ public sealed class MergeOverlayTests : IDisposable
     }
 
     [Fact]
+    public void ApplyOverlay_RenamesAFolderByCaseOnly_AndNeverCopiesALeftoverTempFile()
+    {
+        foreach (var d in new[] { "B", "V1", "V2" }) Put($"{d}/Dir/x.c", "in a folder\n");
+        Directory.Move(Path.Combine(_v2, "Dir"), Path.Combine(_v2, "Dir.tmp")); // two steps, as above
+        Directory.Move(Path.Combine(_v2, "Dir.tmp"), Path.Combine(_v2, "dir"));
+        var outDir = Overlay();
+        // A write or resolve stopped between its temp file and the move.
+        File.WriteAllText(Path.Combine(outDir, "files", "both.c.1234abcd" + OverlayApplier.TempSuffix), "half\n");
+        var t = CopyOfV1();
+
+        var r = OverlayApplier.Run(outDir, t, write: true, withMarkers: true);
+        Assert.Empty(r.Failed);
+        var tree = Tree(t);
+        Assert.Contains("dir/x.c", tree.Keys);
+        Assert.DoesNotContain("Dir/x.c", tree.Keys);
+        Assert.DoesNotContain(tree.Keys, k => k.EndsWith(OverlayApplier.TempSuffix));
+
+        var rerun = OverlayApplier.Run(outDir, t, write: true, withMarkers: true, again: true);
+        Assert.Equal((0, 0), (rerun.Deleted, rerun.Copied));
+        Assert.Equal(tree, Tree(t));
+    }
+
+    [Fact]
     public void ApplyOverlay_NeverWritesOverOrDeletes_AFileNamedLikeItsTempFile()
     {
         Put("V2/many/m00.c", "new 0\n");

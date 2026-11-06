@@ -144,7 +144,7 @@ public static class HtmlReport
                     Interlocked.Increment(ref large);
                     return;
                 }
-                var (text, mode, warn) = item.Render!();
+                var (text, mode, warn, blocks) = item.Render!();
                 int total = LineCount(text);
                 if (warn is not null) row["w"] = warn;
                 var chunk = new Dictionary<string, object?> { ["mode"] = mode, ["total"] = total };
@@ -152,11 +152,14 @@ public static class HtmlReport
                 {
                     // A merged file can be 70k lines with the conflicts anywhere: carry the conflict blocks with
                     // context, not the head of the file. The whole file is written only if blocks don't fit.
-                    var c = Condense(text.Split('\n'), total, opt.Context, opt.MaxLines);
+                    var c = Condense(text.Split('\n'), total, blocks ?? [], opt.Context, opt.MaxLines);
                     chunk["segs"] = c.Segments.Select(s => new object[] { s.Start, s.Text }).ToList();
                     chunk["shown"] = c.Kept;
                     chunk["blocks"] = c.Blocks;
                     chunk["shownBlocks"] = c.ShownBlocks;
+                    // Each block shown, where the merger put it: [number, 1-based line of its <<<<<<< v1 marker, v1's,
+                    // base's and v2's line counts]. The page numbers and colours blocks by this, never by marker text.
+                    chunk["bk"] = c.Shown.Select(b => new[] { b.Number, b.At + 1, b.Block.V1, b.Block.Base, b.Block.V2 }).ToList();
                     if (c.Cut)
                     {
                         chunk["full"] = $"full/{i}.txt";
@@ -277,7 +280,9 @@ public static class HtmlReport
         return head;
     }
 
-    private sealed record Item(Row Row, bool Wants, bool Large, Func<(string Text, string Mode, string? Warn)>? Render);
+    /// <param name="Render">The text, how to show it, a warning, and for a merged file its conflict blocks as the merger placed them.</param>
+    private sealed record Item(Row Row, bool Wants, bool Large,
+        Func<(string Text, string Mode, string? Warn, IReadOnlyList<ConflictBlocks.Found>? Blocks)>? Render);
 
     private static List<Item> Items2(CompareSession s, HtmlReportOptions opt, CancellationToken ct)
     {
@@ -316,7 +321,7 @@ public static class HtmlReport
                 row["k"] = info.Kind;
                 if (info.Kind == "text") { row["a"] = info.AddedLines; row["x"] = info.RemovedLines; row["h"] = info.Hunks; }
                 if (info.Coarse) row["co"] = 1; // its counts are of one replace wider than the change
-                return (text, "patch", AgentViews.Stale(s, c));
+                return (text, "patch", AgentViews.Stale(s, c), null);
             }));
         }
         return list;
@@ -353,48 +358,45 @@ public static class HtmlReport
                 if (e.Outcome == Merge3Outcome.Merged && TreeMerger.MergeDiff(e, s.Base, s.V1, s.V2, ct: ct) is { } diff)
                 {
                     row["k"] = "base → clean merge result";
-                    return (diff, "patch", ThreeWayViews.Stale(s, e));
+                    return (diff, "patch", ThreeWayViews.Stale(s, e), null);
                 }
-                var text = ThreeWayViews.Body(s, e, out var kind, out var merge, new PatchOptions { Cancellation = ct });
+                var text = ThreeWayViews.Body(s, e, out var kind, out var merge, out var blocks, new PatchOptions { Cancellation = ct });
                 row["k"] = kind;
-                return (text, merge ? "merge" : "patch", ThreeWayViews.Stale(s, e));
+                return (text, merge ? "merge" : "patch", ThreeWayViews.Stale(s, e), blocks);
             }));
         }
         return list;
     }
 
     /// <param name="Cut">Something was left out (blocks, the head of a too-big block, long lines' tails): link the whole file.</param>
-    internal sealed record Condensed(List<(int Start, string Text)> Segments, int Kept, int Blocks, int ShownBlocks, bool Cut);
+    /// <param name="Shown">The blocks shown, where the merger put them.</param>
+    internal sealed record Condensed(List<(int Start, string Text)> Segments, int Kept, int Blocks, int ShownBlocks, bool Cut,
+        IReadOnlyList<ConflictBlocks.Found> Shown);
 
     /// <summary>
-    /// The conflict blocks of a merged file (<c>&lt;&lt;&lt;&lt;&lt;&lt;&lt; v1</c> … <c>&gt;&gt;&gt;&gt;&gt;&gt;&gt; v2</c>) with
-    /// <paramref name="context"/> lines around each, overlapping ranges joined, in file order until
-    /// <paramref name="maxLines"/> lines or <paramref name="maxChars"/> are kept. Blocks are kept whole, except a first
-    /// block that alone is over the cap: its head is shown. Segment starts are 1-based line numbers.
+    /// The conflict blocks of a merged file, where the merger put them (<paramref name="blocks"/>: never found by marker
+    /// text, which the file's own lines can hold too), with <paramref name="context"/> lines around each, overlapping
+    /// ranges joined, in file order until <paramref name="maxLines"/> lines or <paramref name="maxChars"/> are kept.
+    /// Blocks are kept whole, except a first block that alone is over the cap: its head is shown. Context never runs
+    /// into a block left out. Segment starts are 1-based line numbers.
     /// </summary>
-    internal static Condensed Condense(string[] lines, int total, int context, int maxLines, int maxChars = MaxChunkChars)
+    internal static Condensed Condense(string[] lines, int total, IReadOnlyList<ConflictBlocks.Found> blocks, int context, int maxLines,
+        int maxChars = MaxChunkChars)
     {
-        var blocks = new List<(int From, int To)>();
-        for (int i = 0; i < total; i++)
-        {
-            if (!lines[i].StartsWith("<<<<<<< v1", StringComparison.Ordinal)) continue;
-            int end = i;
-            while (end < total - 1 && !lines[end].StartsWith(">>>>>>> v2", StringComparison.Ordinal)) end++;
-            blocks.Add((i, end));
-            i = end;
-        }
-        if (blocks.Count == 0) // no markers: the file itself, capped (and the whole file linked when it is)
+        if (blocks.Count == 0) // no conflicts: the file itself, capped (and the whole file linked when it is)
         {
             int end = AgentViews.WindowEnd(lines, total, 1, maxLines, maxChars);
-            return new([(1, Window(lines, 1, end))], end, 0, 0, !AgentViews.Fits(lines, total, maxLines, maxChars));
+            return new([(1, Window(lines, 1, end))], end, 0, 0, !AgentViews.Fits(lines, total, maxLines, maxChars), []);
         }
 
         var ranges = new List<(int From, int To)>();
         int kept = 0, shown = 0;
         long chars = 0;
         bool cut = false;
-        foreach (var (from, to) in blocks)
+        foreach (var f in blocks)
         {
+            // A block is its <<<<<<< v1 line, v1's lines, the base marker, base's lines, =======, v2's lines, >>>>>>> v2.
+            int from = Math.Min(f.At, total - 1), to = Math.Min(f.At + 3 + f.Block.V1 + f.Block.Base + f.Block.V2, total - 1);
             int a = Math.Max(0, from - context), b = Math.Min(total - 1, to + context);
             bool joins = ranges.Count > 0 && a <= ranges[^1].To + 1;
             int first = joins ? ranges[^1].To + 1 : a;
@@ -407,7 +409,6 @@ public static class HtmlReport
                 // One block alone is over the cap: show its head (the whole file is linked), never all of it.
                 int end = AgentViews.WindowEnd(lines, total, a + 1, maxLines, maxChars); // 1-based, inclusive
                 ranges.Add((a, end - 1));
-                kept = end - a;
                 shown = 1;
                 cut = true;
                 break;
@@ -418,9 +419,13 @@ public static class HtmlReport
             chars += addChars;
             shown++;
         }
+        // The context after the last block shown stops before the next one: a block left out is never half shown.
+        if (shown < blocks.Count && ranges[^1].To >= blocks[shown].At)
+            ranges[^1] = (ranges[^1].From, Math.Max(ranges[^1].From, blocks[shown].At - 1));
+        kept = ranges.Sum(r => r.To - r.From + 1);
         var segs = ranges.Select(r => (r.From + 1, Window(lines, r.From + 1, r.To + 1))).ToList();
         cut |= shown < blocks.Count || ranges.Any(r => Enumerable.Range(r.From, r.To - r.From + 1).Any(k => lines[k].Length > AgentViews.MaxLineChars));
-        return new(segs, kept, blocks.Count, shown, cut);
+        return new(segs, kept, blocks.Count, shown, cut, [.. blocks.Take(shown)]);
     }
 
     private static string Window(string[] lines, int startLine, int end)

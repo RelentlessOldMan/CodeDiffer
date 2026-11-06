@@ -57,6 +57,16 @@ public class ResultStoreTests : IDisposable
     }
 
     [Fact]
+    public void AChangeListCutShort_NeverReopensAsAFinishedCompareWithFewerChanges()
+    {
+        var s = Done(new SessionStore(resultsRoot: Results).Start(L, R, NoCache));
+        var changes = Path.Combine(s.ResultDir!, "changes.jsonl");
+        File.WriteAllLines(changes, File.ReadAllLines(changes).Where(l => !l.Contains("src/f3.c")));
+        var ex = Assert.Throws<InvalidDataException>(() => ResultStore.Load(s.ResultDir!));
+        Assert.Contains("incomplete or corrupt", ex.Message);
+    }
+
+    [Fact]
     public void FinishedCompare_IsSaved_AndReopensByIdWithoutRecomparing()
     {
         var s = Done(new SessionStore(resultsRoot: Results).Start(L, R, NoCache));
@@ -448,12 +458,12 @@ public class ResultStoreTests : IDisposable
             lines.AddRange(["<<<<<<< v1 (x:1)", "a", "||||||| base (x:1)", "b", "=======", "c", ">>>>>>> v2 (x:1)"]);
         }
         var arr = lines.Append("").ToArray();
-        var all = HtmlReport.Condense(arr, lines.Count, 3, 1000);
+        var all = HtmlReport.Condense(arr, lines.Count, Placed(arr), 3, 1000);
         Assert.Equal((5, 5), (all.Blocks, all.ShownBlocks));
         Assert.Equal(5, all.Segments.Count);
         Assert.Equal(98, all.Segments[0].Start);   // 1-based: block at line 101, 3 lines of context
         Assert.Equal(4 * 13 + 10, all.Kept);       // the last block ends the file: no trailing context
-        var cut = HtmlReport.Condense(arr, lines.Count, 3, 30);
+        var cut = HtmlReport.Condense(arr, lines.Count, Placed(arr), 3, 30);
         Assert.Equal(2, cut.ShownBlocks);          // 13 + 13 fits in 30, a third block would not
         Assert.True(cut.Cut);
         Assert.False(all.Cut);
@@ -465,22 +475,82 @@ public class ResultStoreTests : IDisposable
         // One conflict block of 5,000 lines: it used to be shown whole, whatever the cap.
         var huge = new[] { "<<<<<<< v1" }.Concat(Enumerable.Range(0, 5000).Select(i => $"v1 {i}"))
             .Concat(["||||||| base", "b", "=======", "c", ">>>>>>> v2"]).Append("").ToArray();
-        var c = HtmlReport.Condense(huge, huge.Length - 1, 3, 100);
+        var c = HtmlReport.Condense(huge, huge.Length - 1, Placed(huge), 3, 100);
         Assert.True(c.Cut);
         Assert.Equal(100, c.Kept);
         Assert.Equal(100, c.Segments.Single().Text.Count(ch => ch == '\n'));
 
         // No markers: the head, and Cut so the whole file is linked (it used to be cut without a link).
         var plain = Enumerable.Range(0, 500).Select(i => $"line {i}").Append("").ToArray();
-        var p = HtmlReport.Condense(plain, 500, 3, 100);
+        var p = HtmlReport.Condense(plain, 500, [], 3, 100);
         Assert.Equal((100, true), (p.Kept, p.Cut));
 
         // By characters too: a few minified lines are cut per line, and that is a cut as well.
         var wide = new[] { "<<<<<<< v1", new string('x', 50_000), "||||||| base", "b", "=======", "c", ">>>>>>> v2", "" };
-        var w = HtmlReport.Condense(wide, wide.Length - 1, 3, 1000);
+        var w = HtmlReport.Condense(wide, wide.Length - 1, Placed(wide), 3, 1000);
         Assert.True(w.Cut);
         Assert.Contains("[line cut: 50,000 characters", w.Segments.Single().Text);
         Assert.True(w.Segments.Single().Text.Length < 3000);
+    }
+
+    /// <summary>Where a test's own blocks are, as the merger would record them (its lines hold no marker-like text).</summary>
+    private static List<ConflictBlocks.Found> Placed(string[] lines)
+    {
+        var found = new List<ConflictBlocks.Found>();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (!lines[i].StartsWith("<<<<<<< v1", StringComparison.Ordinal)) continue;
+            int b = Array.FindIndex(lines, i, l => l.StartsWith("||||||| base", StringComparison.Ordinal));
+            int m = Array.IndexOf(lines, "=======", b);
+            int e = Array.FindIndex(lines, m, l => l.StartsWith(">>>>>>> v2", StringComparison.Ordinal));
+            found.Add(new(found.Count + 1, i, new ConflictBlock(b - i - 1, m - b - 1, e - m - 1, 0)));
+            i = e;
+        }
+        return found;
+    }
+
+    [Fact]
+    public void Condense_ContextAfterTheLastBlockShown_StopsBeforeTheNextBlock()
+    {
+        // Block 1 at line 20, two plain lines, block 2 at line 29: block 1's context runs into block 2's marker.
+        var lines = Enumerable.Range(0, 20).Select(i => $"plain {i}")
+            .Concat(["<<<<<<< v1 (x:1)", "a", "||||||| base (x:1)", "b", "=======", "c", ">>>>>>> v2 (x:1)", "gap 1", "gap 2"])
+            .Concat(["<<<<<<< v1 (x:9)", "a", "||||||| base (x:9)", "b", "=======", "c", ">>>>>>> v2 (x:9)"])
+            .Concat(Enumerable.Range(0, 20).Select(i => $"after {i}")).Append("").ToArray();
+        var c = HtmlReport.Condense(lines, lines.Length - 1, Placed(lines), 3, 13);
+        Assert.Equal((2, 1, true), (c.Blocks, c.ShownBlocks, c.Cut));
+        var seg = Assert.Single(c.Segments);
+        Assert.Equal(18, seg.Start);
+        Assert.Equal(12, c.Kept);                  // 3 before, the block's 7, the 2 between: not block 2's first line
+        Assert.EndsWith("gap 2\n", seg.Text);
+        Assert.DoesNotContain("x:9", seg.Text);
+        Assert.Equal(1, c.Shown.Single().Number);
+    }
+
+    [Fact]
+    public void HtmlReport_NumbersBlocksByWhereTheMergerPutThem_NotByMarkerLikeText()
+    {
+        // The file's own unchanged lines look like markers; the two real conflicts are at base lines 20 and 50.
+        var b = Lines(1, 60, "t").Replace("t 5\n", "<<<<<<< v1 (looks like one)\n").Replace("t 6\n", ">>>>>>> v2 (so does this)\n")
+            .Replace("t 22\n", "<<<<<<< v1 (inside the context)\n");
+        Put("L/src/trap.c", b);
+        Put("R/src/trap.c", b.Replace("t 20\n", "one 20\n").Replace("t 50\n", "one 50\n"));
+        MakeV2("src/trap.c", b.Replace("t 20\n", "two 20\n").Replace("t 50\n", "two 50\n"));
+        var s = Done(new SessionStore(resultsRoot: Results).Start3(L, R, Path.Combine(_dir, "V2"), NoCache));
+        var r = HtmlReport.Write(s);
+        var root = Path.GetDirectoryName(r.IndexPath)!;
+        var (_, files) = HtmlReport.ReadIndex(Path.Combine(root, "data", "index.js"));
+        int cf = files.FindIndex(f => f.GetProperty("p").GetString() == "src/trap.c");
+        var chunk = Data(Path.Combine(root, "data", "d", $"{cf}.js"), $"CD.diff({cf},");
+        Assert.Equal("merge", chunk.GetProperty("mode").GetString());
+        Assert.Equal((2, 2), (chunk.GetProperty("blocks").GetInt32(), chunk.GetProperty("shownBlocks").GetInt32()));
+        // 19 base lines, block 1 (7 lines) at line 20; base lines 21..49 (29 lines), then block 2 at line 56.
+        var bk = chunk.GetProperty("bk").EnumerateArray().Select(x => x.EnumerateArray().Select(v => v.GetInt32()).ToArray()).ToList();
+        Assert.Equal([[1, 20, 1, 1, 1], [2, 56, 1, 1, 1]], bk);
+        var seg = chunk.GetProperty("segs")[0];
+        Assert.Equal(17, seg[0].GetInt32());
+        Assert.StartsWith("t 17\nt 18\nt 19\n<<<<<<< v1 (src/trap.c:20)\none 20\n", seg[1].GetString());
+        Assert.Contains(">>>>>>> v2 (src/trap.c:20)\nt 21\n<<<<<<< v1 (inside the context)\nt 23\n", seg[1].GetString());
     }
 
     /// <summary>Parse a data file's JSON payload: <c>{prefix}{json});</c>.</summary>

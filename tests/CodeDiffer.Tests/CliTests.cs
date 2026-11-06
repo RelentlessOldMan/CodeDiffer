@@ -248,6 +248,22 @@ public sealed class CliTests : IDisposable
     }
 
     [Fact]
+    public void AFlagGivenTwice_OrWhereATreeBelongs_IsAUsageError()
+    {
+        _t.Dir("L");
+        _t.Dir("R");
+        var r = Cli("compare", "L", "R", "--threads", "2", "--threads", "4");
+        Assert.Equal(64, r.ExitCode);
+        Assert.Contains("--threads given twice", r.Stderr);
+        r = Cli("compare", "L", "--no-cache");
+        Assert.Equal(64, r.ExitCode);
+        Assert.Contains("--no-cache where an argument belongs", r.Stderr);
+        r = Cli("conflicts", "L", "--max", "5");
+        Assert.Equal(64, r.ExitCode);
+        Assert.Contains("--max goes with --list or --blocks", r.Stderr);
+    }
+
+    [Fact]
     public void ValuedFlag_MissingItsValue_SaysSo()
     {
         _t.Dir("L");

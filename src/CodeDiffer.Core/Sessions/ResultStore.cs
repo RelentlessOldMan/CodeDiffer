@@ -489,7 +489,7 @@ public static class ResultStore
             return Str(m, "kind") switch
             {
                 "compare" => new CompareSession(id, PathOf(roots, "left"), PathOf(roots, "right"), options,
-                    ReadReport(Path.Combine(dir, "changes.jsonl"), m.GetProperty("report")), dir, Started(m), Elapsed(m), reopened: true),
+                    Whole(ReadReport(Path.Combine(dir, "changes.jsonl"), m.GetProperty("report")), m, dir), dir, Started(m), Elapsed(m), reopened: true),
                 "compare3" => new Compare3Session(id, PathOf(roots, "base"), PathOf(roots, "v1"), PathOf(roots, "v2"), options,
                     ReadThreeWay(dir, m), dir, Started(m), Elapsed(m)),
                 var k => throw new InvalidDataException($"unknown compare kind '{k}' in {dir}"),
@@ -524,7 +524,12 @@ public static class ResultStore
     {
         try
         {
-            using (fs) write(fs);
+            using (fs)
+            {
+                write(fs);
+                // On the disk before the rename: a power cut never leaves a "done" result over a change list it lost.
+                fs.Flush(flushToDisk: true);
+            }
             File.Move(tmp, path, overwrite: true);
         }
         catch
@@ -691,6 +696,18 @@ public static class ResultStore
         => e.TryGetProperty("timings", out var t)
             ? t.EnumerateArray().Select(x => (Str(x, "phase"), TimeSpan.FromSeconds(x.GetProperty("seconds").GetDouble()))).ToList()
             : [];
+
+    /// <summary>The change list read back holds what compare.json counted when it was saved: a list cut short (lost to a
+    /// power cut, truncated by hand) never reopens as a finished compare with fewer changes.</summary>
+    private static CompareReport Whole(CompareReport r, JsonElement meta, string dir)
+    {
+        if (!meta.TryGetProperty("counts", out var counts)) return r;
+        foreach (var st in Enum.GetValues<ChangeStatus>())
+            if (counts.TryGetProperty(Token(st), out var n) && n.GetInt32() != r.Count(st))
+                throw new InvalidDataException($"result {dir} is incomplete or corrupt: changes.jsonl holds {r.Count(st):N0} " +
+                                               $"{Token(st)} file(s), compare.json counted {n.GetInt32():N0}");
+        return r;
+    }
 
     private static CompareReport ReadReport(string changesFile, JsonElement stats)
         => new(ReadLines(changesFile, ReadChange),
