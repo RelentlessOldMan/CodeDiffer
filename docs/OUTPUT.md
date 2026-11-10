@@ -347,8 +347,9 @@ labelled marker lines left it counts as decided ("merged by hand", listed as suc
 some left it is "being merged by hand", undecided, and a rule picking it is refused. `resolve ... --blocks N[,N-M...]|all`
 (MCP `resolve_conflicts` `blocks`) settles conflict blocks instead, with `v1`, `v2` or `both` (v1's lines, then
 v2's): each markers file picked is written again in `files\` with those blocks replaced, the cleanly merged lines
-around them kept, so it reads as being merged by hand, or merged once no block is left, and `undo` takes it back like
-any hand merge. `conflicts.json` records each markers file's blocks as `[v1 lines, base lines, v2 lines, open]` (open:
+around them kept. Its size and time are kept in `blocks.json`, so it reads as "being settled by blocks", or "settled by
+blocks" (decided) once no block is left; edited by hand after that, it reads as a hand merge again. `undo` takes it back
+like any hand merge ("block choices undone") and drops it from `blocks.json`. `conflicts.json` records each markers file's blocks as `[v1 lines, base lines, v2 lines, open]` (open:
 bits 1, 2, 4 for a section whose last line had no line ending, so the marker after it got one added, which a choice
 takes off again). A block is found where those counts put its exact marker lines, so text with an `=======` line of
 its own is never cut there, and one with any line edited by hand is never touched. Blocks are numbered from 1 in the

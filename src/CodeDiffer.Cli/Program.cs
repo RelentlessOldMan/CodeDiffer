@@ -1438,8 +1438,8 @@ static void PrintUsage()
                                        replaced by v1's lines, v2's, or both (v1's then
                                        v2's). Numbers are one file's (conflicts --blocks);
                                        all takes every block left of each file picked. The
-                                       file then reads as merged by hand (once no block is
-                                       left); undo puts it back as written.
+                                       file then reads as settled by blocks (merged once no
+                                       block is left); undo puts it back as written.
           codediffer blockdiff <a> <b>         content-defined block diff of two large files
                                                (bounded memory; reports changed byte ranges)
           codediffer verify <delta.json> [--base <dir> --variant <dir>]

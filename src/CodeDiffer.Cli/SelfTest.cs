@@ -723,7 +723,7 @@ internal static class SelfTest
                 var s = OverlayConflicts.Load(copy);
                 int markers = OverlayConflicts.MarkerBlocks(file);
                 Expect(area, $"resolve {side} --blocks all settles every block",
-                    w.Exit == 0 && s.HandMerged(c) && markers == 0 && got == expect,
+                    w.Exit == 0 && s.HandMerged(c) && s.ByBlocks.Contains(c.Path) && markers == 0 && got == expect,
                     $"exit {w.Exit} · {blocks.Count:N0} block(s) · {got:N0} line(s), {expect:N0} expected from the recorded counts · {markers} marker block(s) left");
                 var u = Run($"resolve undo after --blocks {side}", cli, "resolve", copy, "undo", "/" + c.Path, "--write");
                 var back = Changed();

@@ -8,7 +8,7 @@ namespace CodeDiffer.Tests;
 
 /// <summary>
 /// Conflict blocks settled one at a time: <c>resolve ... --blocks</c> replaces the blocks picked in a markers file with
-/// v1's lines, v2's, or both, keeping the cleanly merged lines around them, so the file reads as merged by hand once no
+/// v1's lines, v2's, or both, keeping the cleanly merged lines around them, so the file reads as settled by blocks once no
 /// block is left; a block is found by the line counts the overlay recorded, never by a bare <c>=======</c>.
 /// </summary>
 public sealed class ConflictBlocksTests : IDisposable
@@ -110,7 +110,7 @@ public sealed class ConflictBlocksTests : IDisposable
         var r = Blocks(o, "v2", "/multi.c", "2");
         Assert.Equal(1, Assert.Single(r.Blocks!).Left);
         var s = OverlayConflicts.Load(o);
-        Assert.Equal(1, s.Edited["multi.c"]);                                    // being merged by hand
+        Assert.Equal(1, s.Edited["multi.c"]);                                    // being settled by blocks
         var view = ConflictBlocks.View(s, ["/multi.c"], []);
         Assert.Contains("3 block(s) · 1 as written", view);
         Assert.Contains("block 1: settled or edited by hand", view);
@@ -128,7 +128,46 @@ public sealed class ConflictBlocksTests : IDisposable
         s = OverlayConflicts.Load(o);
         Assert.True(s.HandMerged(s.All.Single(c => c.Path == "multi.c")));
         Assert.Equal(1, Blocks(o, "v1", "/multi.c", "all").AlreadyDecided);     // merged now: left alone
-        Assert.Contains("merged by hand already", Assert.Single(Blocks(o, "v1", "/multi.c", "1").Refused).Why); // numbers: said
+        Assert.Contains("settled by blocks already", Assert.Single(Blocks(o, "v1", "/multi.c", "1").Refused).Why); // numbers: said
+    }
+
+    [Fact]
+    public void AFileSettledByBlocks_IsCalledSo_UntilItIsEditedByHand()
+    {
+        var o = Overlay();
+        Blocks(o, "v1", "/multi.c", "1");
+        var s = OverlayConflicts.Load(o);
+        var c = s.All.Single(x => x.Path == "multi.c");
+        Assert.Contains("multi.c", s.ByBlocks);
+        var text = s.Text(["/multi.c"], [], list: true);
+        Assert.Contains("1 being settled by blocks, with 2 conflict block(s) still in them", text);
+        Assert.Contains("(being settled by blocks: 2 block(s) left)", text);
+        Assert.DoesNotContain("merged by hand", text);
+        Assert.Contains("being settled by blocks (2 conflict block(s) left)",
+            Assert.Single(ConflictResolver.Run(o, "v1", ["/multi.c"], [], false).Refused).Why); // whole: refused, worded so
+
+        Blocks(o, "both", "/multi.c", "all");
+        s = OverlayConflicts.Load(o);
+        Assert.True(s.HandMerged(c));
+        text = s.Text(["/multi.c"], [], list: true);
+        Assert.Contains("1 settled by blocks", text);
+        Assert.Contains("(by blocks: files\\multi.c)", text);
+
+        var undo = ConflictResolver.Run(o, "undo", ["/multi.c"], [], true);
+        Assert.True(Assert.Single(undo.Restored).ByBlocks);
+        Assert.Contains("block choices undone multi.c  (markers put back · the file as settled kept in", ConflictResolver.Text(undo));
+        Assert.False(File.Exists(Path.Combine(o, OverlayConflicts.BlocksName))); // nothing settled by blocks now
+
+        // Settled by blocks, then edited by hand: a hand merge, and a block settled after that keeps it one.
+        Blocks(o, "v1", "/multi.c", "1");
+        var m = Markers(o, "multi.c");
+        File.WriteAllText(m, File.ReadAllText(m).Replace("v1 three\n", "v1 three, by hand\n"));
+        s = OverlayConflicts.Load(o);
+        Assert.Empty(s.ByBlocks);
+        Assert.Contains("(being merged by hand: 2 block(s) left)", s.Text(["/multi.c"], [], list: true));
+        Blocks(o, "v2", "/multi.c", "2");
+        Assert.Empty(OverlayConflicts.Load(o).ByBlocks);
+        Assert.Contains("hand edit undone", ConflictResolver.Text(ConflictResolver.Run(o, "undo", ["/multi.c"], [], true)));
     }
 
     [Fact]

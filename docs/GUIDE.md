@@ -145,8 +145,9 @@ codediffer resolve D:\merge both /src/shipping.py --blocks 2 --write   # v1's li
 codediffer resolve D:\merge v2 --kind content --blocks all --write    # every block left, in every file picked
 ```
 
-- Each block picked is replaced by that side's lines, so the file reads as merged by hand once no block is left, and
-  `undo` puts it back as written. A block keeps its number while the others are settled.
+- Each block picked is replaced by that side's lines, so the file reads as settled by blocks (merged once no block is
+  left), and `undo` puts it back as written. A block keeps its number while the others are settled. Edit the file by
+  hand after that and it reads as merged by hand.
 - Block numbers belong to one file, so the pattern must pick one file. `all` takes every block still left in each
   file picked.
 - A block is found by the line counts the overlay recorded for it, so a line of the text that looks like a marker (an
