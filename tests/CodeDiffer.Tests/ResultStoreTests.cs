@@ -66,6 +66,24 @@ public class ResultStoreTests : IDisposable
         Assert.Contains("incomplete or corrupt", ex.Message);
     }
 
+    [Theory]
+    [InlineData("entries.jsonl")]
+    [InlineData("v1.jsonl")]
+    [InlineData("v2.jsonl")]
+    public void AThreeWayListCutShort_NeverReopensAsAFinishedMerge(string list)
+    {
+        MakeV2("src/f0.c", Lines(1, 30, "f0").Replace("f0 20\n", "v2 edit\n"));
+        var s = Done(new SessionStore(resultsRoot: Results).Start3(L, R, Path.Combine(_dir, "V2"), NoCache));
+        ResultStore.Load(s.ResultDir!); // whole: reopens
+        var file = Path.Combine(s.ResultDir!, list);
+        var lines = File.ReadAllLines(file);
+        Assert.NotEmpty(lines);
+        File.WriteAllLines(file, lines[..^1]);
+        var ex = Assert.Throws<InvalidDataException>(() => ResultStore.Load(s.ResultDir!));
+        Assert.Contains("incomplete or corrupt", ex.Message);
+        Assert.Contains(list, ex.Message);
+    }
+
     [Fact]
     public void FinishedCompare_IsSaved_AndReopensByIdWithoutRecomparing()
     {
@@ -190,7 +208,7 @@ public class ResultStoreTests : IDisposable
     [Fact]
     public void UnfinishedResult_IsReportedNotLoaded()
     {
-        var dir = ResultStore.CreateRunDir(Results, "beef", "compare", [L, R]); // this process is "running" it
+        var dir = ResultStore.CreateRunDir(Results, "beef", "compare", [L, R])!; // this process is "running" it
         var ex = Assert.Throws<InvalidDataException>(() => new SessionStore(resultsRoot: Results).Get("beef"));
         Assert.Contains("still running", ex.Message);
         Assert.Equal("running", Assert.Single(ResultStore.List(Results)).State);
@@ -560,5 +578,41 @@ public class ResultStoreTests : IDisposable
         Assert.StartsWith(prefix, text);
         Assert.EndsWith(");", text);
         return JsonDocument.Parse(text[prefix.Length..^2]).RootElement.Clone();
+    }
+
+    [Fact]
+    public void LockFilesOfResultsDeletedByHand_AreSwept_ButNotOneAWriteHolds()
+    {
+        var kept = ResultStore.CreateRunDir(Results, "beef", "compare", [L, R])!;
+        var locks = Path.Combine(Results, ResultStore.LocksName);
+        Directory.CreateDirectory(locks);
+        string Lock(string name) { var p = Path.Combine(locks, name + ".lock"); File.WriteAllBytes(p, []); return p; }
+        var ofKept = Lock(Path.GetFileName(kept));
+        var gone = Lock("20200101-000000-dead");
+        var held = Lock("20200101-000000-cafe");
+        using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.Read, 1)) // as Hold opens it
+            Assert.Equal(1, ResultStore.SweepLocks(Results));
+        Assert.True(File.Exists(ofKept));
+        Assert.False(File.Exists(gone));
+        Assert.True(File.Exists(held));
+        Assert.Equal(1, ResultStore.SweepLocks(Results)); // let go: swept next time
+        Assert.Equal(0, ResultStore.SweepLocks(Results));
+    }
+
+    [Fact]
+    public void AClaimGivenUpButNotDeleted_IsSwept_OnceOld_AndNoResultEver()
+    {
+        var kept = ResultStore.CreateRunDir(Results, "beef", "compare", [L, R])!;
+        var stray = Directory.CreateDirectory(Path.Combine(Results, "20200101-000000-dead")).FullName;
+        File.WriteAllBytes(Path.Combine(stray, ".claim"), []);
+        var old = Directory.CreateDirectory(Path.Combine(Results, "20200101-000000-0123")).FullName; // an older release's: no claim
+        File.WriteAllText(Path.Combine(old, "compare.json"), "{}");
+        Assert.Equal(0, ResultStore.SweepLocks(Results)); // the stray is new: its run may still be writing
+        var later = DateTime.UtcNow.AddMinutes(11);
+        Assert.Equal(1, ResultStore.SweepLocks(Results, later));
+        Assert.False(Directory.Exists(stray));
+        Assert.True(Directory.Exists(kept)); // a claim with its compare.json: a result
+        Assert.True(Directory.Exists(old));
+        Assert.Equal(0, ResultStore.SweepLocks(Results, later));
     }
 }

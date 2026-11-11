@@ -71,6 +71,9 @@ public sealed class SelfTestTests : IDisposable
         Assert.True(r.ExitCode == 0, r.ToString());
         Assert.DoesNotContain("FAIL ", r.Stdout);
         Assert.Contains("selftest PASSED", r.Stdout);
+        // Every check runs on these trees but the one that needs a file over 16 MB: a new skip is a check gone quiet.
+        var skips = r.Stdout.Split('\n').Where(l => l.TrimStart().StartsWith("SKIP ", StringComparison.Ordinal)).ToList();
+        Assert.True(skips.Count == 1 && skips[0].Contains("blockdiff of a file over 16 MB"), string.Join("\n", skips));
 
         var run = Directory.GetDirectories(Path.Combine(outDir, "demo_app")).Single();
         var html = File.ReadAllText(Path.Combine(run, "index.html"));

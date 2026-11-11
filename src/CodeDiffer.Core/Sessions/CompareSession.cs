@@ -369,10 +369,16 @@ public sealed class SessionStore
         lock (_gate)
         {
             string id;
-            do id = Convert.ToHexString(BitConverter.GetBytes(Random.Shared.Next())).ToLowerInvariant()[..4];
-            while (_sessions.Any(s => s.Id == id) || (ResultsRoot is not null && ResultStore.Find(ResultsRoot, id) is not null));
-            // The result dir exists (state "running") before the compare starts: a crash leaves an honest trace.
-            var dir = ResultsRoot is null ? null : ResultStore.CreateRunDir(ResultsRoot, id, kind, roots);
+            string? dir;
+            // The result dir exists (state "running") before the compare starts: a crash leaves an honest trace. Null:
+            // another process took this id at the same moment.
+            do
+            {
+                do id = Convert.ToHexString(BitConverter.GetBytes(Random.Shared.Next())).ToLowerInvariant()[..4];
+                while (_sessions.Any(s => s.Id == id) || (ResultsRoot is not null && ResultStore.Find(ResultsRoot, id) is not null));
+                dir = ResultsRoot is null ? null : ResultStore.CreateRunDir(ResultsRoot, id, kind, roots);
+            }
+            while (ResultsRoot is not null && dir is null);
             var session = make(id, dir);
             _sessions.Add(session);
             _lastStarted = session;

@@ -227,7 +227,9 @@ is listed as `INCOMPLETE`, not `done`: its verdicts there are unknown (one saved
 only for its unlisted directories, since its unreadable files weren't totalled).
 A malformed `compare.json` is reported as a corrupt result, never an error that ends the server; a path with an
 unpaired UTF-16 surrogate (legal on NTFS) is saved losslessly, so it reopens as the same file; `changes.jsonl` (2-way, every path) or `v1.jsonl`/`v2.jsonl`/
-`entries.jsonl` (3-way: each side's changes, its unchanged files a count in `compare.json`) hold the verdicts. Only verdicts are stored, not file contents: any compare_id (or
+`entries.jsonl` (3-way: each side's changes, its unchanged files a count in `compare.json`) hold the verdicts; `compare.json`
+counts what each list holds, so a list cut short (a power cut, an edit by hand) is reported as a corrupt result, never
+reopened as a compare with fewer changes. Only verdicts are stored, not file contents: any compare_id (or
 the directory) reopens without re-comparing (`list_compares`, CLI `results`), and a diff rendered later
 from the live trees warns when a file's size no longer matches what was compared. Capped patches, apply
 reports and the HTML report go into the same directory; one pruned by another process while this one still holds
@@ -235,7 +237,9 @@ the compare is saved again first, so nothing written there is left unlisted and 
 the result is held (a lock file in `<results>\.locks\`, shared by any number of writers in any process): a prune
 leaves a held result alone (`not deleted: … is in use`, exit 1, prune again later), and a write that meets a prune
 already deleting its result waits for it, then saves the result again, so a write told it succeeded is in a listed
-result. A prune from CodeDiffer 1.0.61 or earlier doesn't take the lock.
+result. A prune from CodeDiffer 1.0.61 or earlier doesn't take the lock. A prune's delete takes the result's lock file
+with it; `prune --yes` also removes the lock files left by results deleted by hand. A result id is one compare's only, in
+any number of processes sharing the results directory: two that pick the same id at once, one gives it up and picks again.
 
 Renames cost little on a warm compare: the pure (byte-identical) pass hashes only adds and removes whose size
 occurs on both sides, in parallel, and uses the hash ledgers (a second run reads nothing for it); the edited
@@ -737,6 +741,7 @@ that tops out ~95–110 MB/s:
 | CPU of a cold local compare (counted by cycles, files in the OS cache, a 6-core desktop CPU) | ~5–6 CPU-s per GB of tree: one SHA-256 pass per identical pair, ~0.25 GB/s a core without SHA instructions; compare3's v2 adds ~1 CPU-s per GB (read beside base: XxHash128 only). A 5.5 GB × 3 slice of it: `compare` 6 s wall / ~25–34 CPU-s, `compare3` 10.5 s / ~29–39 CPU-s |
 | compare3's merge (the files both sides changed, read and merged line by line) | about 7 times their three versions' bytes allocated (on `death`: 1,985 files, 102 MB read, 734 MB allocated, 3–4 s on one core); only the files' own text and lines, not held after |
 | Warm `compare` / `compare3` (cache hits) | ~0 bytes read, a stat per file: 1–4 min, a few % CPU |
+| A modified pair classified (cold, or edited since) | two more stats, one a side, to keep its verdict only if both files are still as listed: a round trip each over a share, a small part of the read |
 | `verify` against the delta / conflict manifests | a warm compare of the two trees plus the changed files: 30 s–2 min |
 | `apply` dry run or `--write` after a warm compare | reads the changed files of three trees: ~1–2 min |
 | HTML report (`--html`, `report <id>`, `write_report`) | seconds, a ~20 MB write |

@@ -10,7 +10,7 @@ namespace CodeDiffer.Tests;
 /// <summary>
 /// Code review pass 14, tier 3: a whitespace-only last line without a line ending, added or taken away, is a line (content),
 /// whole and streamed, and a whitespace record's hunks keep every line where it is; a 3-way merge of large files can be
-/// stopped; two runs naming a result directory alike never share it.
+/// stopped; two runs never share a result id, in one process or two.
 /// </summary>
 public sealed class Round14Tier3Tests : IDisposable
 {
@@ -79,13 +79,43 @@ public sealed class Round14Tier3Tests : IDisposable
     // ---- a result directory named alike ----
 
     [Fact]
-    public void RunsNamingADirectoryAlike_EachGetTheirOwn()
+    public void RunsTakingOneIdAtOnce_OnlyOneGetsIt()
     {
         var root = P("results");
         string[] trees = [P("L"), P("R")];
-        var dirs = new string[16];
+        var dirs = new string?[16];
+        // All in one second: across two, each stamp's claim sees the other's and both give the id up (a run then picks again).
+        SpinWait.SpinUntil(() => DateTime.Now.Millisecond < 300);
         Parallel.For(0, dirs.Length, i => dirs[i] = ResultStore.CreateRunDir(root, "beef", "compare", trees));
-        Assert.Equal(dirs.Length, dirs.Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.All(dirs, d => Assert.True(File.Exists(Path.Combine(d, "compare.json"))));
+        var got = Assert.Single(dirs, d => d is not null);
+        Assert.True(File.Exists(Path.Combine(got!, "compare.json")));
+        Assert.Equal(got, ResultStore.Find(root, "beef"));
+        Assert.Single(Directory.GetDirectories(root)); // the others gave theirs up
+    }
+
+    [Fact]
+    public void AnIdAnotherRunHolds_IsGivenUp_EvenFromAnotherSecond()
+    {
+        var root = P("results");
+        var theirs = Directory.CreateDirectory(Path.Combine(root, "20200101-000000-beef")).FullName;
+        Assert.Null(ResultStore.CreateRunDir(root, "beef", "compare", [P("L"), P("R")]));
+        Assert.Equal([theirs], Directory.GetDirectories(root));
+
+        // An older release's second run of an id: the highest n is the newest, -10 above -9.
+        Directory.CreateDirectory(Path.Combine(root, "20200101-000000-beef-9"));
+        var ten = Directory.CreateDirectory(Path.Combine(root, "20200101-000000-beef-10")).FullName;
+        Assert.Equal(ten, ResultStore.Find(root, "beef"));
+    }
+
+    [Fact]
+    public void SessionsInTwoStores_OnOneResultsDir_NeverShareAnId()
+    {
+        var root = P("results");
+        var a = new SessionStore(resultsRoot: root);
+        var b = new SessionStore(resultsRoot: root);
+        var ids = new System.Collections.Concurrent.ConcurrentBag<string>();
+        Parallel.For(0, 64, i => ids.Add((i % 2 == 0 ? a : b).Adopt(P("L"), P("R"), new CompareOptions(), new CompareReport([]), DateTime.UtcNow, TimeSpan.Zero).Id));
+        Assert.Equal(64, ids.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.All(ids, id => Assert.NotNull(ResultStore.Find(root, id)));
     }
 }

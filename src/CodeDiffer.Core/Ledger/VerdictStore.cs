@@ -7,7 +7,8 @@ namespace CodeDiffer.Core.Ledger;
 /// Why two files differ, remembered by what they hold: a modified pair's reason and noise, keyed by both sides'
 /// XxHash128 and file names (a name picks the comment syntax and string rules). A warm compare then finds a modified
 /// pair's verdict without opening either file, as it finds an identical one's. Being keyed by content it can't go
-/// stale: an edit is another hash. It is kept per classifier version and classify size: a release that classifies anew
+/// stale: an edit is another hash (and one made while a pair was classified, between the hash and the read, keeps no
+/// verdict: the comparer records one only for files still as listed). It is kept per classifier version and classify size: a release that classifies anew
 /// bumps <see cref="ClassifierVersion"/>, and one that doesn't keeps every verdict (re-classifying them all cost a first
 /// run after each install gigabytes of allocation and a read of every modified pair).
 /// One file beside the ledgers, shared by every compare; merged on save, so compares running at once each add theirs.

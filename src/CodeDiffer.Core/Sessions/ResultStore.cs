@@ -61,9 +61,10 @@ public static class ResultStore
 
     // ---- create / save ----
 
-    /// <summary>Create the compare's fresh directory with a "running" compare.json. Refuses a results root
-    /// inside (or equal to) any compared tree.</summary>
-    public static string CreateRunDir(string root, string id, string kind, IReadOnlyList<string> roots)
+    /// <summary>Create the compare's fresh directory with a "running" compare.json, or null when another run (this
+    /// process or another) has a directory for this id: the caller picks another id. Refuses a results root inside (or
+    /// equal to) any compared tree.</summary>
+    public static string? CreateRunDir(string root, string id, string kind, IReadOnlyList<string> roots)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         foreach (var r in roots)
@@ -72,9 +73,15 @@ public static class ResultStore
                                             "its own input — set CODEDIFFER_RESULTS_DIR to somewhere else");
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
         var dir = Path.Combine(root, $"{stamp}-{id}");
-        // Never reuse, even with another process naming one the same second (ids are 16-bit): a directory is this run's
-        // once it holds the claim this run created, which no other can.
-        for (int n = 2; !Claim(dir); n++) dir = Path.Combine(root, $"{stamp}-{id}-{n}");
+        // A directory is this run's once it holds the claim this run created, which no other can. An id is one run's
+        // only: two processes that picked the same one at once (ids are 16-bit) would each reopen the other's compare
+        // by it, so a run that finds another directory for its id gives its own up and picks again.
+        if (!Claim(dir)) return null;
+        if (Named(root, id).Any(d => !string.Equals(d, dir, StringComparison.OrdinalIgnoreCase)))
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (Exception d) when (d is IOException or UnauthorizedAccessException) { }
+            return null;
+        }
         try
         {
             WriteMeta(dir, w =>
@@ -96,13 +103,15 @@ public static class ResultStore
     private static bool Claim(string dir)
     {
         if (Directory.Exists(dir)) return false;
-        Directory.CreateDirectory(dir);
         try
         {
+            Directory.CreateDirectory(dir);
             new FileStream(Path.Combine(dir, ".claim"), FileMode.CreateNew, FileAccess.Write, FileShare.None).Dispose();
             return true;
         }
         catch (IOException) when (File.Exists(Path.Combine(dir, ".claim"))) { return false; } // another run's
+        // Another run's, given up and deleted under us (or still being deleted): not ours, so the run picks again.
+        catch (Exception e) when (e is DirectoryNotFoundException or UnauthorizedAccessException && !Directory.Exists(dir)) { return false; }
         catch
         {
             // Not claimed (a full disk, a lost share): the directory goes if it is still empty (one another run claimed stays).
@@ -196,6 +205,48 @@ public static class ResultStore
 
     internal const string LocksName = ".locks";
 
+    /// <summary>The lock files whose result is gone (a result deleted by hand: a prune's delete takes its own with it)
+    /// removed, but for one a write still holds; and the result directories a run claimed, gave up and couldn't delete
+    /// (only their claim file, from over ten minutes ago: a run writes its compare.json the moment it claims). How many went.</summary>
+    public static int SweepLocks(string root) => SweepLocks(root, DateTime.UtcNow);
+
+    internal static int SweepLocks(string root, DateTime nowUtc)
+    {
+        root = Path.GetFullPath(root);
+        int swept = 0;
+        try
+        {
+            if (!Directory.Exists(root)) return 0;
+            foreach (var d in Directory.EnumerateDirectories(root))
+            {
+                try
+                {
+                    var claim = Path.Combine(d, ".claim");
+                    if (!File.Exists(claim) || File.GetLastWriteTimeUtc(claim) > nowUtc.AddMinutes(-10)) continue;
+                    if (Directory.EnumerateFileSystemEntries(d).Count() != 1) continue;
+                    File.Delete(claim);
+                    Directory.Delete(d);
+                    swept++;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+            var locks = Path.Combine(root, LocksName);
+            if (!Directory.Exists(locks)) return swept;
+            foreach (var f in Directory.EnumerateFiles(locks, "*.lock"))
+            {
+                if (Directory.Exists(Path.Combine(root, Path.GetFileNameWithoutExtension(f)))) continue;
+                try
+                {
+                    new FileStream(f, FileMode.Open, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose).Dispose();
+                    swept++;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } // held, or already gone
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } // the folder itself unreadable: a tidy-up, never a failure
+        return swept;
+    }
+
     /// <summary>Save a finished compare: the change list(s) first, then compare.json flips to "done".</summary>
     internal static void Save(Session s, object result)
     {
@@ -235,6 +286,10 @@ public static class ResultStore
                     w.WriteStartObject("counts");
                     foreach (var o in Enum.GetValues<Merge3Outcome>()) w.WriteNumber(Token(o), t.Count(o));
                     w.WriteNumber("conflictRegions", t.Entries.Sum(e => e.ConflictRegions));
+                    w.WriteEndObject();
+                    w.WriteStartObject("lines"); // what each list holds, checked when it is read back (not shown as counts)
+                    w.WriteNumber("v1", t.V1Report.Changes.Count);
+                    w.WriteNumber("v2", t.V2Report.Changes.Count);
                     w.WriteEndObject();
                 });
                 break;
@@ -331,11 +386,17 @@ public static class ResultStore
     public static string? Find(string root, string id)
     {
         if (!Regex.IsMatch(id, "^[0-9A-Fa-f]{4}$") || !Directory.Exists(root)) return null;
-        return Directory.EnumerateDirectories(root, $"*-{id}*")
-            .Where(d => Regex.IsMatch(Path.GetFileName(d), $"^\\d{{8}}-\\d{{6}}-{id}(-\\d+)?$", RegexOptions.IgnoreCase))
-            .OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal)
+        // An older release could name a second run of an id <stamp>-<id>-<n>: the newest stamp, then the highest n.
+        return Named(root, id)
+            .OrderByDescending(d => Path.GetFileName(d)[..15], StringComparer.Ordinal)
+            .ThenByDescending(d => Path.GetFileName(d) is { Length: > 20 } n ? long.Parse(n[21..], CultureInfo.InvariantCulture) : 1)
             .FirstOrDefault();
     }
+
+    /// <summary>The result directories named for this id: <c>yyyyMMdd-HHmmss-&lt;id&gt;</c>, or an older <c>-&lt;n&gt;</c>.</summary>
+    private static IEnumerable<string> Named(string root, string id)
+        => Directory.EnumerateDirectories(root, $"*-{id}*")
+            .Where(d => Regex.IsMatch(Path.GetFileName(d), $"^\\d{{8}}-\\d{{6}}-{id}(-\\d{{1,9}})?$", RegexOptions.IgnoreCase));
 
     /// <summary>Saved compares, newest first by start time (unreadable directories are skipped).</summary>
     /// <remarks>Directory names (<c>yyyyMMdd-HHmmss-&lt;id&gt;</c>) order by the second only, then by the random id, so
@@ -847,7 +908,24 @@ public static class ResultStore
         foreach (var c in v2.Changes) known.TryAdd(c, c);
         FileChange Shared(FileChange c) => known.TryGetValue(c, out var k) ? k : c;
         var entries = ReadLines(Path.Combine(dir, "entries.jsonl"), e => ReadEntry(e, Shared));
-        return new ThreeWayReport { V1Report = v1, V2Report = v2, Entries = entries, Timings = ReadTimings(m) };
+        return Whole(new ThreeWayReport { V1Report = v1, V2Report = v2, Entries = entries, Timings = ReadTimings(m) }, m, dir);
+    }
+
+    /// <summary>The lists read back hold what compare.json counted when it was saved, as for a 2-way result (a result saved
+    /// before 1.0.160 has no v1/v2 change counts: its entries are still checked).</summary>
+    private static ThreeWayReport Whole(ThreeWayReport t, JsonElement meta, string dir)
+    {
+        void Check(string section, string name, string file, string what, long held)
+        {
+            if (meta.TryGetProperty(section, out var s) && s.TryGetProperty(name, out var n) && n.GetInt64() != held)
+                throw new InvalidDataException($"result {dir} is incomplete or corrupt: {file} holds {held:N0} {what}, " +
+                                               $"compare.json counted {n.GetInt64():N0}");
+        }
+        foreach (var o in Enum.GetValues<Merge3Outcome>()) Check("counts", Token(o), "entries.jsonl", Token(o), t.Count(o));
+        Check("counts", "conflictRegions", "entries.jsonl", "conflict regions", t.Entries.Sum(e => (long)e.ConflictRegions));
+        Check("lines", "v1", "v1.jsonl", "change(s)", t.V1Report.Changes.Count);
+        Check("lines", "v2", "v2.jsonl", "change(s)", t.V2Report.Changes.Count);
+        return t;
     }
 
     private static Merge3Entry ReadEntry(JsonElement e, Func<FileChange, FileChange> shared) => new(

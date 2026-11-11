@@ -428,6 +428,7 @@ static int Prune(string[] args)
     }
     bool yes = args.Contains("--yes");
     var root = Path.GetFullPath(ResultStore.DefaultRoot);
+    if (yes && ResultStore.SweepLocks(root) is > 0 and var swept) Console.WriteLine($"removed {swept} stale lock file(s) and unfinished claim(s)");
     var doomed = ResultStore.PruneCandidates(root, keep, olderThan, DateTime.UtcNow);
     var rule = $"all but the newest {keep}" + (olderThan is { } o ? $", started over {o.TotalDays:0.###} day(s) ago" : "");
     if (doomed.Count == 0)

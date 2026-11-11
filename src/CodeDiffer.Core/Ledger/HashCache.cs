@@ -201,32 +201,34 @@ public sealed class HashCache
     }
 
     /// <summary>Record hashes computed this run from the file's actual bytes (only if the read was stable), as
-    /// trusted (first or second look) or pending.</summary>
-    public void Record(FileEntry e, FileHashes h) => Record(e, h, DateTime.UtcNow.Ticks);
+    /// trusted (first or second look) or pending. True when it is trusted: a hash a later read of the file can be keyed by.</summary>
+    public bool Record(FileEntry e, FileHashes h) => Record(e, h, DateTime.UtcNow.Ticks);
 
-    internal void Record(FileEntry e, FileHashes h, long recordedAtTicks)
+    internal bool Record(FileEntry e, FileHashes h, long recordedAtTicks)
     {
-        if (_mode == CacheMode.Off) return;
+        if (_mode == CacheMode.Off) return false;
         if (!h.Stable)
         {
             _unstable[e.RelativePath] = h.Doubt == ReadDoubt.None ? ReadDoubt.Changed : h.Doubt;
-            return;
+            return false;
         }
         long mtime = e.LastWriteTimeUtc.Ticks;
-        if (mtime <= 0 || e.ChangeTimeUtcTicks == 0 || h.HashedAtUtcTicks == 0) return; // can't vouch ⇒ don't cache
+        if (mtime <= 0 || e.ChangeTimeUtcTicks == 0 || h.HashedAtUtcTicks == 0) return false; // can't vouch ⇒ don't cache
 
         // The listing's id and the handle's differ: neither can be checked against the other next time.
         var entry = new LedgerEntry(e.Length, mtime, h.XxHash128, e.ChangeTimeUtcTicks, h.ListingIdDiffers ? 0 : e.FileId, h.HashedAtUtcTicks, h.Sha256);
         if (h.ListingIdDiffers) Interlocked.Increment(ref _withoutId);
         bool settled = _own is not null && _own.Entries.TryGetValue(e.RelativePath, out var p) && p.MTimeTicks < 0 &&
                        Identity(e, p) && h.HashedAtUtcTicks >= p.HashedAtTicks + _timing.SettleTicks;
-        if (!settled && !FirstLook(mtime, e.ChangeTimeUtcTicks, h.HashedAtUtcTicks, _timing))
+        bool trusted = settled || FirstLook(mtime, e.ChangeTimeUtcTicks, h.HashedAtUtcTicks, _timing);
+        if (!trusted)
         {
             entry = entry with { MTimeTicks = -mtime, HashedAtTicks = recordedAtTicks };
             Interlocked.Increment(ref _pending);
         }
         _fresh[e.RelativePath] = entry;
         Interlocked.Increment(ref _recorded);
+        return trusted;
     }
 
     /// <summary>

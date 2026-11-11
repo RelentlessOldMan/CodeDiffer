@@ -31,10 +31,10 @@ public class VerdictStoreTests : IDisposable
         File.SetLastWriteTimeUtc(p, mtime ?? Old);
     }
 
-    private CompareReport Run(CacheMode mode = CacheMode.On, IReadOnlyList<string>? rehash = null) =>
+    private CompareReport Run(CacheMode mode = CacheMode.On, IReadOnlyList<string>? rehash = null, TrustTiming? timing = null) =>
         new DirectoryComparer(new CompareOptions
         {
-            Cache = mode, CacheBaseDir = CacheBase, CodeCompassBaseDir = Path.Combine(_dir, "_compass"), Timing = Instant,
+            Cache = mode, CacheBaseDir = CacheBase, CodeCompassBaseDir = Path.Combine(_dir, "_compass"), Timing = timing ?? Instant,
             RehashRoots = rehash ?? [],
         }).Compare(Path.Combine(_dir, "L"), Path.Combine(_dir, "R"));
 
@@ -137,5 +137,35 @@ public class VerdictStoreTests : IDisposable
 
         File.WriteAllBytes(StorePath, [1, 2, 3, 4, 5]); // not a store at all
         Assert.Equal(0, Run().VerdictHits);
+    }
+
+    [Fact]
+    public void AHashStillPending_KeysNoVerdict()
+    {
+        MakeTrees();
+        var never = new TrustTiming(TimeSpan.FromDays(1).Ticks, TimeSpan.FromDays(1).Ticks); // every hash stays pending
+        Assert.Equal(4, Verdicts(Run(timing: never)).Count);
+        // The size-changed pairs, hashed again (now trusted) and looked up: nothing was kept under their pending ids,
+        // which may not be what the classify read. (The same-size pairs are classified from the bytes just read.)
+        Assert.Equal(0, Run().VerdictHits);
+        Assert.Equal(4, Run().VerdictHits); // trusted now: kept
+    }
+
+    [Fact]
+    public void AFileEditedSinceTheWalk_IsNotAsListed_SoItsVerdictIsNotKept()
+    {
+        Put("L/a.c", "int a;\n");
+        Put("L/b.c", "int b;\n");
+        var listed = new TreeWalker().WalkAll(Path.Combine(_dir, "L")).Files.ToDictionary(e => e.RelativePath);
+        Assert.True(DirectoryComparer.AsListed(listed["a.c"]));
+
+        Put("L/b.c", "int b2;\n");                  // another size
+        Assert.False(DirectoryComparer.AsListed(listed["b.c"]));
+        // The listed size and mtime back: the ChangeTime still moved (once its timer has ticked: it can stand still for ms).
+        var b = Path.Combine(_dir, "L/b.c");
+        Assert.True(SpinWait.SpinUntil(() => { Put("L/b.c", "int c;\n"); return FileStat.OfPath(b).ChangeUtcTicks != listed["b.c"].ChangeTimeUtcTicks; }, 5000));
+        Assert.False(DirectoryComparer.AsListed(listed["b.c"]));
+        File.Delete(Path.Combine(_dir, "L/a.c"));   // gone
+        Assert.False(DirectoryComparer.AsListed(listed["a.c"]));
     }
 }

@@ -302,9 +302,10 @@ public sealed class DirectoryComparer
                     if (cache.TryGet(e, out var id, count: false)) return id;
                     if (e.Length > _options.MaxClassifyBytes) return null; // a big file is only read in part to classify
                     var h = PairComparer.HashAsync(e, ct).GetAwaiter().GetResult();
-                    cache.Record(e, h);
+                    bool trusted = cache.Record(e, h);
                     AddRead(e.Length);
-                    return h.Stable ? new ContentId(h.XxHash128, h.Sha256) : null;
+                    // A pending hash (a file written just now) may not be what the classify reads: no key for a verdict.
+                    return trusted ? new ContentId(h.XxHash128, h.Sha256) : null;
                 }
                 return Modified(classifier, le, re, Id(le, leftCache), Id(re, rightCache), verdictStore, contentIds, AddRead, ct);
             }
@@ -368,6 +369,7 @@ public sealed class DirectoryComparer
             async Task<(FileChange Verdict, bool HasL, bool HasR)> Pair(FileEntry le, FileEntry re, Action<int, int>? onChunk, CancellationToken ct)
             {
                 bool equal;
+                bool keyed = true; // the ids are ones a verdict can be kept under: trusted, not pending
                 long read = 0;
                 byte[]? readL = null, readR = null; // a small differing pair's bytes, just read: classified from them
                 ContentId cl = default;
@@ -397,7 +399,7 @@ public sealed class DirectoryComparer
                     var h = bothLocal
                         ? await PairComparer.HashBesideAsync(hasL ? le : re, known, e, ct, onChunk, io).ConfigureAwait(false)
                         : await PairComparer.HashAsync(e, ct, onChunk, io).ConfigureAwait(false);
-                    cache.Record(e, h);
+                    keyed = cache.Record(e, h);
                     equal = ContentId.Same(known, new ContentId(h.XxHash128, h.Sha256))!.Value;
                     if (!hasL && h.Stable) provenL = new ContentId(h.XxHash128, h.Sha256);
                     if (!hasR && h.Stable) idR = new ContentId(h.XxHash128, h.Sha256);
@@ -408,8 +410,7 @@ public sealed class DirectoryComparer
                     // Neither usable: read both at once, compare bytes, and keep both hashes for next time.
                     Sessions.ProcessTally.Stat(hasL ? "pair read: both, ids not comparable" : "pair read: both, neither cached");
                     var r = await PairComparer.CompareAsync(le, re, hashes: true, ct, onChunk, io, keepSmall: true).ConfigureAwait(false);
-                    leftCache.Record(le, r.Left!);
-                    rightCache.Record(re, r.Right!);
+                    keyed = leftCache.Record(le, r.Left!) & rightCache.Record(re, r.Right!);
                     equal = r.Equal;
                     (readL, readR) = (r.LeftBytes, r.RightBytes);
                     if (r.Left!.Stable) provenL = new ContentId(r.Left.XxHash128, r.Left.Sha256);
@@ -421,19 +422,19 @@ public sealed class DirectoryComparer
                 var verdict = equal
                     ? new FileChange(le.RelativePath, ChangeStatus.Identical, null, le.Length, re.Length)
                     : readL is not null && readR is not null
-                        ? FromBytes(le, readL, re, readR, provenL, idR)
-                        : Modified(classifier, le, re, provenL, idR, verdictStore, contentIds, AddRead, ct);
+                        ? FromBytes(le, readL, re, readR, provenL, idR, keyed)
+                        : Modified(classifier, le, re, provenL, idR, keyed ? verdictStore : null, keyed ? contentIds : null, AddRead, ct);
                 return (verdict, hasL, hasR);
             }
 
             // A small differing pair just read whole: classified from those bytes, and remembered.
-            FileChange FromBytes(FileEntry le, byte[] readL, FileEntry re, byte[] readR, ContentId? idL, ContentId? idR)
+            FileChange FromBytes(FileEntry le, byte[] readL, FileEntry re, byte[] readR, ContentId? idL, ContentId? idR, bool keyed)
             {
                 var reason = classifier.Classify(le.FullPath, readL, re.FullPath, readR, out var noise, ct);
                 if (idL is { } l && idR is { } r)
                 {
                     verdictStore?.Record(l, le.RelativePath, r, re.RelativePath, reason, noise);
-                    contentIds[le.RelativePath] = (l, r);
+                    if (keyed) contentIds[le.RelativePath] = (l, r); // a merge is read again later: never by a pending id
                 }
                 return new FileChange(le.RelativePath, ChangeStatus.Modified, reason, le.Length, re.Length, Noise: noise);
             }
@@ -578,8 +579,25 @@ public sealed class DirectoryComparer
             ids?.TryRemove(le.RelativePath, out _);
             return new(le.RelativePath, ChangeStatus.Identical, null, same, same);
         }
-        if (known) verdicts!.Record(idL!.Value, le.RelativePath, idR!.Value, re.RelativePath, reason, noise);
+        // The ids and the bytes just classified are two reads: a file edited between them would leave this verdict
+        // under the old content's ids, trusted by every later compare. Kept only if both files are still as listed.
+        if (known && AsListed(le) && AsListed(re)) verdicts!.Record(idL!.Value, le.RelativePath, idR!.Value, re.RelativePath, reason, noise);
         return new(le.RelativePath, ChangeStatus.Modified, reason, le.Length, re.Length, Noise: noise);
+    }
+
+    /// <summary>The file as the walk listed it: size, mtime and ChangeTime (and FileId, but for a server that numbers
+    /// open files differently), as a handle reads them now.</summary>
+    internal static bool AsListed(FileEntry e)
+    {
+        try
+        {
+            var s = FileStat.OfPath(e.FullPath);
+            return s.Matches(e) || s.OnlyIdDiffers(e);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>A pair that could not be read: modified with no reason, and why.</summary>

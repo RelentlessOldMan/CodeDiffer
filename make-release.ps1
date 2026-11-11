@@ -9,7 +9,8 @@
     1. the working tree must be clean and HEAD must already be on origin/main (a zip is always a pushed commit);
     2. the tests must pass in Release (skip with -SkipTests only if you just ran them);
     3. the CLI's version must match the build and the manifests, and the published MCP server must answer
-       initialize + tools/list with every tool the source declares (a server that can't start never ships);
+       initialize + tools/list with every tool the source declares (a server that can't start never ships), and
+       the built CLI's selftest must pass on small invented trees;
     4. the zip is written with '/' entry names (Compress-Archive on PowerShell 5.1 writes '\') and checked;
     5. the version stamp is put back to the committed 0.0.0-dev sentinel, so the tree stays clean.
   The version is 1.0.<commit count> (Directory.Build.props), the same number `CodeDiffer.Cli.exe version` prints.
@@ -132,6 +133,62 @@ try {
 finally {
     try { if (-not $mcp.HasExited) { $mcp.Kill() } } catch {}
     try { $mcp.WaitForExit(5000) | Out-Null; $mcp.Dispose() } catch {}
+}
+
+# The built CLI's selftest on small invented trees (base, v1, v2: every status, every reason, a merge, a conflict),
+# with its own results, caches and output, so a release that fails a check never ships.
+Write-Host "== selftest (built CLI, invented trees) ==" -ForegroundColor Cyan
+$st = Join-Path ([System.IO.Path]::GetTempPath()) ("cd-release-selftest-" + [guid]::NewGuid().ToString('N'))
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+function PutBytes([string]$rel, [byte[]]$bytes) {
+    $p = Join-Path $st $rel
+    [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($p))
+    [System.IO.File]::WriteAllBytes($p, $bytes)
+}
+function Put([string]$rel, [string]$text) { PutBytes $rel $utf8.GetBytes($text) }
+function Lines([int]$from, [int]$to, [string]$prefix) { -join ($from..$to | ForEach-Object { "$prefix $_`n" }) }
+$saved = @{}
+$stKept = $false
+foreach ($n in 'CODEDIFFER_RESULTS_DIR', 'CODEDIFFER_CACHE_DIR', 'CODECOMPASS_CACHE_DIR', 'CODEDIFFER_OUT_DIR') {
+    $saved[$n] = [Environment]::GetEnvironmentVariable($n)
+    [Environment]::SetEnvironmentVariable($n, (Join-Path $st "state\$n"))
+}
+try {
+    foreach ($v in 'base', 'v1', 'v2') {
+        Put "$v/src/same.c" (Lines 1 40 'line')
+        Put "$v/docs/guide.md" "# Guide`n`nRead me.`n"
+        PutBytes "$v/art/logo.bin" ([byte[]](0, 1, 2, 3, $(if ($v -eq 'v1') { 9 } else { 4 })))
+    }
+    $engine = Lines 1 60 'op'
+    Put 'base/src/engine.cs' $engine
+    Put 'v1/src/engine.cs' $engine.Replace("op 10`n", "op ten`n")
+    Put 'v2/src/engine.cs' $engine.Replace("op 50`n", "op fifty`n")
+    Put 'base/src/eol.h' "int a;`nint b;`n"; Put 'v1/src/eol.h' "int a;`r`nint b;`r`n"; Put 'v2/src/eol.h' "int a;`nint b;`n"
+    Put 'base/src/ws.py' "def f():`n    return 1`n"; Put 'v1/src/ws.py' "def f():`n    return  1   `n"; Put 'v2/src/ws.py' "def f():`n    return 1`n"
+    Put 'base/build/proj.mk' "all:`n`tcc x.c`n"; Put 'v1/build/proj.mk' "all:`n`tcc -O2 x.c`n"; Put 'v2/build/proj.mk' "all:`n`tcc -O3 x.c`n"
+    Put 'base/old.txt' "gone soon`n"; Put 'v2/old.txt' "gone soon`n"
+    Put 'v1/new.txt' "fresh`n"; Put 'v2/new.txt' "fresh`n"
+    $util = Lines 1 30 'u'
+    Put 'base/src/util.cs' $util; Put 'v1/src/helpers.cs' $util.Replace("u 3`n", "u three`n"); Put 'v2/src/util.cs' $util
+    Put 'v2/src/only2.cs' "class Only2 {}`n"
+    for ($i = 0; $i -lt 1005; $i++) { # over a thousand changes: the tools print 1,005, which the checks must read
+        Put "base/gen/t$i.txt" "value $i`n"; Put "v1/gen/t$i.txt" "value $($i + 1)`n"; Put "v2/gen/t$i.txt" "value $i`n"
+    }
+    # stdout only: on PowerShell 5.1 a native's stderr line under Stop is a terminating error (it shows on the console).
+    $ErrorActionPreference = 'Continue'
+    try { $out = @(& $cliExe selftest (Join-Path $st 'base') (Join-Path $st 'v1') (Join-Path $st 'v2') --name release --out (Join-Path $st 'out')) }
+    finally { $code = $LASTEXITCODE; $ErrorActionPreference = 'Stop' }
+    $verdict = @($out | Where-Object { $_ -match '^selftest (PASSED|FAILED)' })[-1]
+    if ($code -ne 0 -or $verdict -notmatch '^selftest PASSED') {
+        $stKept = $true # its trees and output are what to look at
+        $failed = ($out | Where-Object { $_ -match '^\s*FAIL ' }) -join "`n"
+        throw "selftest FAILED (exit $code) - not packaging (its trees and output kept in $st):`n$failed`n$verdict"
+    }
+    Write-Host "  PASS  $verdict" -ForegroundColor Green
+}
+finally {
+    foreach ($n in $saved.Keys) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) }
+    if (-not $stKept) { Remove-Item -Recurse -Force $st -ErrorAction SilentlyContinue }
 }
 
 # 4) What ships beside the plugin's own files: written straight into the zip, so the tree stays clean.
