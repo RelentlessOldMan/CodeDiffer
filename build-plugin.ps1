@@ -44,7 +44,7 @@ if (-not (Test-Path $mcp)) { throw "expected $mcp" }
 if (-not (Test-Path $cli)) { throw "expected $cli" }
 
 $size = [math]::Round(((Get-ChildItem $binDir -Recurse | Measure-Object Length -Sum).Sum / 1MB), 1)
-$version = (& $cli version)   # e.g. "codediffer 1.0.70+a1b2c3d4"
+$version = (& $cli version)   # e.g. "codediffer 2026.11.13.2+a1b2c3d4"
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
     throw "could not read the version from the freshly built CLI ($cli) - the plugin manifests can't be stamped."
 }
@@ -53,7 +53,7 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
 # agree. The committed value is the 0.0.0-dev sentinel; make-release.ps1 restores it after packaging. UTF-8
 # WITHOUT a BOM: Claude Code's JSON parser rejects a BOM, and PowerShell 5.1's Set-Content -Encoding utf8 writes one.
 $manifestVer = ($version -replace '^codediffer\s+', '') -replace '\+.*$', ''
-if ($manifestVer -notmatch '^\d+\.\d+\.\d+$') { throw "unexpected version string from the CLI: '$version'" }
+if ($manifestVer -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "unexpected version string from the CLI: '$version'" }
 foreach ($m in @("plugin/.claude-plugin/plugin.json", "plugin/plugin.json")) {
     $path = Join-Path $root $m
     if (-not (Test-Path $path)) { throw "plugin manifest not found: $path" }

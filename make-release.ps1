@@ -13,7 +13,8 @@
        the built CLI's selftest must pass on small invented trees;
     4. the zip is written with '/' entry names (Compress-Archive on PowerShell 5.1 writes '\') and checked;
     5. the version stamp is put back to the committed 0.0.0-dev sentinel, so the tree stays clean.
-  The version is 1.0.<commit count> (Directory.Build.props), the same number `CodeDiffer.Cli.exe version` prints.
+  The version is <year>.<month>.<day>.<n>: the commit's date and which of that day's commits it is (Directory.Build.props),
+  the same number `CodeDiffer.Cli.exe version` prints.
 
 .EXAMPLE
   ./make-release.ps1              # test, build and zip into dist\
@@ -44,14 +45,14 @@ function Write-Text([string]$path, [string]$text) {
     [System.IO.File]::WriteAllText($path, ($text -replace "`r?`n", "`r`n"), [System.Text.UTF8Encoding]::new($false))
 }
 
-# 1) A clean tree whose HEAD is origin/main, a full clone (the version is the commit count), and gh ready.
+# 1) A clean tree whose HEAD is origin/main, a full clone (the version counts the day's commits), and gh ready.
 if ($Publish) {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "-Publish needs the GitHub CLI (gh) on PATH" }
     Native gh auth status | Out-Null
 }
 $dirty = Native git status --porcelain
 if ($dirty) { throw "working tree has uncommitted changes - commit them first:`n$($dirty -join "`n")" }
-if ((Native git rev-parse --is-shallow-repository).Trim() -eq 'true') { throw "shallow clone: the version (commit count) would be wrong - git fetch --unshallow first" }
+if ((Native git rev-parse --is-shallow-repository).Trim() -eq 'true') { throw "shallow clone: the version (the day's commit count) could be wrong - git fetch --unshallow first" }
 $sha = (Native git rev-parse HEAD).Trim()
 Native git fetch origin main --quiet | Out-Null
 $remote = (Native git rev-parse origin/main).Trim()
@@ -85,11 +86,11 @@ $manifestVersions = @($stamped.Values | ForEach-Object { ($_ | ConvertFrom-Json)
 $after = Native git status --porcelain
 if ($after) { throw "publishing changed tracked files - not packaging:`n$($after -join "`n")" }
 
-# The version the shipped CLI reports, e.g. "codediffer 1.0.36+8d5e88b" -> 1.0.36. Its commit must be HEAD, and
+# The version the shipped CLI reports, e.g. "codediffer 2026.11.13.2+8d5e88b" -> 2026.11.13.2. Its commit must be HEAD, and
 # both manifests must carry the same number.
 $cliExe = Join-Path $bin 'CodeDiffer.Cli.exe'
 $verLine = (& $cliExe version | Out-String).Trim()
-if ($verLine -notmatch '^codediffer (\d+\.\d+\.\d+)\+([0-9a-f]+)') { throw "unexpected version output: '$verLine'" }
+if ($verLine -notmatch '^codediffer (\d+\.\d+\.\d+\.\d+)\+([0-9a-f]+)') { throw "unexpected version output: '$verLine'" }
 $version = $Matches[1]
 if (-not $sha.StartsWith($Matches[2])) { throw "the built CLI says commit $($Matches[2]) but HEAD is $sha" }
 foreach ($v in $manifestVersions) { if ($v -ne $version) { throw "version mismatch: a manifest says '$v', the CLI '$version'" } }

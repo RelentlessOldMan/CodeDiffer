@@ -1,19 +1,19 @@
 <Project>
 
   <!--
-    Versioning: base is 1.0 (bump VersionPrefix by hand for real milestones). The patch number is the
-    git commit count, so it auto-bumps on every check-in; the informational version also carries the
-    short commit SHA so a user's reported version pins the exact commit. Falls back to 1.0.0+nogit when
-    git isn't available (e.g. a source drop or a not-yet-initialised repo), so builds never fail on this.
+    Versioning: <year>.<month>.<day>.<n>, from the commit built: its date (local time) and n = which of that day's
+    commits it is (1 for the day's first). So every check-in bumps n, the next day starts at .1 again, and the same
+    commit always builds the same number. The informational version also carries the short commit SHA, so a user's
+    reported version pins the exact commit. Falls back to 0.0.0.0+nogit when git isn't available (a source drop or a
+    not-yet-initialised repo), so builds never fail on this.
 
     AssemblyVersion stays 1.0.0.0 (stable, so assembly binding doesn't churn per commit).
     FileVersion / InformationalVersion carry the real number for the .exe properties and the logs.
-    The same scheme as CodeCompass and CodeSpawner.
   -->
   <PropertyGroup>
     <Company>RelentlessOldMan</Company>
     <Product>CodeDiffer</Product>
-    <VersionPrefix>1.0</VersionPrefix>
+    <CDGitDay>0.0.0</CDGitDay>
     <CDGitCount>0</CDGitCount>
     <CDGitSha>nogit</CDGitSha>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
@@ -25,11 +25,17 @@
   </ItemGroup>
 
   <!-- Only stamp when this is actually a git repo, so a pre-git source drop builds clean with no
-       MSB3073 warnings; falls back to the 1.0 prefix until then. Once committed, the stamp kicks in. -->
+       MSB3073 warnings; falls back to 0.0.0.0 until then. Once committed, the stamp kicks in. -->
   <Target Name="CDStampVersion"
           BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo"
           Condition="'$(CDStamped)' != 'true' and Exists('$(MSBuildThisFileDirectory).git')">
-    <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" ContinueOnError="true"
+    <Exec Command="git log -1 --format=%25%25cd --date=format-local:%25%25Y-%25%25m-%25%25d HEAD" ConsoleToMSBuild="true" ContinueOnError="true"
+          StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_CDDay" />
+      <Output TaskParameter="ExitCode" PropertyName="_CDDayRc" />
+    </Exec>
+    <Exec Command="git rev-list --count &quot;--since=$(_CDDay) 00:00:00&quot; HEAD" ConsoleToMSBuild="true" ContinueOnError="true"
+          Condition="'$(_CDDayRc)' == '0' and '$(_CDDay)' != ''"
           StandardOutputImportance="low" StandardErrorImportance="low">
       <Output TaskParameter="ConsoleOutput" PropertyName="_CDCount" />
       <Output TaskParameter="ExitCode" PropertyName="_CDCountRc" />
@@ -40,12 +46,13 @@
       <Output TaskParameter="ExitCode" PropertyName="_CDShaRc" />
     </Exec>
     <PropertyGroup>
+      <CDGitDay Condition="'$(_CDCountRc)' == '0' and '$(_CDCount)' != ''">$([System.Int32]::Parse($(_CDDay.Substring(0, 4)))).$([System.Int32]::Parse($(_CDDay.Substring(5, 2)))).$([System.Int32]::Parse($(_CDDay.Substring(8, 2))))</CDGitDay>
       <CDGitCount Condition="'$(_CDCountRc)' == '0' and '$(_CDCount)' != ''">$(_CDCount)</CDGitCount>
       <CDGitSha Condition="'$(_CDShaRc)' == '0' and '$(_CDSha)' != ''">$(_CDSha)</CDGitSha>
-      <Version>$(VersionPrefix).$(CDGitCount)</Version>
-      <AssemblyVersion>$(VersionPrefix).0.0</AssemblyVersion>
-      <FileVersion>$(VersionPrefix).$(CDGitCount).0</FileVersion>
-      <InformationalVersion>$(VersionPrefix).$(CDGitCount)+$(CDGitSha)</InformationalVersion>
+      <Version>$(CDGitDay).$(CDGitCount)</Version>
+      <AssemblyVersion>1.0.0.0</AssemblyVersion>
+      <FileVersion>$(CDGitDay).$(CDGitCount)</FileVersion>
+      <InformationalVersion>$(CDGitDay).$(CDGitCount)+$(CDGitSha)</InformationalVersion>
       <CDStamped>true</CDStamped>
     </PropertyGroup>
   </Target>

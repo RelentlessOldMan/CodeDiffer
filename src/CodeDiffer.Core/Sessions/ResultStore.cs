@@ -912,7 +912,7 @@ public static class ResultStore
     }
 
     /// <summary>The lists read back hold what compare.json counted when it was saved, as for a 2-way result (a result saved
-    /// before 1.0.160 has no v1/v2 change counts: its entries are still checked).</summary>
+    /// by a 1.0.x release has no v1/v2 change counts: its entries are still checked).</summary>
     private static ThreeWayReport Whole(ThreeWayReport t, JsonElement meta, string dir)
     {
         void Check(string section, string name, string file, string what, long held)
