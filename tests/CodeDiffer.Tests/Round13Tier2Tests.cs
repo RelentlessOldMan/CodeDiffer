@@ -76,7 +76,7 @@ public sealed class Round13Tier2Tests : IDisposable
     // ---- written at once ----
 
     [Fact]
-    public void ACappedDiffPagedByManyAnswersAtOnce_NeverCollides()
+    public async Task ACappedDiffPagedByManyAnswersAtOnce_NeverCollides()
     {
         string Many(string tag) => string.Concat(Enumerable.Range(1, 3000).Select(i => i % 3 == 0 ? $"{tag} {i}\n" : $"line {i}\n"));
         Put("L/big.txt", Many("old"));
@@ -96,7 +96,7 @@ public sealed class Round13Tier2Tests : IDisposable
         Parallel.For(0, answers.Length, new ParallelOptions { MaxDegreeOfParallelism = 8 },
             i => answers[i] = AgentViews.FileDiff(s, "big.txt", maxLines: 50, startLine: 1 + i % 20 * 50));
         stop.Cancel();
-        Task.WaitAll(readers);
+        await Task.WhenAll(readers);
         Assert.All(answers, a => Assert.Equal(file, Saved(a)));
         Assert.Contains("+new 3000\n", File.ReadAllText(file));
         Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(file)!, "*.tmp"));

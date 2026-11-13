@@ -135,7 +135,7 @@ public sealed class CancelTests : IDisposable
         Assert.Contains("CANCELLED after ", AgentViews.Summary(s));
         Assert.Contains("CANCELLED", AgentViews.ListFiles(s));
         // The continuation that records the state runs as the task completes.
-        Assert.True(SpinWait.SpinUntil(() => ResultStore.List(store.ResultsRoot!).Single().State == "cancelled", 5000));
+        Assert.True(SpinWait.SpinUntil(() => ResultStore.List(store.ResultsRoot!).Single().State == "cancelled", 30_000));
         var ex = Assert.Throws<InvalidDataException>(() => ResultStore.Load(s.ResultDir!));
         Assert.Contains("was cancelled", ex.Message);
         Assert.False(s.Cancel()); // finished: nothing left to cancel

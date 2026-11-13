@@ -600,6 +600,36 @@ public class ResultStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task AResultBeingRead_IsWaitedFor_NotLost()
+    {
+        var dir = ResultStore.CreateRunDir(Results, "beef", "compare", [L, R])!;
+        var meta = Path.Combine(dir, ResultStore.MetaName);
+        var held = new FileStream(meta, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        var letGo = Task.Run(async () => { await Task.Delay(300); held.Dispose(); });
+        Write(meta, "two"); // blocked by the read until it ends: then it lands
+        await letGo;
+        Assert.Equal("two", File.ReadAllText(meta));
+        Assert.False(File.Exists(meta + ".tmp"));
+    }
+
+    [Fact]
+    public async Task ListingWhileACompareEnds_NeverLosesItsState()
+    {
+        var root = Path.Combine(Results, "busy");
+        var dir = ResultStore.CreateRunDir(root, "beef", "compare", [L, R])!;
+        using var stop = new CancellationTokenSource();
+        var lister = Task.Run(() => { while (!stop.IsCancellationRequested) try { ResultStore.List(root); } catch (IOException) { } });
+        var meta = Path.Combine(dir, ResultStore.MetaName);
+        var text = File.ReadAllText(meta);
+        try { for (int i = 0; i < 200; i++) Write(meta, text); }
+        finally { stop.Cancel(); await lister; }
+    }
+
+    private static void Write(string path, string text)
+        => ResultStore.Replace(path + ".tmp", path, new FileStream(path + ".tmp", FileMode.Create, FileAccess.Write, FileShare.None),
+            fs => fs.Write(System.Text.Encoding.UTF8.GetBytes(text)));
+
+    [Fact]
     public void AClaimGivenUpButNotDeleted_IsSwept_OnceOld_AndNoResultEver()
     {
         var kept = ResultStore.CreateRunDir(Results, "beef", "compare", [L, R])!;

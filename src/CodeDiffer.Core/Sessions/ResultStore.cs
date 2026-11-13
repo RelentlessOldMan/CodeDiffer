@@ -591,7 +591,14 @@ public static class ResultStore
                 // On the disk before the rename: a power cut never leaves a "done" result over a change list it lost.
                 fs.Flush(flushToDisk: true);
             }
-            File.Move(tmp, path, overwrite: true);
+            // A reader holding the file (a listing, another process's, a virus scanner) blocks the
+            // replace while it reads: waited for, up to 3 s, rather than the save lost.
+            var until = Environment.TickCount64 + 3000;
+            for (int wait = 10; ; wait = Math.Min(wait * 2, 250))
+            {
+                try { File.Move(tmp, path, overwrite: true); break; }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException && Environment.TickCount64 < until && File.Exists(tmp)) { Thread.Sleep(wait); }
+            }
         }
         catch
         {

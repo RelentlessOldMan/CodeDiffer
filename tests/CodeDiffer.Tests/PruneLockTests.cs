@@ -60,22 +60,22 @@ public sealed class PruneLockTests : IDisposable
     }
 
     [Fact]
-    public void WritersHoldOneResultTogether()
+    public async Task WritersHoldOneResultTogether()
     {
         var s = Saved();
         using var a = ResultStore.Hold(s);
         using var b = ResultStore.Hold(s);
         // A capped diff written while two others hold the result: not held up by them.
         var t = Task.Run(() => AgentViews.FileDiff(s, "x.txt", maxLines: 5));
-        Assert.True(t.Wait(TimeSpan.FromSeconds(10)));
-        Assert.Contains("full patch:", t.Result);
+        var diff = await t.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Contains("full patch:", diff);
     }
 
     [Theory]
     [InlineData("diff")]
     [InlineData("patch")]
     [InlineData("report")]
-    public void AWrite_WaitsOutAPruneDeletingTheResult_AndSavesItAgain(string what)
+    public async Task AWrite_WaitsOutAPruneDeletingTheResult_AndSavesItAgain(string what)
     {
         var s = Saved();
         var lockFile = ResultStore.LockPath(s.ResultDir!);
@@ -95,13 +95,13 @@ public sealed class PruneLockTests : IDisposable
             ResultStore.DeleteContents(new DirectoryInfo(s.ResultDir!), keep: null);
             Directory.Delete(s.ResultDir!);
         }
-        Assert.True(write.Wait(TimeSpan.FromSeconds(10)));
-        Assert.True(File.Exists(write.Result), write.Result);
+        var written = await write.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(File.Exists(written), written);
         Assert.Equal(s.Id, Assert.Single(ResultStore.List(P("results"))).Id); // saved again around it
     }
 
     [Fact]
-    public void WritesAndPrunesAtOnce_NeverLeaveAWriteOutsideAListedResult()
+    public async Task WritesAndPrunesAtOnce_NeverLeaveAWriteOutsideAListedResult()
     {
         var s = Saved();
         var root = P("results");
@@ -131,7 +131,7 @@ public sealed class PruneLockTests : IDisposable
             }
         }
         stop.Cancel();
-        pruner.Wait();
+        await pruner;
         Assert.Equal(0, lost);
         Assert.True(refused > 0, "the prune never met a held result");
         // Whatever the prune did last, no directory is left without compare.json (never listed, never pruned).

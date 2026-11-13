@@ -443,7 +443,7 @@ public sealed class ConflictResolverTests : IDisposable
         Assert.Contains("2 choice(s) undone", text);
         Assert.Contains("hand merge undone src/clash.c  (markers put back · your edit kept in set-aside\\hand-merges\\", text);
         Assert.Contains("hand edit undone  gen/regs.h  (markers put back)", text);
-        Assert.Equal(0, Resolve(o, "undo", ["src"]).Restored.Count);         // nothing left to take back
+        Assert.Empty(Resolve(o, "undo", ["src"]).Restored);         // nothing left to take back
     }
 
     [Fact]
